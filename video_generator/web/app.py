@@ -1,0 +1,566 @@
+"""Local web app: REST API + live WebSocket events + the built GUI."""
+from __future__ import annotations
+
+import asyncio
+import os
+import shutil
+import tempfile
+import traceback
+from importlib import resources
+from pathlib import Path
+from typing import Any, Optional
+
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from .. import media
+from ..brain import CommandPlan
+from ..catalog import Catalog, load_vendors
+from ..config import ENV_FILE_KEYS, Config, save_key
+from ..context import effective_context
+from ..project import ProjectStore
+from ..registry import plugin_classes
+from ..runner import Engine
+from ..services import Service
+from ..tree import find, numbering
+
+
+class Hub:
+    def __init__(self):
+        self.clients: dict[str, set[WebSocket]] = {}
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def emit(self, pid: str, event: dict) -> None:
+        if not self.loop:
+            return
+        event = {"project": pid, **event}
+        for ws in list(self.clients.get(pid, set())) + list(self.clients.get("*", set())):
+            self.loop.call_soon_threadsafe(asyncio.ensure_future, self._send(ws, pid, event))
+
+    async def _send(self, ws: WebSocket, pid: str, event: dict) -> None:
+        try:
+            await ws.send_json(event)
+        except Exception:
+            for s in self.clients.values():
+                s.discard(ws)
+
+
+hub = Hub()
+svc = Service()
+engine = Engine(svc, emit=hub.emit)
+app = FastAPI(title="video-generator", version="0.1.0")
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+                   allow_methods=["*"], allow_headers=["*"])
+BACKGROUND: set[asyncio.Task] = set()
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    hub.loop = asyncio.get_running_loop()
+    engine.recover()
+
+
+def bg(coro, pid: str, label: str) -> None:
+    async def wrapper():
+        hub.emit(pid, {"type": "busy", "label": label, "busy": True})
+        try:
+            await coro
+            hub.emit(pid, {"type": "project"})
+        except Exception as exc:
+            traceback.print_exc()
+            hub.emit(pid, {"type": "error", "message": f"{label} failed: {exc}"})
+        finally:
+            hub.emit(pid, {"type": "busy", "label": label, "busy": False})
+    t = asyncio.create_task(wrapper())
+    BACKGROUND.add(t)
+    t.add_done_callback(BACKGROUND.discard)
+
+
+def view(pid: str) -> dict:
+    try:
+        p = svc.load(pid)
+    except FileNotFoundError:
+        raise HTTPException(404, "project not found")
+    summary = svc.summary(p)
+    ProjectStore.save(p, snapshot=False)
+    return {"project": p.model_dump(mode="json"), "summary": summary, "engine": engine.status(pid)}
+
+
+def guard(fn):
+    async def inner(*a, **k):
+        try:
+            r = fn(*a, **k)
+            if asyncio.iscoroutine(r):
+                r = await r
+            return r
+        except HTTPException:
+            raise
+        except (ValueError, KeyError, FileNotFoundError) as exc:
+            raise HTTPException(400, str(exc))
+        except Exception as exc:
+            traceback.print_exc()
+            raise HTTPException(500, str(exc))
+    return inner
+
+
+# ===================================================================== projects
+@app.get("/api/health")
+async def health():
+    return {"ok": True, "ffmpeg": media.have_ffmpeg(), "brain": svc.reg.llm_plugin_name("default")}
+
+
+@app.get("/api/projects")
+async def list_projects():
+    return ProjectStore.list()
+
+
+@app.post("/api/projects")
+async def create_project(goal: str = Form(...), seconds: float = Form(60), aspect: str = Form("16:9"),
+                         format: str = Form("mp4"), quality_mode: str = Form(""), budget: float = Form(0),
+                         files: list[UploadFile] = File(default=[])):
+    tmp = Path(tempfile.mkdtemp())
+    paths = []
+    for f in files:
+        if not f.filename:
+            continue
+        dest = tmp / Path(f.filename).name
+        with open(dest, "wb") as out:
+            shutil.copyfileobj(f.file, out)
+        paths.append(dest)
+    p = svc.new_project(goal, seconds=seconds, aspect=aspect, fmt=format, files=paths,
+                        budget=budget or None, quality_mode=quality_mode or None)
+    shutil.rmtree(tmp, ignore_errors=True)
+    bg(svc.draft(p.id), p.id, "Drafting your plan")
+    return {"id": p.id}
+
+
+@app.get("/api/projects/{pid}")
+async def get_project(pid: str):
+    return view(pid)
+
+
+@app.patch("/api/projects/{pid}")
+async def patch_project(pid: str, patch: dict = Body(...)):
+    await guard(svc.update_project)(pid, patch)
+    return view(pid)
+
+
+@app.delete("/api/projects/{pid}")
+async def delete_project(pid: str):
+    ProjectStore.delete(pid)
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/draft")
+async def redraft(pid: str):
+    bg(svc.draft(pid), pid, "Drafting your plan")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/undo")
+async def undo(pid: str):
+    ProjectStore.undo(pid)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/redo")
+async def redo(pid: str):
+    ProjectStore.redo(pid)
+    return view(pid)
+
+
+@app.get("/api/projects/{pid}/ledger")
+async def ledger(pid: str):
+    return ProjectStore.ledger(pid)
+
+
+# ===================================================================== tree
+@app.post("/api/projects/{pid}/nodes")
+async def add_node(pid: str, body: dict = Body(...)):
+    _, nid = await guard(svc.add_node)(pid, body["parent_id"], body.get("kind", "clip"), body.get("title", ""),
+                                        body.get("goal", ""), body.get("index"))
+    return {**view(pid), "new_id": nid}
+
+
+@app.patch("/api/projects/{pid}/nodes/{nid}")
+async def patch_node(pid: str, nid: str, patch: dict = Body(...)):
+    await guard(svc.update_node)(pid, nid, patch)
+    return view(pid)
+
+
+@app.delete("/api/projects/{pid}/nodes/{nid}")
+async def delete_node(pid: str, nid: str):
+    await guard(svc.remove_node)(pid, nid)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/move")
+async def move_node(pid: str, nid: str, body: dict = Body(...)):
+    await guard(svc.move_node)(pid, nid, body["parent_id"], int(body.get("index", 0)))
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/decompose")
+async def decompose(pid: str, nid: str):
+    await guard(svc.decompose)(pid, nid)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/script")
+async def write_script(pid: str, nid: str, body: dict = Body(default={})):
+    await guard(svc.write_script)(pid, nid, body.get("feedback", ""))
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/revise")
+async def revise(pid: str, nid: str, body: dict = Body(...)):
+    await guard(svc.revise)(pid, nid, body["instruction"])
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/scripts")
+async def write_scripts(pid: str, body: dict = Body(default={})):
+    await guard(svc.write_all_scripts)(pid, body.get("under"), bool(body.get("overwrite")))
+    return view(pid)
+
+
+@app.get("/api/projects/{pid}/nodes/{nid}/context")
+async def node_context(pid: str, nid: str):
+    p = svc.load(pid)
+    return [{"item": e.item.model_dump(mode="json"), "origin": e.origin, "overridden_from": e.overridden_from}
+            for e in effective_context(p, nid)]
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/context/{cid}/toggle")
+async def toggle_context(pid: str, nid: str, cid: str, body: dict = Body(...)):
+    await guard(svc.toggle_context)(pid, nid, cid, bool(body.get("off")))
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/context/{cid}/override")
+async def override_context(pid: str, nid: str, cid: str, body: dict = Body(...)):
+    await guard(svc.override_context)(pid, nid, cid, body.get("replacement"))
+    return view(pid)
+
+
+# ===================================================================== commands
+@app.post("/api/projects/{pid}/command/plan")
+async def command_plan(pid: str, body: dict = Body(...)):
+    plan = await guard(svc.plan_command)(pid, body["text"], body.get("focus"))
+    return plan.model_dump()
+
+
+@app.post("/api/projects/{pid}/command/apply")
+async def command_apply(pid: str, body: dict = Body(...)):
+    plan = CommandPlan.model_validate(body["plan"])
+    actions = await guard(svc.apply_command)(pid, plan)
+    gen = actions.get("generate")
+    run = None
+    if gen:
+        nums = {v: k for k, v in numbering(svc.load(pid)).items()}
+        if gen in ("all", "next"):
+            run = await engine.start(pid, gen)
+        elif gen in nums:
+            run = await engine.start(pid, "clip", [nums[gen]])
+    return {**view(pid), "actions": actions, "run": run}
+
+
+# ===================================================================== context
+@app.post("/api/projects/{pid}/context")
+async def add_context(pid: str, body: dict = Body(...)):
+    _, item = await guard(svc.add_context)(pid, body)
+    return {**view(pid), "new_id": item.id}
+
+
+@app.post("/api/projects/{pid}/context/upload")
+async def upload_context(pid: str, files: list[UploadFile] = File(...), scope: str = Form("project"),
+                         ctx_id: str = Form(""), hint: str = Form(""), as_node: str = Form("")):
+    p = svc.load(pid)
+    tmp = Path(tempfile.mkdtemp())
+    ids = []
+    try:
+        for f in files:
+            dest = tmp / Path(f.filename or "file").name
+            with open(dest, "wb") as out:
+                shutil.copyfileobj(f.file, out)
+            item = svc.add_context_file(p, dest, scope=scope, hint=hint, ctx_id=ctx_id or None, save=False)
+            ids.append(item.id)
+        if as_node:
+            svc._attach_media_context(p)
+        svc.save(p)
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(400, str(exc))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {**view(pid), "new_ids": ids}
+
+
+@app.patch("/api/projects/{pid}/context/{cid}")
+async def patch_context(pid: str, cid: str, patch: dict = Body(...)):
+    await guard(svc.update_context)(pid, cid, patch)
+    return view(pid)
+
+
+@app.delete("/api/projects/{pid}/context/{cid}")
+async def delete_context(pid: str, cid: str):
+    await guard(svc.remove_context)(pid, cid)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/context/{cid}/consent")
+async def consent(pid: str, cid: str, body: dict = Body(...)):
+    await guard(svc.give_consent)(pid, cid, body["statement"], body.get("by", ""))
+    return view(pid)
+
+
+# ===================================================================== dependencies
+@app.post("/api/projects/{pid}/deps")
+async def add_dep(pid: str, body: dict = Body(...)):
+    await guard(svc.add_dependency)(pid, body["from_id"], body["to_id"], body.get("type", "continues_from"), body.get("note", ""))
+    return view(pid)
+
+
+@app.patch("/api/projects/{pid}/deps/{did}")
+async def patch_dep(pid: str, did: str, body: dict = Body(...)):
+    await guard(svc.update_dependency)(pid, did, body["type"])
+    return view(pid)
+
+
+@app.delete("/api/projects/{pid}/deps/{did}")
+async def delete_dep(pid: str, did: str):
+    await guard(svc.remove_dependency)(pid, did)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/deps/suggest")
+async def suggest_deps(pid: str):
+    await guard(svc.suggest_dependencies)(pid)
+    return view(pid)
+
+
+# ===================================================================== estimate & run
+@app.post("/api/projects/{pid}/estimate")
+async def estimate(pid: str, body: dict = Body(default={})):
+    p = svc.load(pid)
+    targets = body.get("targets")
+    mode = body.get("mode")
+    if mode in ("all", "continue"):
+        from ..tree import leaves
+        targets = [n.id for n in leaves(p) if n.status.value != "done"]
+    elif mode == "next":
+        from ..deps import topo_order
+        order = [n for n in topo_order(p) if find(p, n).status.value != "done"]
+        targets = order[:1]
+    return svc.estimate_targets(pid, targets or [])
+
+
+@app.post("/api/projects/{pid}/run")
+async def run(pid: str, body: dict = Body(...)):
+    res = await guard(engine.start)(pid, body.get("mode", "all"), body.get("targets"), body.get("auto_pick"))
+    return {**view(pid), "run": res}
+
+
+@app.post("/api/projects/{pid}/pause")
+async def pause(pid: str):
+    await engine.pause(pid)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/resume")
+async def resume(pid: str):
+    await engine.resume(pid)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/stop")
+async def stop(pid: str):
+    await engine.stop(pid)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/assemble")
+async def assemble(pid: str):
+    bg(engine.assemble(pid), pid, "Stitching the final video")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/pick")
+async def pick(pid: str, nid: str, body: dict = Body(...)):
+    await guard(engine.pick)(pid, nid, body["take_id"])
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/compare")
+async def compare(pid: str, nid: str, body: dict = Body(...)):
+    bg(engine.compare(pid, nid, body["models"]), pid, "Comparing models")
+    return {"ok": True}
+
+
+# ===================================================================== review & versions
+@app.patch("/api/projects/{pid}/reviews/{rid}/suggestions/{sid}")
+async def patch_suggestion(pid: str, rid: str, sid: str, body: dict = Body(...)):
+    p = svc.load(pid)
+    for r in p.reviews:
+        if r.id == rid:
+            for s in r.suggestions:
+                if s.id == sid:
+                    if "accepted" in body:
+                        s.accepted = bool(body["accepted"])
+                    if "text" in body:
+                        s.text = body["text"]
+    svc.save(p, snapshot=False)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/remake/preview")
+async def remake_preview(pid: str, nid: str, body: dict = Body(...)):
+    return await guard(svc.preview_remake)(pid, nid, body.get("accepted", []), body.get("feedback", ""))
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/remake/apply")
+async def remake_apply(pid: str, nid: str, body: dict = Body(...)):
+    await guard(svc.apply_remake)(pid, nid, body["script"], body.get("feedback", ""))
+    run = None
+    if body.get("generate", True):
+        run = await engine.start(pid, "clip", [nid])
+    return {**view(pid), "run": run}
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/revert")
+async def revert(pid: str, nid: str, body: dict = Body(...)):
+    await guard(svc.revert_version)(pid, nid, int(body["version"]))
+    return view(pid)
+
+
+# ===================================================================== files
+@app.get("/files/{pid}/{path:path}")
+async def files(pid: str, path: str):
+    base = ProjectStore.path_for(pid).resolve()
+    target = (base / path).resolve()
+    if base not in target.parents and target != base:
+        raise HTTPException(403, "outside project")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, "not found")
+    return FileResponse(target)
+
+
+# ===================================================================== settings
+def settings_view() -> dict:
+    cfg = svc.config
+    plugins = []
+    for name, cls in sorted(plugin_classes().items()):
+        try:
+            ok, why = svc.reg.plugin(name).is_configured()
+        except Exception as exc:
+            ok, why = False, str(exc)
+        plugins.append({"name": name, "job": getattr(cls, "job", ""), "description": getattr(cls, "description", ""),
+                        "configured": ok, "status": why, "env": getattr(cls, "env_keys", [])})
+    vendors = []
+    for v in load_vendors():
+        keys = [{"name": k, "set": bool(os.environ.get(k)), "from_file": k in ENV_FILE_KEYS} for k in v.get("env", [])]
+        vendors.append({**v, "keys": keys, "configured": all(k["set"] for k in keys)})
+    return {"config": cfg.model_dump(), "plugins": plugins, "vendors": vendors,
+            "catalog": [e.model_dump() | {"usable": svc.reg.entry_usable(e), "days_old": e.days_since_checked()}
+                        for e in svc.catalog.entries],
+            "brain": svc.reg.llm_plugin_name("default"), "reviewer": svc.reg.llm_plugin_name("review")}
+
+
+@app.get("/api/settings")
+async def get_settings():
+    return settings_view()
+
+
+@app.patch("/api/settings")
+async def patch_settings(patch: dict = Body(...)):
+    cfg = svc.config
+    data = cfg.model_dump()
+    for k, v in patch.items():
+        if k == "llm" and isinstance(v, dict):
+            data["llm"] = {**data["llm"], **v}
+        elif k in data:
+            data[k] = v
+    Config.model_validate(data).save()
+    svc.reload()
+    engine.svc = svc
+    return settings_view()
+
+
+@app.post("/api/settings/keys")
+async def set_key(body: dict = Body(...)):
+    name = body["name"]
+    allowed = {k for v in load_vendors() for k in v.get("env", [])}
+    if name not in allowed:
+        raise HTTPException(400, "unknown key name")
+    save_key(name, body.get("value", "").strip())
+    svc.reload()
+    return settings_view()
+
+
+@app.post("/api/settings/test")
+async def test_plugin(body: dict = Body(...)):
+    name = body["plugin"]
+    plugin = svc.reg.plugin(name)
+    ok, why = plugin.is_configured()
+    if not ok:
+        return {"ok": False, "message": why}
+    if getattr(plugin, "job", "") == "llm":
+        from pydantic import BaseModel
+
+        class Ping(BaseModel):
+            reply: str
+
+        try:
+            res, usage = await plugin.generate_json(system="Reply in JSON.", user='Say "ready".', schema=Ping,
+                                                    model=svc.config.llm.models.get(name, ""), max_tokens=2000,
+                                                    meta={"task": "ping"})
+            return {"ok": True, "message": f"connected — replied “{getattr(res, 'reply', '')}”"}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+    return {"ok": True, "message": "key found (a real call is made on first use)"}
+
+
+@app.patch("/api/catalog/{entry_id}")
+async def patch_catalog(entry_id: str, patch: dict = Body(...)):
+    e = svc.catalog.get(entry_id)
+    data = e.model_dump()
+    for k, v in patch.items():
+        if k == "price" and isinstance(v, dict):
+            data["price"] = {**data["price"], **v}
+        elif k in data:
+            data[k] = v
+    new = type(e).model_validate(data)
+    svc.catalog.save_user_override(new)
+    svc.reload()
+    engine.svc = svc
+    return settings_view()
+
+
+# ===================================================================== websocket
+@app.websocket("/ws/{pid}")
+async def ws(websocket: WebSocket, pid: str):
+    await websocket.accept()
+    hub.clients.setdefault(pid, set()).add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        hub.clients.get(pid, set()).discard(websocket)
+
+
+# ===================================================================== GUI
+STATIC = Path(str(resources.files("video_generator.web").joinpath("static")))
+if (STATIC / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=STATIC / "assets"), name="assets")
+
+
+@app.get("/{full_path:path}")
+async def spa(full_path: str):
+    index = STATIC / "index.html"
+    if index.exists():
+        return HTMLResponse(index.read_text())
+    return HTMLResponse("<h1>video-generator</h1><p>The GUI is not built. Run <code>npm --prefix frontend run build</code>.</p>")

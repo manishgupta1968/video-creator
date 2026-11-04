@@ -1,0 +1,422 @@
+# Model catalogue — EDIT FREELY. Prices change often; each entry carries the
+# date it was last checked and the vendor page to re-check it.
+# Prices below are approximate research figures (Nov 2026). Verify before
+# relying on them.  `vg catalog check` lists entries older than 30 days.
+#
+# strengths: 1 (poor) .. 5 (best) per shot type. The router picks the best
+# configured model for each shot type; fallbacks follow in score order.
+# time: queue_s = typical wait before work starts; per_output_s = seconds of
+# processing per second of output (or per image/request when unit != second).
+
+video:
+  - id: veo_3_1
+    plugin: veo
+    model: veo-3.1-generate-preview
+    vendor: google
+    strengths: {dialogue_scene: 5, wildlife: 5, landscape: 5, product: 4, human_motion: 3, talking_head: 3, other: 4}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 3, native_audio: true, max_seconds: 8}
+    price: {unit: second, usd: 0.40}
+    time: {queue_s: 30, per_output_s: 12}
+    licence: commercial (Google Gemini API terms)
+    pricing_url: https://ai.google.dev/gemini-api/docs/pricing
+    last_checked: "2026-11-04"
+  - id: veo_3_1_fast
+    plugin: veo
+    model: veo-3.1-fast-generate-preview
+    vendor: google
+    strengths: {dialogue_scene: 4, wildlife: 4, landscape: 4, product: 3, human_motion: 3, talking_head: 3, other: 3}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 0, native_audio: true, max_seconds: 8}
+    price: {unit: second, usd: 0.12}
+    time: {queue_s: 20, per_output_s: 6}
+    licence: commercial (Google Gemini API terms)
+    pricing_url: https://ai.google.dev/gemini-api/docs/pricing
+    last_checked: "2026-11-04"
+  - id: kling_3
+    plugin: fal
+    model: fal-ai/kling-video/v3/pro/image-to-video
+    vendor: fal
+    strengths: {human_motion: 5, product: 4, dialogue_scene: 3, wildlife: 4, landscape: 4, talking_head: 3, other: 4}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 4, native_audio: true, max_seconds: 15}
+    price: {unit: second, usd: 0.14}
+    time: {queue_s: 60, per_output_s: 15}
+    licence: commercial (fal / Kuaishou terms)
+    pricing_url: https://fal.ai/pricing
+    last_checked: "2026-11-04"
+  - id: seedance_2
+    plugin: fal
+    model: fal-ai/bytedance/seedance/v2/pro/image-to-video
+    vendor: fal
+    strengths: {human_motion: 5, dialogue_scene: 4, product: 4, wildlife: 4, landscape: 4, talking_head: 3, other: 4}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 4, native_audio: true, max_seconds: 12}
+    price: {unit: second, usd: 0.12}
+    time: {queue_s: 60, per_output_s: 12}
+    licence: commercial (fal / ByteDance terms)
+    pricing_url: https://fal.ai/pricing
+    last_checked: "2026-11-04"
+  - id: wan_3
+    plugin: fal
+    model: fal-ai/wan/v3/image-to-video
+    vendor: fal
+    strengths: {wildlife: 4, landscape: 5, product: 3, human_motion: 4, dialogue_scene: 3, talking_head: 2, other: 4}
+    capabilities: {start_frame: true, end_frame: false, reference_images: 1, native_audio: true, max_seconds: 10}
+    price: {unit: second, usd: 0.10}
+    time: {queue_s: 45, per_output_s: 10}
+    licence: commercial (Alibaba terms; Wan 3.0 is API-only)
+    pricing_url: https://fal.ai/pricing
+    last_checked: "2026-11-04"
+  - id: runway_gen4_5
+    plugin: runway
+    model: gen4.5
+    vendor: runway
+    strengths: {product: 5, landscape: 4, human_motion: 3, wildlife: 3, dialogue_scene: 2, talking_head: 2, other: 4}
+    capabilities: {start_frame: true, end_frame: false, reference_images: 1, native_audio: false, max_seconds: 10, camera_control: true}
+    price: {unit: second, usd: 0.12}
+    time: {queue_s: 20, per_output_s: 8}
+    licence: commercial (Runway API terms)
+    pricing_url: https://docs.dev.runwayml.com/guides/pricing
+    last_checked: "2026-11-04"
+  - id: luma_ray
+    plugin: luma
+    model: ray-2
+    vendor: luma
+    strengths: {landscape: 4, product: 4, wildlife: 3, human_motion: 3, dialogue_scene: 2, talking_head: 2, other: 3}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 0, native_audio: false, max_seconds: 9}
+    price: {unit: second, usd: 0.18}
+    time: {queue_s: 30, per_output_s: 10}
+    licence: commercial (Luma API terms)
+    pricing_url: https://docs.agents.lumalabs.ai/guides/pricing/
+    last_checked: "2026-11-04"
+  - id: kling_direct
+    plugin: kling
+    model: kling-v3
+    vendor: kling
+    enabled: false   # official API may need prepaid packages; fal route above is simpler
+    strengths: {human_motion: 5, product: 4, dialogue_scene: 3, wildlife: 4, landscape: 4, talking_head: 3, other: 4}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 1, native_audio: true, max_seconds: 10}
+    price: {unit: second, usd: 0.112}
+    time: {queue_s: 60, per_output_s: 15}
+    licence: commercial (Kuaishou terms)
+    pricing_url: https://app.klingai.com/global/dev/document-api
+    last_checked: "2026-11-04"
+  - id: replicate_wan_2_2
+    plugin: replicate
+    model: wan-video/wan-2.2-i2v-fast
+    vendor: replicate
+    strengths: {landscape: 3, wildlife: 3, product: 2, human_motion: 2, dialogue_scene: 1, talking_head: 1, other: 3}
+    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: false, max_seconds: 5}
+    price: {unit: second, usd: 0.05}
+    time: {queue_s: 30, per_output_s: 8}
+    licence: Apache-2.0 weights (Wan 2.2)
+    pricing_url: https://replicate.com/pricing
+    last_checked: "2026-11-04"
+  - id: free_preview
+    plugin: fake_video
+    model: ken-burns
+    vendor: local
+    strengths: {human_motion: 1, dialogue_scene: 1, wildlife: 1, landscape: 1, product: 1, talking_head: 1, other: 1}
+    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: false, max_seconds: 600}
+    price: {unit: second, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.3}
+    licence: free (local, placeholder motion)
+    pricing_url: ""
+    last_checked: "2026-11-04"
+
+image:
+  - id: nano_banana_pro
+    plugin: nano_banana
+    model: gemini-3-pro-image-preview
+    vendor: google
+    capabilities: {reference_images: 5}
+    quality: 5
+    price: {unit: image, usd: 0.134}
+    time: {queue_s: 0, per_output_s: 15}
+    licence: commercial (Google terms)
+    pricing_url: https://ai.google.dev/gemini-api/docs/pricing
+    last_checked: "2026-11-04"
+  - id: nano_banana
+    plugin: nano_banana
+    model: gemini-2.5-flash-image
+    vendor: google
+    capabilities: {reference_images: 3}
+    quality: 4
+    price: {unit: image, usd: 0.039}
+    time: {queue_s: 0, per_output_s: 8}
+    licence: commercial (Google terms)
+    pricing_url: https://ai.google.dev/gemini-api/docs/pricing
+    last_checked: "2026-11-04"
+  - id: gpt_image
+    plugin: gpt_image
+    model: gpt-image-1
+    vendor: openai
+    capabilities: {reference_images: 4}
+    quality: 5
+    price: {unit: image, usd: 0.07}
+    time: {queue_s: 0, per_output_s: 20}
+    licence: commercial (OpenAI terms)
+    pricing_url: https://openai.com/api/pricing
+    last_checked: "2026-11-04"
+  - id: flux_2
+    plugin: fal_image
+    model: fal-ai/flux-2-pro/edit
+    vendor: fal
+    capabilities: {reference_images: 4}
+    quality: 4
+    price: {unit: image, usd: 0.05}
+    time: {queue_s: 5, per_output_s: 10}
+    licence: commercial (BFL via fal)
+    pricing_url: https://fal.ai/pricing
+    last_checked: "2026-11-04"
+  - id: free_placeholder
+    plugin: fake_image
+    model: placeholder-card
+    vendor: local
+    capabilities: {reference_images: 0}
+    quality: 1
+    price: {unit: image, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.2}
+    licence: free (local placeholder)
+    pricing_url: ""
+    last_checked: "2026-11-04"
+
+voice:
+  - id: eleven_v3
+    plugin: elevenlabs
+    model: eleven_v3
+    vendor: elevenlabs
+    capabilities: {clone: true}
+    quality: 5
+    price: {unit: 1k_chars, usd: 0.10}
+    time: {queue_s: 0, per_output_s: 0.3}
+    licence: commercial on paid plans
+    pricing_url: https://elevenlabs.io/pricing/api
+    last_checked: "2026-11-04"
+  - id: cartesia_sonic
+    plugin: cartesia
+    model: sonic-3
+    vendor: cartesia
+    capabilities: {clone: true}
+    quality: 5
+    price: {unit: 1k_chars, usd: 0.049}
+    time: {queue_s: 0, per_output_s: 0.1}
+    licence: commercial on paid plans
+    pricing_url: https://cartesia.ai/pricing
+    last_checked: "2026-11-04"
+  - id: kokoro
+    plugin: kokoro
+    model: kokoro-82m
+    vendor: local
+    capabilities: {clone: false}
+    quality: 3
+    price: {unit: 1k_chars, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.5}
+    licence: Apache-2.0 (local)
+    pricing_url: ""
+    last_checked: "2026-11-04"
+  - id: flite
+    plugin: flite
+    model: ffmpeg-flite
+    vendor: local
+    capabilities: {clone: false}
+    quality: 1
+    price: {unit: 1k_chars, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.05}
+    licence: free (local, robotic voice for previews)
+    pricing_url: ""
+    last_checked: "2026-11-04"
+  - id: system_voice
+    plugin: system_voice
+    model: os-tts
+    vendor: local
+    capabilities: {clone: false}
+    quality: 2
+    price: {unit: 1k_chars, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.2}
+    licence: free (operating-system voice)
+    pricing_url: ""
+    last_checked: "2026-11-04"
+
+avatar:
+  - id: heygen_avatar_iv
+    plugin: heygen
+    model: avatar_iv
+    vendor: heygen
+    capabilities: {max_seconds: 300, needs_photo: true}
+    quality: 5
+    price: {unit: second, usd: 0.0667}
+    time: {queue_s: 60, per_output_s: 6}
+    licence: commercial (HeyGen API terms)
+    pricing_url: https://www.heygen.com/api-pricing
+    last_checked: "2026-11-04"
+  - id: veed_fabric
+    plugin: fal_avatar
+    model: veed/fabric-1.0
+    vendor: fal
+    capabilities: {max_seconds: 300, needs_photo: true}
+    quality: 4
+    price: {unit: second, usd: 0.15}
+    time: {queue_s: 30, per_output_s: 5}
+    licence: commercial (VEED via fal)
+    pricing_url: https://fal.ai/pricing
+    last_checked: "2026-11-04"
+  - id: kling_avatar
+    plugin: fal_avatar
+    model: fal-ai/kling-video/ai-avatar/v2/pro
+    vendor: fal
+    capabilities: {max_seconds: 60, needs_photo: true}
+    quality: 4
+    price: {unit: second, usd: 0.115}
+    time: {queue_s: 60, per_output_s: 8}
+    licence: commercial (fal / Kuaishou terms)
+    pricing_url: https://fal.ai/pricing
+    last_checked: "2026-11-04"
+  - id: free_avatar
+    plugin: fake_avatar
+    model: still-with-audio
+    vendor: local
+    capabilities: {max_seconds: 3600, needs_photo: false}
+    quality: 1
+    price: {unit: second, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.2}
+    licence: free (local placeholder)
+    pricing_url: ""
+    last_checked: "2026-11-04"
+
+lipsync:
+  - id: sync_lipsync_2_pro
+    plugin: fal_lipsync
+    model: fal-ai/sync-lipsync/v2/pro
+    vendor: fal
+    capabilities: {}
+    quality: 5
+    price: {unit: second, usd: 0.083}
+    time: {queue_s: 30, per_output_s: 4}
+    licence: commercial (Sync Labs via fal)
+    pricing_url: https://fal.ai/pricing
+    last_checked: "2026-11-04"
+  - id: free_lipsync
+    plugin: fake_lipsync
+    model: passthrough
+    vendor: local
+    capabilities: {}
+    quality: 1
+    price: {unit: second, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.05}
+    licence: free (no change)
+    pricing_url: ""
+    last_checked: "2026-11-04"
+
+music:
+  - id: eleven_music
+    plugin: elevenlabs_music
+    model: music_v1
+    vendor: elevenlabs
+    capabilities: {}
+    quality: 5
+    price: {unit: minute, usd: 0.80}
+    time: {queue_s: 0, per_output_s: 0.5}
+    licence: commercial (trained on licensed data; check plan terms)
+    pricing_url: https://elevenlabs.io/pricing/api
+    last_checked: "2026-11-04"
+  - id: minimax_music
+    plugin: fal_music
+    model: fal-ai/minimax-music/v2
+    vendor: fal
+    capabilities: {}
+    quality: 3
+    price: {unit: request, usd: 0.035}
+    time: {queue_s: 20, per_output_s: 0.5}
+    licence: commercial (fal terms)
+    pricing_url: https://fal.ai/pricing
+    last_checked: "2026-11-04"
+  - id: local_music
+    plugin: local_music
+    model: user-file-or-ambient
+    vendor: local
+    capabilities: {}
+    quality: 1
+    price: {unit: minute, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.05}
+    licence: your own file / generated ambient pad
+    pricing_url: ""
+    last_checked: "2026-11-04"
+
+llm:
+  - id: claude_opus
+    plugin: anthropic
+    model: claude-opus-5-5
+    vendor: anthropic
+    capabilities: {vision: true, video: false}
+    quality: 5
+    price: {unit: 1m_tokens, usd_in: 4.0, usd_out: 20.0}
+    time: {queue_s: 0, per_output_s: 20}
+    licence: commercial
+    pricing_url: https://www.anthropic.com/pricing
+    last_checked: "2026-11-04"
+  - id: gpt
+    plugin: openai
+    model: gpt-5
+    vendor: openai
+    capabilities: {vision: true, video: false}
+    quality: 5
+    price: {unit: 1m_tokens, usd_in: 1.25, usd_out: 10.0}
+    time: {queue_s: 0, per_output_s: 20}
+    licence: commercial
+    pricing_url: https://openai.com/api/pricing
+    last_checked: "2026-11-04"
+  - id: gemini
+    plugin: gemini
+    model: gemini-2.5-pro
+    vendor: google
+    capabilities: {vision: true, video: true}
+    quality: 4
+    price: {unit: 1m_tokens, usd_in: 1.25, usd_out: 10.0}
+    time: {queue_s: 0, per_output_s: 20}
+    licence: commercial
+    pricing_url: https://ai.google.dev/gemini-api/docs/pricing
+    last_checked: "2026-11-04"
+  - id: offline_brain
+    plugin: fake_llm
+    model: rules
+    vendor: local
+    capabilities: {vision: false, video: false}
+    quality: 1
+    price: {unit: 1m_tokens, usd_in: 0, usd_out: 0}
+    time: {queue_s: 0, per_output_s: 0.1}
+    licence: free (simple offline rules, for trying the tool without keys)
+    pricing_url: ""
+    last_checked: "2026-11-04"
+
+transcribe:
+  - id: faster_whisper
+    plugin: faster_whisper
+    model: small
+    vendor: local
+    capabilities: {}
+    quality: 4
+    price: {unit: minute, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.3}
+    licence: MIT (local)
+    pricing_url: ""
+    last_checked: "2026-11-04"
+  - id: openai_transcribe
+    plugin: openai_transcribe
+    model: whisper-1
+    vendor: openai
+    capabilities: {}
+    quality: 4
+    price: {unit: minute, usd: 0.006}
+    time: {queue_s: 0, per_output_s: 0.1}
+    licence: commercial
+    pricing_url: https://openai.com/api/pricing
+    last_checked: "2026-11-04"
+  - id: script_echo
+    plugin: fake_transcribe
+    model: script-echo
+    vendor: local
+    capabilities: {}
+    quality: 1
+    price: {unit: minute, usd: 0}
+    time: {queue_s: 0, per_output_s: 0}
+    licence: free (assumes audio matches script)
+    pricing_url: ""
+    last_checked: "2026-11-04"

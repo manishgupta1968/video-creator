@@ -1,0 +1,213 @@
+"""Plugin discovery (entry points) and routing (catalogue + shot type)."""
+from __future__ import annotations
+
+import importlib
+import json
+from functools import lru_cache
+from importlib.metadata import entry_points
+from typing import Optional
+
+from .catalog import Catalog, CatalogEntry
+from .config import Config, vg_home
+from .plugins.base import Plugin
+
+GROUP = "video_generator.plugins"
+
+# Used when running from a source checkout without `pip install -e .`
+BUILTINS = {
+    "fake_llm": "video_generator.plugins.fake.fake_llm:FakeLLM",
+    "fake_image": "video_generator.plugins.fake.fake_media:FakeImage",
+    "fake_video": "video_generator.plugins.fake.fake_media:FakeVideo",
+    "fake_avatar": "video_generator.plugins.fake.fake_media:FakeAvatar",
+    "fake_lipsync": "video_generator.plugins.fake.fake_media:FakeLipSync",
+    "fake_music": "video_generator.plugins.fake.fake_media:FakeMusic",
+    "fake_transcribe": "video_generator.plugins.fake.fake_media:FakeTranscriber",
+    "anthropic": "video_generator.plugins.llm.anthropic_llm:AnthropicLLM",
+    "openai": "video_generator.plugins.llm.openai_llm:OpenAILLM",
+    "gemini": "video_generator.plugins.llm.gemini_llm:GeminiLLM",
+    "fal": "video_generator.plugins.video.fal:FalVideo",
+    "fal_image": "video_generator.plugins.image.fal_image:FalImage",
+    "fal_avatar": "video_generator.plugins.avatar.fal_avatar:FalAvatar",
+    "fal_lipsync": "video_generator.plugins.lipsync.fal_lipsync:FalLipSync",
+    "fal_music": "video_generator.plugins.music.fal_music:FalMusic",
+    "replicate": "video_generator.plugins.video.replicate:ReplicateVideo",
+    "veo": "video_generator.plugins.video.veo:VeoVideo",
+    "runway": "video_generator.plugins.video.runway:RunwayVideo",
+    "luma": "video_generator.plugins.video.luma:LumaVideo",
+    "kling": "video_generator.plugins.video.kling:KlingVideo",
+    "gpt_image": "video_generator.plugins.image.openai_image:OpenAIImage",
+    "nano_banana": "video_generator.plugins.image.gemini_image:GeminiImage",
+    "heygen": "video_generator.plugins.avatar.heygen:HeyGenAvatar",
+    "elevenlabs": "video_generator.plugins.voice.elevenlabs:ElevenLabsVoice",
+    "cartesia": "video_generator.plugins.voice.cartesia:CartesiaVoice",
+    "kokoro": "video_generator.plugins.voice.local_voice:KokoroVoice",
+    "flite": "video_generator.plugins.voice.local_voice:FliteVoice",
+    "system_voice": "video_generator.plugins.voice.local_voice:SystemVoice",
+    "elevenlabs_music": "video_generator.plugins.music.elevenlabs_music:ElevenLabsMusic",
+    "local_music": "video_generator.plugins.music.local_music:LocalMusic",
+    "faster_whisper": "video_generator.plugins.transcribe.whisper:FasterWhisper",
+    "openai_transcribe": "video_generator.plugins.transcribe.whisper:OpenAITranscribe",
+    "flicker": "video_generator.plugins.quality.scorers:FlickerScorer",
+    "face_similarity": "video_generator.plugins.quality.scorers:FaceSimilarityScorer",
+    "ffmpeg": "video_generator.plugins.assemble.ffmpeg_assembler:FFmpegAssembler",
+}
+
+
+def _load(target: str):
+    mod, _, attr = target.partition(":")
+    return getattr(importlib.import_module(mod), attr)
+
+
+@lru_cache(maxsize=1)
+def plugin_classes() -> dict[str, type]:
+    found: dict[str, str] = dict(BUILTINS)
+    try:
+        for ep in entry_points(group=GROUP):
+            found[ep.name] = ep.value
+    except Exception:  # pragma: no cover
+        pass
+    classes: dict[str, type] = {}
+    for name, target in found.items():
+        try:
+            cls = _load(target)
+            cls.name = cls.name or name
+            classes[name] = cls
+        except Exception as exc:  # broken third-party plugin must not break the app
+            classes[name] = type(f"Broken_{name}", (Plugin,), {"name": name, "broken": str(exc),
+                                                              "is_configured": lambda self: (False, f"failed to load: {exc}")})
+    return classes
+
+
+class Registry:
+    def __init__(self, config: Config, catalog: Optional[Catalog] = None):
+        self.config = config
+        self.catalog = catalog or Catalog.load()
+        self._instances: dict[str, Plugin] = {}
+
+    # ------------------------------------------------------------ plugins
+    def plugin(self, name: str) -> Plugin:
+        if name not in self._instances:
+            classes = plugin_classes()
+            if name not in classes:
+                raise KeyError(f"unknown plugin: {name}")
+            self._instances[name] = classes[name](self.config)
+        return self._instances[name]
+
+    def configured(self, name: str) -> bool:
+        try:
+            ok, _ = self.plugin(name).is_configured()
+            return ok
+        except KeyError:
+            return False
+
+    def entry_usable(self, e: CatalogEntry) -> bool:
+        return e.enabled and e.id not in self.config.disabled_models and self.configured(e.plugin)
+
+    # ------------------------------------------------------------ routing
+    def candidates(self, job: str, shot_type: str = "other", need: Optional[dict] = None,
+                   mode: Optional[str] = None) -> list[CatalogEntry]:
+        """Usable catalogue entries for a job, best first.
+
+        mode: best (quality first), balanced (quality per dollar), budget
+        (cheapest), free (local only)."""
+        mode = mode or self.config.quality_mode
+        need = need or {}
+        out = []
+        for e in self.catalog.for_job(job):
+            if not self.entry_usable(e):
+                continue
+            if mode == "free" and not e.is_free:
+                continue
+            ok = True
+            for cap, want in need.items():
+                have = e.capabilities.get(cap)
+                if isinstance(want, bool) and want and not have:
+                    ok = False
+                elif isinstance(want, (int, float)) and not isinstance(want, bool) and (have or 0) < want:
+                    ok = False
+            if ok:
+                out.append(e)
+
+        def score(e: CatalogEntry) -> tuple:
+            strength = e.strength(shot_type) if job == "video" else e.quality
+            free_penalty = 0 if mode in ("free", "budget") else (-10 if e.is_free else 0)
+            if mode == "best":
+                return (free_penalty + strength, -e.unit_price)
+            if mode == "budget":
+                return (-e.unit_price, strength)
+            if mode == "free":
+                return (strength,)
+            # balanced: quality first, but a cheaper model within one point wins
+            return (free_penalty + strength * 2 - min(e.unit_price * 5, 3), -e.unit_price)
+
+        out.sort(key=score, reverse=True)
+        pref = self.config.preferred_models.get(shot_type) or self.config.preferred_models.get(job)
+        if pref:
+            out.sort(key=lambda e: 0 if e.id == pref else 1)
+        return out
+
+    def choose(self, job: str, shot_type: str = "other", need: Optional[dict] = None,
+               override: Optional[str] = None, mode: Optional[str] = None) -> CatalogEntry:
+        if override:
+            try:
+                e = self.catalog.get(override)
+                if self.entry_usable(e):
+                    return e
+            except KeyError:
+                pass
+        c = self.candidates(job, shot_type, need, mode)
+        if not c and need:
+            c = self.candidates(job, shot_type, None, mode)  # relax capabilities, warn upstream
+        if not c:
+            c = self.candidates(job, shot_type, None, "free")
+        if not c:
+            raise LookupError(f"no usable model for {job}")
+        return c[0]
+
+    # ------------------------------------------------------------ time history
+    def _timings_path(self):
+        return vg_home() / "timings.json"
+
+    def time_factor(self, entry_id: str) -> float:
+        """Real job time / catalogue estimate, learned from your recent jobs."""
+        if not hasattr(self, "_timings"):
+            try:
+                self._timings = json.loads(self._timings_path().read_text())
+            except Exception:
+                self._timings = {}
+        return float(self._timings.get(entry_id, 1.0))
+
+    def record_time(self, entry_id: str, wall_s: float, expected_s: float) -> None:
+        if expected_s <= 0:
+            return
+        ratio = max(0.2, min(wall_s / expected_s, 5.0))
+        old = self.time_factor(entry_id)
+        self._timings[entry_id] = round(old * 0.7 + ratio * 0.3, 3)
+        try:
+            self._timings_path().write_text(json.dumps(self._timings))
+        except OSError:
+            pass
+
+    # ------------------------------------------------------------ AI brain
+    def llm_plugin_name(self, task: str = "default") -> str:
+        llm = self.config.llm
+        if task == "review" and llm.reviewer not in ("", "same"):
+            name = llm.reviewer
+        else:
+            name = llm.per_task.get(task) or llm.default
+        if name and name != "auto" and self.configured(name):
+            return name
+        for candidate in ("anthropic", "openai", "gemini"):
+            if self.configured(candidate):
+                return candidate
+        return "fake_llm"
+
+    def llm(self, task: str = "default") -> tuple[Plugin, str]:
+        name = self.llm_plugin_name(task)
+        model = self.config.llm.models.get(name, "")
+        return self.plugin(name), model
+
+    def llm_fallback_order(self, task: str) -> list[str]:
+        first = self.llm_plugin_name(task)
+        rest = [n for n in ("anthropic", "openai", "gemini") if n != first and self.configured(n)]
+        return [first] + rest + (["fake_llm"] if first != "fake_llm" else [])

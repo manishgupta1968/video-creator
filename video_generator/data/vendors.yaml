@@ -1,0 +1,100 @@
+# Vendors you may open pay-as-you-go accounts with. Re-check URLs/prices on
+# the vendor's official page before paying; sign-up rules change.
+- id: anthropic
+  name: Anthropic (Claude API)
+  env: [ANTHROPIC_API_KEY]
+  used_for: AI brain (goal breakdown, scripts, estimates, review)
+  signup_url: https://console.anthropic.com
+  pricing_url: https://www.anthropic.com/pricing
+  need: One of Anthropic / OpenAI required (or use the free offline brain)
+- id: openai
+  name: OpenAI API
+  env: [OPENAI_API_KEY]
+  used_for: AI brain (alternative), GPT Image, Whisper transcription
+  signup_url: https://platform.openai.com
+  pricing_url: https://openai.com/api/pricing
+  need: One of Anthropic / OpenAI required (or use the free offline brain)
+- id: fal
+  name: fal.ai (aggregator)
+  env: [FAL_KEY]
+  used_for: Kling, Seedance, Wan, Flux, VEED Fabric, Kling Avatar, Sync lip-sync, MiniMax music — one key
+  signup_url: https://fal.ai/dashboard
+  pricing_url: https://fal.ai/pricing
+  need: Recommended
+- id: elevenlabs
+  name: ElevenLabs
+  env: [ELEVENLABS_API_KEY]
+  used_for: Voices, voice cloning, music
+  signup_url: https://elevenlabs.io/app
+  pricing_url: https://elevenlabs.io/pricing/api
+  need: Recommended
+- id: google
+  name: Google Gemini API (AI Studio)
+  env: [GEMINI_API_KEY]
+  used_for: Veo 3.1 video, Nano Banana images, Gemini brain (can watch whole videos)
+  signup_url: https://aistudio.google.com
+  pricing_url: https://ai.google.dev/gemini-api/docs/pricing
+  need: Recommended for people speaking in scenes and for images
+- id: heygen
+  name: HeyGen API
+  env: [HEYGEN_API_KEY]
+  used_for: Digital twin / presenter avatars
+  signup_url: https://www.heygen.com/api
+  pricing_url: https://www.heygen.com/api-pricing
+  need: Only if you use a digital twin
+- id: runway
+  name: Runway API
+  env: [RUNWAYML_API_SECRET]
+  used_for: Gen-4.5 video with camera control
+  signup_url: https://dev.runwayml.com
+  pricing_url: https://docs.dev.runwayml.com/guides/pricing
+  need: Optional
+- id: luma
+  name: Luma AI API
+  env: [LUMAAI_API_KEY]
+  used_for: Ray video
+  signup_url: https://lumalabs.ai/api
+  pricing_url: https://docs.agents.lumalabs.ai/guides/pricing/
+  need: Optional
+- id: kling
+  name: Kling AI (official)
+  env: [KLING_ACCESS_KEY, KLING_SECRET_KEY]
+  used_for: Kling video, direct
+  signup_url: https://app.klingai.com/global/dev
+  pricing_url: https://app.klingai.com/global/dev/document-api
+  need: Optional (fal route is simpler)
+- id: cartesia
+  name: Cartesia
+  env: [CARTESIA_API_KEY]
+  used_for: Voices and cloning (cheaper alternative)
+  signup_url: https://play.cartesia.ai
+  pricing_url: https://cartesia.ai/pricing
+  need: Optional
+- id: replicate
+  name: Replicate (aggregator)
+  env: [REPLICATE_API_TOKEN]
+  used_for: Another route to many models
+  signup_url: https://replicate.com/account/billing
+  pricing_url: https://replicate.com/pricing
+  need: Optional
+- id: byteplus
+  name: BytePlus ModelArk (Seedance direct)
+  env: [ARK_API_KEY]
+  used_for: Seedance direct (not wired in v1; use the fal route)
+  signup_url: https://www.byteplus.com/activity/modelark
+  pricing_url: https://www.byteplus.com/activity/modelark
+  need: Optional
+- id: alibaba
+  name: Alibaba Cloud Model Studio (Wan direct)
+  env: [DASHSCOPE_API_KEY]
+  used_for: Wan 3.0 direct (not wired in v1; use the fal route)
+  signup_url: https://www.alibabacloud.com/product/modelstudio
+  pricing_url: https://www.alibabacloud.com/help/en/model-studio/video-generation
+  need: Optional
+- id: local
+  name: Free local tools
+  env: []
+  used_for: ffmpeg assembly, flite/system/Kokoro voice, offline brain, placeholders, quality checks
+  signup_url: ""
+  pricing_url: ""
+  need: Built in — no account

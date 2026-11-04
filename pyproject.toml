@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-generator"
+version = "0.1.0"
+description = "Turn a goal into a finished video: goal tree, scripts, actors, context, estimates, review agent, pluggable AI tools."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "pydantic>=2.6",
+  "pyyaml>=6.0",
+  "httpx>=0.27",
+  "typer>=0.12",
+  "rich>=13.7",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "python-multipart>=0.0.9",
+  "python-dotenv>=1.0",
+  "pillow>=10.0",
+  "pymupdf>=1.24",
+  "anthropic>=0.40",
+  "openai>=1.50",
+  "pyjwt>=2.8",
+]
+
+[project.optional-dependencies]
+local-voice = ["kokoro>=0.9", "soundfile>=0.12"]
+transcribe = ["faster-whisper>=1.0"]
+face = ["insightface>=0.7", "onnxruntime>=1.17", "numpy>=1.26"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+vg = "video_generator.cli:app"
+
+# Built-in plugins are registered through the same entry-point group that
+# third-party plugins use. A new tool = a new package with an entry here.
+[project.entry-points."video_generator.plugins"]
+fake_llm = "video_generator.plugins.fake.fake_llm:FakeLLM"
+fake_image = "video_generator.plugins.fake.fake_media:FakeImage"
+fake_video = "video_generator.plugins.fake.fake_media:FakeVideo"
+fake_avatar = "video_generator.plugins.fake.fake_media:FakeAvatar"
+fake_lipsync = "video_generator.plugins.fake.fake_media:FakeLipSync"
+fake_music = "video_generator.plugins.fake.fake_media:FakeMusic"
+fake_transcribe = "video_generator.plugins.fake.fake_media:FakeTranscriber"
+anthropic = "video_generator.plugins.llm.anthropic_llm:AnthropicLLM"
+openai = "video_generator.plugins.llm.openai_llm:OpenAILLM"
+gemini = "video_generator.plugins.llm.gemini_llm:GeminiLLM"
+fal = "video_generator.plugins.video.fal:FalVideo"
+fal_image = "video_generator.plugins.image.fal_image:FalImage"
+fal_avatar = "video_generator.plugins.avatar.fal_avatar:FalAvatar"
+fal_lipsync = "video_generator.plugins.lipsync.fal_lipsync:FalLipSync"
+fal_music = "video_generator.plugins.music.fal_music:FalMusic"
+replicate = "video_generator.plugins.video.replicate:ReplicateVideo"
+veo = "video_generator.plugins.video.veo:VeoVideo"
+runway = "video_generator.plugins.video.runway:RunwayVideo"
+luma = "video_generator.plugins.video.luma:LumaVideo"
+kling = "video_generator.plugins.video.kling:KlingVideo"
+gpt_image = "video_generator.plugins.image.openai_image:OpenAIImage"
+nano_banana = "video_generator.plugins.image.gemini_image:GeminiImage"
+heygen = "video_generator.plugins.avatar.heygen:HeyGenAvatar"
+elevenlabs = "video_generator.plugins.voice.elevenlabs:ElevenLabsVoice"
+cartesia = "video_generator.plugins.voice.cartesia:CartesiaVoice"
+kokoro = "video_generator.plugins.voice.local_voice:KokoroVoice"
+flite = "video_generator.plugins.voice.local_voice:FliteVoice"
+system_voice = "video_generator.plugins.voice.local_voice:SystemVoice"
+elevenlabs_music = "video_generator.plugins.music.elevenlabs_music:ElevenLabsMusic"
+local_music = "video_generator.plugins.music.local_music:LocalMusic"
+faster_whisper = "video_generator.plugins.transcribe.whisper:FasterWhisper"
+openai_transcribe = "video_generator.plugins.transcribe.whisper:OpenAITranscribe"
+flicker = "video_generator.plugins.quality.scorers:FlickerScorer"
+face_similarity = "video_generator.plugins.quality.scorers:FaceSimilarityScorer"
+ffmpeg = "video_generator.plugins.assemble.ffmpeg_assembler:FFmpegAssembler"
+
+[tool.setuptools.packages.find]
+include = ["video_generator*"]
+
+[tool.setuptools.package-data]
+video_generator = ["data/*.yaml", "prompts/*.md", "web/static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
