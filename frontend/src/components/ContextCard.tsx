@@ -1,0 +1,165 @@
+import { AudioLines, Box, Building2, FileText, Film, Image as ImageIcon, MapPin, Mic, Palette, Play, ShieldAlert, ShieldCheck, Trash2, User } from "lucide-react";
+import { useState } from "react";
+import { api, Ctx, fileUrl } from "../api";
+import { CTX_ROLES, CTX_TYPES, useP } from "../lib";
+import { Badge, Button, cn, Dialog, DropZone, Editable, Select, Switch, Tip } from "../ui";
+
+export const typeIcon = (t: string) => ({
+  actor: <User className="h-3.5 w-3.5" />, object: <Box className="h-3.5 w-3.5" />, entity: <Building2 className="h-3.5 w-3.5" />,
+  location: <MapPin className="h-3.5 w-3.5" />, style: <Palette className="h-3.5 w-3.5" />, audio: <AudioLines className="h-3.5 w-3.5" />,
+  text: <FileText className="h-3.5 w-3.5" />, media: <Film className="h-3.5 w-3.5" />,
+} as Record<string, JSX.Element>)[t] || <FileText className="h-3.5 w-3.5" />;
+
+const isImg = (f: string) => /\.(png|jpe?g|webp|gif)$/i.test(f);
+
+export function ContextCard({ item, origin, inheritedOff, onToggle, compact }: {
+  item: Ctx; origin?: string; inheritedOff?: boolean; onToggle?: (off: boolean) => void; compact?: boolean;
+}) {
+  const P = useP();
+  const [open, setOpen] = useState(false);
+  const thumb = item.actor?.reference_sheet[0] || item.files.find(isImg);
+  const inherited = origin && origin !== "this";
+  const needsConsent = item.type === "actor" && (item.files.length > 0 || item.actor?.voice_sample) && ["real_person", "digital_twin"].includes(item.actor?.kind || "") && !item.consent.confirmed;
+  const label = origin === "shared" ? "shared" : origin?.startsWith("node:") ? `from part ${origin.slice(5)}` : origin === "this" ? "this only" : undefined;
+  return (
+    <>
+      <div className={cn("group flex items-start gap-2.5 rounded-xl border border-line bg-panel p-2 transition-opacity", inherited && "border-dashed", inheritedOff && "opacity-45")}>
+        <button onClick={() => setOpen(true)} className="h-11 w-11 shrink-0 overflow-hidden rounded-lg bg-sunken text-muted grid place-items-center" aria-label={`Open ${item.title}`}>
+          {thumb ? <img src={fileUrl(P.pid, thumb)} className="h-full w-full object-cover" alt="" /> : typeIcon(item.type)}
+        </button>
+        <div className="min-w-0 flex-1 cursor-pointer" onClick={() => setOpen(true)}>
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-xs font-medium">{item.title || "Untitled"}</span>
+            {needsConsent && <Tip content="Consent needed before this person's face or voice is used"><ShieldAlert className="h-3.5 w-3.5 text-warn" /></Tip>}
+            {item.consent.confirmed && <Tip content={`Consent recorded (${item.consent.statement === "self" ? "this is me" : "permission"})`}><ShieldCheck className="h-3.5 w-3.5 text-ok" /></Tip>}
+          </div>
+          <div className="truncate text-[11px] text-muted">{item.actor?.description || item.text || item.files.map((f) => f.split("/").pop()).join(", ") || "—"}</div>
+          {!compact && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              <Badge>{CTX_TYPES.find((t) => t.value === item.type)?.label}</Badge>
+              <Badge tone="brand">{CTX_ROLES.find((r) => r.value === item.role)?.label}</Badge>
+              {label && <Badge tone={inherited ? "neutral" : "info"}>{label}</Badge>}
+            </div>
+          )}
+        </div>
+        {inherited && onToggle && (
+          <Tip content={inheritedOff ? "Switched off for this one — click to use it again" : "Inherited — switch off for this one"}>
+            <span><Switch checked={!inheritedOff} onChange={(v) => onToggle(!v)} label="" /></span>
+          </Tip>
+        )}
+      </div>
+      <ContextDialog item={item} open={open} onOpenChange={setOpen} />
+    </>
+  );
+}
+
+export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: boolean; onOpenChange: (v: boolean) => void }) {
+  const P = useP();
+  const p = P.view!.project;
+  const save = (patch: any) => P.act("Save", () => api.patchContext(P.pid, item.id, patch));
+  const saveActor = (patch: any) => save({ actor: patch });
+  const [playing, setPlaying] = useState<string | null>(null);
+  const a = item.actor;
+  const scopes = [{ value: "project", label: "Shared — all clips" },
+    ...Object.entries(P.numbers).filter(([id, num]) => num && id !== p.root.id).map(([id, num]) => ({ value: `node:${id}`, label: `Part/clip ${num} and below` }))];
+  const photos = item.analysis?.photos || {};
+  const voiceCheck = item.analysis?.voice_check;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} wide title={<Editable value={item.title} onSave={(title) => save({ title })} ariaLabel="Title" />}
+      description="Changes save automatically."
+      footer={<Button variant="danger" onClick={() => { P.act("Delete", () => api.removeContext(P.pid, item.id), "Removed"); onOpenChange(false); }}><Trash2 className="h-3.5 w-3.5" />Remove</Button>}>
+      <div className="space-y-4 text-xs">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div><div className="field-label mb-1">Type</div><Select value={item.type} onChange={(type) => save({ type, ...(type === "actor" && !a ? { actor: {} } : {}) })} options={CTX_TYPES} className="w-full" /></div>
+          <div><div className="field-label mb-1">How it's used</div><Select value={item.role} onChange={(role) => save({ role })} options={CTX_ROLES} className="w-full" /></div>
+          <div><div className="field-label mb-1">Applies to</div><Select value={item.scope.replace("clip:", "node:")} onChange={(scope) => save({ scope })} options={scopes} className="w-full" /></div>
+        </div>
+
+        <div>
+          <div className="field-label mb-1">Files</div>
+          <div className="flex flex-wrap gap-2">
+            {item.files.map((f) => (
+              <div key={f} className="group relative">
+                {isImg(f) ? <img src={fileUrl(P.pid, f)} className="h-20 w-20 rounded-lg object-cover" alt="" />
+                  : <div className="grid h-20 w-28 place-items-center rounded-lg bg-sunken px-2 text-center text-[11px]">{f.split("/").pop()}</div>}
+                {photos[f.split("/").pop()!]?.problems?.length > 0 && <div className="absolute inset-x-0 bottom-0 rounded-b-lg bg-warn/90 px-1 text-[10px] text-white">{photos[f.split("/").pop()!].problems[0]}</div>}
+                <button aria-label="Remove file" onClick={() => save({ files: item.files.filter((x) => x !== f) })}
+                  className="absolute -right-1.5 -top-1.5 hidden h-5 w-5 place-items-center rounded-full bg-panel shadow group-hover:grid"><Trash2 className="h-3 w-3 text-bad" /></button>
+              </div>
+            ))}
+            <DropZone compact className="h-20 w-28 grid place-items-center" label="+ Add files"
+              onFiles={(files) => P.act("Upload", () => api.upload(P.pid, files, { ctx_id: item.id }), "Added")} />
+          </div>
+        </div>
+
+        <div>
+          <div className="field-label mb-1">{item.type === "actor" ? "Notes" : "Description / text"}</div>
+          <Editable value={item.text} onSave={(text) => save({ text })} multiline placeholder={item.type === "text" ? "Facts to say, words to avoid, audience, tone…" : "Describe it in words (text alone is fine)"} />
+        </div>
+
+        {item.type === "actor" && (
+          <div className="space-y-3 rounded-xl bg-sunken/60 p-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div><div className="field-label mb-1">Kind</div>
+                <Select value={a?.kind || "ai_person"} onChange={(kind) => saveActor({ kind })} className="w-full" options={[
+                  { value: "ai_person", label: "AI-made person" }, { value: "real_person", label: "Real person (from photos/voice)" },
+                  { value: "digital_twin", label: "My digital twin" }, { value: "animal", label: "Animal" }, { value: "product", label: "Product character" }]} /></div>
+              <div><div className="field-label mb-1">Speaking speed (words/min)</div>
+                <input type="number" defaultValue={a?.speaking_wpm || ""} placeholder="auto (~150)" onBlur={(e) => saveActor({ speaking_wpm: e.target.value ? Number(e.target.value) : null })}
+                  className="h-7 w-full rounded-md border border-line bg-panel px-2" /></div>
+            </div>
+            <div><div className="field-label mb-1">Appearance</div><Editable value={a?.description || ""} onSave={(description) => saveActor({ description })} multiline placeholder="Age, build, skin tone, hair, features…" /></div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div><div className="field-label mb-1">Clothing (default)</div><Editable value={a?.clothing || ""} onSave={(clothing) => saveActor({ clothing })} placeholder="e.g. blue kurta, white sneakers" /></div>
+              <div><div className="field-label mb-1">Behaviour</div><Editable value={a?.behaviour || ""} onSave={(behaviour) => saveActor({ behaviour })} placeholder="Mannerisms, how they move and speak" /></div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <div className="field-label mb-1 flex items-center gap-1"><Mic className="h-3 w-3" />Voice</div>
+                {a?.voice_sample ? (
+                  <div className="space-y-1">
+                    <audio src={fileUrl(P.pid, a.voice_sample)} controls className="h-8 w-full" />
+                    {voiceCheck?.problems?.map((x: string) => <div key={x} className="text-warn">{x}</div>)}
+                    <button className="text-bad hover:underline" onClick={() => saveActor({ voice_sample: null, voice_id: null })}>Remove sample</button>
+                  </div>
+                ) : (
+                  <DropZone compact label="Drop a voice recording (30 s – 2 min)" accept="audio/*"
+                    onFiles={(files) => P.act("Upload", () => api.upload(P.pid, files, { ctx_id: item.id }), "Voice sample added")} />
+                )}
+              </div>
+              <div>
+                <div className="field-label mb-1">Or describe the voice</div>
+                <Editable value={a?.voice_description || ""} onSave={(voice_description) => saveActor({ voice_description })} placeholder="e.g. deep, warm, Indian English, slow" />
+                <Button size="sm" variant="ghost" className="mt-1" loading={P.busy.includes("Voice preview")}
+                  onClick={async () => { const r: any = await P.act("Voice preview", () => api.voicePreview(P.pid, item.id)); if (r?.url) { setPlaying(r.url); } }}>
+                  <Play className="h-3 w-3" />Preview voice</Button>
+                {playing && <audio src={playing} autoPlay controls className="mt-1 h-8 w-full" />}
+              </div>
+            </div>
+            {a?.reference_sheet?.length ? (
+              <div><div className="field-label mb-1">Approved look (used in every clip)</div>
+                <img src={fileUrl(P.pid, a.reference_sheet[0])} className="h-28 rounded-lg" alt="Reference sheet" />
+                <button className="ml-2 text-muted hover:underline" onClick={() => saveActor({ reference_sheet: [] })}>Make a new one</button></div>
+            ) : null}
+            {(item.files.length > 0 || a?.voice_sample) && (
+              <div className={cn("rounded-lg p-2.5", item.consent.confirmed ? "bg-ok/10" : "bg-warn/10")}>
+                {item.consent.confirmed ? (
+                  <div className="flex items-center gap-2 text-ok"><ShieldCheck className="h-4 w-4" />Consent recorded: {item.consent.statement === "self" ? "this is me" : "I have permission"} ({new Date(item.consent.confirmed_at).toLocaleDateString()})</div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-warn"><ShieldAlert className="h-4 w-4" />Before this face or voice is used, confirm one:</div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => P.act("Consent", () => api.consent(P.pid, item.id, "self"), "Consent recorded")}>This is me</Button>
+                      <Button size="sm" onClick={() => P.act("Consent", () => api.consent(P.pid, item.id, "permission"), "Consent recorded")}>I have this person's permission</Button>
+                    </div>
+                    <div className="text-[11px] text-muted">Realistic videos of public figures without consent are not allowed.</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Dialog>
+  );
+}

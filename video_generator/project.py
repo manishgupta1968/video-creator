@@ -23,6 +23,7 @@ from .models import Project, now_iso
 
 _LOCK = threading.RLock()
 MAX_HISTORY = 100
+SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$")
 
 
 def slug(text: str) -> str:
@@ -39,6 +40,8 @@ class ProjectStore:
 
     @classmethod
     def path_for(cls, project_id: str) -> Path:
+        if not SAFE_ID.match(project_id or ""):
+            raise FileNotFoundError(f"invalid project id: {project_id!r}")
         if not cls.root or str(cls.root) == ".":
             cls.init()
         return cls.root / project_id

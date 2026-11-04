@@ -176,12 +176,16 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
                 break
     if avatar_actor:
         av = reg.choose("avatar", mode=mode, override=node.provider_override)
+        if av.is_free and not node.takes_override:
+            takes = 1          # free previews are identical; one take is enough
         return ClipPlan("avatar", av, image, voice, None, takes, False, ref_images, False, warnings)
 
     need: dict = {}
     if needs_start:
         need["start_frame"] = True
     video = reg.choose("video", shot, need=need, override=node.provider_override, mode=mode)
+    if video.is_free and not node.takes_override:
+        takes = 1              # free previews are identical; one take is enough
     max_refs = int(video.capabilities.get("reference_images", 0) or 0)
     if ref_images > max(max_refs, 0) and ref_images > 0:
         warnings.append(f"{ref_images} reference image(s) but {video.id} accepts {max_refs}; the most relevant will be used")
@@ -329,7 +333,8 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
     clip_time: dict[str, float] = {}
     for leaf in leaves(project):
         plan = plan_clip(project, leaf, reg)
-        leaf.warnings = list(plan.warnings)
+        kept = [w for w in leaf.warnings if leaf.status.value == "failed" and w.startswith(("failed:", "compare failed:"))]
+        leaf.warnings = kept + list(plan.warnings)
         if leaf.script and plan.video and plan.route == "video":
             max_s = float(plan.video.capabilities.get("max_seconds", 10) or 10)
             if leaf.duration.likely_s > max_s + 0.5:

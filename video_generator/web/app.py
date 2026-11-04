@@ -56,10 +56,16 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
 BACKGROUND: set[asyncio.Task] = set()
 
 
-@app.on_event("startup")
-async def _startup() -> None:
+from contextlib import asynccontextmanager  # noqa: E402
+
+
+@asynccontextmanager
+async def lifespan(_app):
     hub.loop = asyncio.get_running_loop()
     engine.recover()
+    yield
+
+app.router.lifespan_context = lifespan
 
 
 def bg(coro, pid: str, label: str) -> None:
@@ -316,6 +322,34 @@ async def consent(pid: str, cid: str, body: dict = Body(...)):
     return view(pid)
 
 
+@app.post("/api/projects/{pid}/context/{cid}/voice-preview")
+async def voice_preview(pid: str, cid: str):
+    """Speak a short sample in this actor's voice (cloned if consented, else matched)."""
+    from ..context import item_by_id
+    from ..plugins.base import VoiceSpec
+    p = svc.load(pid)
+    item = item_by_id(p, cid)
+    entry = svc.reg.choose("voice", mode=p.settings.quality_mode)
+    plugin = svc.reg.plugin(entry.plugin)
+    a = item.actor
+    try:
+        if a and a.voice_sample and getattr(plugin, "can_clone", False) and item.consent.confirmed and a.voice_provider != entry.plugin:
+            await engine._actor_voice(pid, cid, entry)
+            p = svc.load(pid)
+            a = item_by_id(p, cid).actor
+        vid = a.voice_id if a and a.voice_provider == entry.plugin else None
+        if not vid and a:
+            vid = await plugin.match(a.voice_description or a.description)
+        out = ProjectStore.path_for(pid) / "cast" / cid / "preview.wav"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        text = f"Hello, I am {item.title}. This is how I will sound in your video."
+        await plugin.synthesize(text, VoiceSpec(voice_id=vid, description=(a.voice_description if a else "")), out, entry.model)
+    except Exception as exc:
+        raise HTTPException(400, f"voice preview failed: {exc}")
+    import time as _t
+    return {"url": f"/files/{pid}/cast/{cid}/preview.wav?t={int(_t.time())}", "voice": entry.id}
+
+
 # ===================================================================== dependencies
 @app.post("/api/projects/{pid}/deps")
 async def add_dep(pid: str, body: dict = Body(...)):
@@ -438,7 +472,10 @@ async def revert(pid: str, nid: str, body: dict = Body(...)):
 # ===================================================================== files
 @app.get("/files/{pid}/{path:path}")
 async def files(pid: str, path: str):
-    base = ProjectStore.path_for(pid).resolve()
+    try:
+        base = ProjectStore.path_for(pid).resolve()
+    except FileNotFoundError:
+        raise HTTPException(404, "not found")
     target = (base / path).resolve()
     if base not in target.parents and target != base:
         raise HTTPException(403, "outside project")
@@ -560,6 +597,8 @@ if (STATIC / "assets").exists():
 
 @app.get("/{full_path:path}")
 async def spa(full_path: str):
+    if full_path.startswith(("api/", "files/", "ws/")):
+        raise HTTPException(404, "not found")
     index = STATIC / "index.html"
     if index.exists():
         return HTMLResponse(index.read_text())

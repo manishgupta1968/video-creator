@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 248 250 252;
+  --panel: 255 255 255;
+  --sunken: 241 245 249;
+  --line: 226 232 240;
+  --ink: 15 23 42;
+  --muted: 100 116 139;
+  --brand: 79 70 229;
+  --brand-ink: 255 255 255;
+  --ok: 22 163 74;
+  --warn: 217 119 6;
+  --bad: 220 38 38;
+  --info: 2 132 199;
+  color-scheme: light;
+}
+.dark {
+  --bg: 11 15 25;
+  --panel: 17 24 39;
+  --sunken: 23 31 48;
+  --line: 39 50 71;
+  --ink: 236 241 248;
+  --muted: 148 163 184;
+  --brand: 129 120 255;
+  --brand-ink: 255 255 255;
+  --ok: 74 222 128;
+  --warn: 251 191 36;
+  --bad: 248 113 113;
+  --info: 56 189 248;
+  color-scheme: dark;
+}
+
+html, body, #root { height: 100%; }
+body { @apply bg-bg text-ink font-sans antialiased text-[13px] leading-relaxed; }
+::selection { background: rgb(var(--brand) / 0.25); }
+:focus-visible { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; border-radius: 6px; }
+
+.scroll-thin { scrollbar-width: thin; scrollbar-color: rgb(var(--line)) transparent; }
+.editable { @apply rounded-md px-1.5 py-0.5 -mx-1.5 hover:bg-sunken cursor-text transition-colors; }
+.field-label { @apply text-[11px] font-medium uppercase tracking-wide text-muted; }
+.react-flow__attribution { display: none; }
+.react-flow { --xy-background-color: transparent; }
+.dark .react-flow__controls button { background: rgb(var(--panel)); color: rgb(var(--ink)); border-color: rgb(var(--line)); }
+
+@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgb(var(--brand) / .45); } 100% { box-shadow: 0 0 0 8px rgb(var(--brand) / 0); } }
+.pulse { animation: pulse-ring 1.4s ease-out infinite; }
+@keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.skeleton { background: linear-gradient(90deg, rgb(var(--sunken)) 0, rgb(var(--line)) 50%, rgb(var(--sunken)) 100%); background-size: 800px 100%; animation: shimmer 1.4s infinite linear; }

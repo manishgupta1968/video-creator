@@ -106,7 +106,8 @@ class FakeLLM(LLM):
                       "seconds": round(psecs / n_clips, 1)} for i in range(n_clips)]
             parts.append({"title": title, "goal": prefix + topic, "seconds": psecs, "clips": clips})
         mood = "tense" if any(w in g for w in ("chase", "danger", "fight", "escape")) else "uplifting"
-        return {"title": (topic[:48] or "New video").strip().capitalize(),
+        title = topic if len(topic) <= 50 else topic[:50].rsplit(" ", 1)[0] + "…"
+        return {"title": (title or "New video").strip()[:1].upper() + (title or "New video").strip()[1:],
                 "style": {"look": "cinematic, photoreal, natural light", "colour": "rich natural colour", "mood": mood},
                 "actors": actors, "parts": parts}
 

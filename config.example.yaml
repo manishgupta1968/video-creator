@@ -1,0 +1,13 @@
+# ~/.video-generator/config.yaml — every setting is also in the GUI (Settings).
+llm:
+  default: auto              # auto | anthropic | openai | gemini | fake_llm
+  models: {anthropic: claude-opus-5-5, openai: gpt-5, gemini: gemini-2.5-pro}
+  per_task: {}               # e.g. {decompose: anthropic, write_clip_script: openai}
+  reviewer: same             # AI used by the Review Agent (gemini can watch whole clips)
+  anthropic_effort: medium
+  anthropic_fallbacks: true  # if Claude declines, retry on another Claude model
+budget_usd: 50               # default budget for new projects
+quality_mode: balanced       # best | balanced | budget | free
+max_parallel_jobs: 4
+preferred_models: {}         # e.g. {human_motion: kling_3, talking_head: heygen_avatar_iv}
+disabled_models: []

@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vg-plugin-example"
+version = "0.1.0"
+description = "Example external plugin for video-generator: a free 'sketch' video model."
+requires-python = ">=3.10"
+dependencies = ["video-generator"]
+
+# This one line is what makes video-generator find the plugin.
+[project.entry-points."video_generator.plugins"]
+sketch_video = "vg_plugin_example:SketchVideo"

@@ -151,13 +151,16 @@ def placeholder_image(text: str, out: Path, size: tuple[int, int], subtitle: str
         dark = Image.new("RGB", (w, h), tuple(int(c * 0.35) for c in top))
         img = Image.composite(dark, img, grad.resize((w, h)))
     d = ImageDraw.Draw(img)
-    f1, f2 = _font(max(h // 18, 18)), _font(max(h // 34, 12))
-    lines = textwrap.wrap(text, width=48)[:6]
-    y = h // 2 - len(lines) * (h // 30)
+    size1 = max(min(h // 18, w // 26), 16)
+    f1, f2 = _font(size1), _font(max(h // 34, 12))
+    chars = max(int(w * 0.86 / (size1 * 0.55)), 12)
+    lines = textwrap.wrap(text, width=chars)[:6]
+    step = int(size1 * 1.35)
+    y = h // 2 - len(lines) * step // 2
     for line in lines:
         tw = d.textlength(line, font=f1)
         d.text(((w - tw) / 2, y), line, fill=(248, 250, 252), font=f1)
-        y += int(h / 15)
+        y += step
     if subtitle:
         tw = d.textlength(subtitle, font=f2)
         d.text(((w - tw) / 2, h - h // 8), subtitle, fill=(203, 213, 225), font=f2)

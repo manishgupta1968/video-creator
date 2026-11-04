@@ -1,0 +1,13 @@
+# Copy into ~/.video-generator/catalog.yaml (or edit in Settings → Model catalogue)
+video:
+  - id: sketch
+    plugin: sketch_video
+    model: sketch-v1
+    vendor: local
+    strengths: {landscape: 2, wildlife: 2, product: 2, human_motion: 1, dialogue_scene: 1, talking_head: 1, other: 2}
+    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: false, max_seconds: 60}
+    price: {unit: second, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.3}
+    licence: MIT
+    pricing_url: ""
+    last_checked: "2026-11-04"
