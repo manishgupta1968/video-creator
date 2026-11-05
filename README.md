@@ -124,6 +124,8 @@ Keyboard shortcuts:
 
 ### Things worth knowing
 
+**Quality choices.** *Best* = highest quality. *Balanced* = quality for the money. *Budget* = the cheapest **real** model that is good enough for the shot. *Free preview* = free local tools only (text cards). Free tools are never chosen in the other modes unless nothing real is connected.
+
 **Preview mode.** Without keys for a video or image service, the tool cannot make real footage. It makes *text-card previews* instead (each card says "PREVIEW — not real footage"). A banner at the top, a "preview" mark on each clip, and the Generate box all tell you this and what to add.
 
 **A talking animal or object** (for example a lion that says "hello how are you"). The tool does it in three steps:

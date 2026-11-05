@@ -236,3 +236,51 @@ def test_catalog_user_override(tmp_path):
     e.price.usd = 0.5
     c.save_user_override(e)
     assert Catalog.load().get("kling_3").price.usd == 0.5
+
+
+# ------------------------------------------------------------------ "Budget" means the cheapest REAL model
+def _keys(monkeypatch, *names):
+    for n in names:
+        monkeypatch.setenv(n, "x")
+
+
+def test_budget_mode_picks_cheapest_real_models_not_free_placeholders(monkeypatch):
+    from video_generator.config import Config
+    from video_generator.registry import Registry
+    _keys(monkeypatch, "FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY")
+    reg = Registry(Config())
+    for job in ("image", "voice", "music", "avatar", "lipsync"):
+        assert not reg.choose(job, mode="budget").is_free, job
+    video = reg.choose("video", "wildlife", mode="budget")
+    assert not video.is_free and video.id == "wan_3"                    # cheapest real model with a good score for wildlife
+    assert reg.choose("avatar", need={"non_human": True}, mode="budget").id == "kling_avatar"
+
+
+def test_budget_mode_skips_models_that_are_poor_for_the_shot(monkeypatch):
+    from video_generator.config import Config
+    from video_generator.registry import Registry
+    _keys(monkeypatch, "REPLICATE_API_TOKEN", "FAL_KEY")                # Replicate's Wan 2.2 is cheapest but weak for people
+    reg = Registry(Config())
+    assert reg.choose("video", "dialogue_scene", mode="budget").id != "replicate_wan_2_2"
+
+
+def test_free_mode_is_free_only_and_no_keys_falls_back_to_previews(monkeypatch):
+    from video_generator.config import Config
+    from video_generator.registry import Registry
+    _keys(monkeypatch, "FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY")
+    reg = Registry(Config())
+    for job in ("image", "voice", "music", "avatar", "video"):
+        assert reg.choose(job, mode="free").is_free, job
+    for mode in ("budget", "balanced", "best"):
+        monkeypatch.delenv("FAL_KEY"), monkeypatch.delenv("ELEVENLABS_API_KEY"), monkeypatch.delenv("OPENAI_API_KEY")
+        assert Registry(Config()).choose("video", "wildlife", mode=mode).is_free      # nothing real connected: previews, no crash
+        _keys(monkeypatch, "FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY")
+
+
+def test_balanced_and_best_are_unchanged(monkeypatch):
+    from video_generator.config import Config
+    from video_generator.registry import Registry
+    _keys(monkeypatch, "GEMINI_API_KEY", "FAL_KEY")
+    reg = Registry(Config())
+    assert reg.choose("video", "wildlife", mode="best").plugin == "veo"
+    assert reg.choose("video", "human_motion", mode="best").plugin == "fal"

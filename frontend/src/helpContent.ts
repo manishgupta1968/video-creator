@@ -14,7 +14,7 @@ export const HELP: Record<string, HelpEntry> = {
   "attach-files": { title: "Add your own material", does: "Attach photos, slides, video clips or a voice recording.", gets: "Slides and clips go into the video as they are. Photos define how actors look. A voice recording is used to copy that voice." },
   "length-picker": { title: "Length of the video", does: "Sets how long the finished video should be.", gets: "The plan is sized to this length. You can change it later.", note: "Writing “30-second” in your goal sets it for you." },
   "shape-picker": { title: "Shape of the video", does: "Chooses wide (16:9), vertical (9:16) or square (1:1).", gets: "Wide suits YouTube, vertical suits Reels and Shorts, square suits feeds." },
-  "quality-picker": { title: "Quality and cost", does: "Chooses how the tool picks AI models.", gets: "Best = highest quality. Balanced = quality for the money. Budget = cheapest. Free preview = no paid tools.", note: "Free preview makes text cards, not real footage." },
+  "quality-picker": { title: "Quality and cost", does: "Chooses how the tool picks AI models.", gets: "Best = highest quality. Balanced = quality for the money. Budget = the cheapest real model that is good enough for the shot. Free preview = free local tools only.", note: "Free preview makes text cards, not real footage." },
   "create-draft": { title: "Create the draft", does: "Plans your whole video with the AI brain.", gets: "A draft you can edit before anything is paid for.", note: "Costs a few cents of AI-brain use, or nothing with the offline brain." },
 
   // ------------------------------------------------------------------ top bar

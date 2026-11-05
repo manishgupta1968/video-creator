@@ -109,7 +109,8 @@ class Registry:
         """Usable catalogue entries for a job, best first.
 
         mode: best (quality first), balanced (quality per dollar), budget
-        (cheapest), free (local only)."""
+        (the cheapest REAL model that is good enough), free (free local tools only).
+        Free placeholders are only used in free mode, or as a last resort when no real model is usable."""
         mode = mode or self.config.quality_mode
         need = need or {}
         out = []
@@ -127,6 +128,18 @@ class Registry:
                     ok = False
             if ok:
                 out.append(e)
+
+        def level(e: CatalogEntry) -> int:
+            return e.strength(shot_type) if job == "video" else e.quality
+
+        if mode != "free":
+            real = [e for e in out if not e.is_free]
+            if real:
+                out = real                                   # a placeholder card is never "cheaper" than real footage
+            if mode == "budget":
+                decent = [e for e in out if level(e) >= 3]   # cheapest, but not a model that is poor for this kind of shot
+                if decent:
+                    out = decent
 
         def score(e: CatalogEntry) -> tuple:
             strength = e.strength(shot_type) if job == "video" else e.quality
