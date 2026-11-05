@@ -265,14 +265,15 @@ class Brain:
         prev = _previous_leaf(project, node)
         parents = " > ".join(f"{a.title}: {a.goal}" for a in ancestors(project, node.id) if a.id != project.root.id)
         current = node.script.model_dump_json(indent=1) if node.script else "(none yet)"
+        secs = node.target_seconds or (node.script.target_seconds if node.script else None) or node.duration.likely_s or 6
         prompt = render("clip_script", outline=outline(project), number=nums.get(node.id, ""), title=node.title,
-                        goal=node.goal, parents=parents or "(top level)", seconds=node.duration.likely_s or 6,
+                        goal=node.goal, parents=parents or "(top level)", seconds=f"{secs:g}", max_beats=max(1, round(secs / 2.5)),
                         context=self._context_block(project, node.id), actors=self._actor_list(project, node.id),
                         previous=(f"{prev.title}: {prev.script.visual if prev.script else prev.goal}" if prev else "(first clip)"),
                         current=current, feedback=feedback or "(none)", shot_types=", ".join(SHOT_TYPES),
                         style=json.dumps(_style(project, node)))
         return await self.ask("write_clip_script", prompt, ClipScriptDraft,
-                              {"goal": node.goal, "title": node.title, "seconds": node.duration.likely_s or 6,
+                              {"goal": node.goal, "title": node.title, "seconds": secs,
                                "actors": [a.model_dump() for a in project.context if a.type == ContextType.actor],
                                "feedback": feedback, "current": node.script.model_dump() if node.script else None,
                                "has_previous": prev is not None})

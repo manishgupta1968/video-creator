@@ -229,6 +229,9 @@ class Service:
         node.script = draft_to_script(p, draft)
         if node.target_seconds and not node.script.target_seconds:
             node.script.target_seconds = node.target_seconds
+        limit = node.script.target_seconds or node.target_seconds
+        if limit:                                  # the plan you see must match the length: no more steps than fit
+            node.script.action_beats = node.script.action_beats[:max(1, round(limit / est.ACTION_SECONDS))]
         node.voice_audio = None
         node.voice_seconds = None
         if node.status in (NodeStatus.done, NodeStatus.needs_pick, NodeStatus.failed):

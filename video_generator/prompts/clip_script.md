@@ -6,7 +6,7 @@ WHOLE VIDEO OUTLINE:
 CLIP {{number}}: {{title}}
 CLIP GOAL: {{goal}}
 PARENT GOALS: {{parents}}
-TARGET LENGTH: about {{seconds}} seconds
+LENGTH: this clip is exactly {{seconds}} seconds. Use at most {{max_beats}} action steps (about one per 2.5 seconds) and keep any dialogue short enough to say in that time (about 2.5 spoken words per second).
 STYLE: {{style}}
 PREVIOUS CLIP: {{previous}}
 
@@ -25,7 +25,7 @@ FEEDBACK TO APPLY (user feedback wins over AI suggestions):
 Fields:
 - shot_type: one of {{shot_types}} (talking_head = a person presenting to camera)
 - visual: one rich paragraph describing exactly what we see (subject, setting, lighting, lens/feel). Restate actor appearance and clothing.
-- action_beats: 1–4 short actions in order
+- action_beats: 1 to {{max_beats}} short actions in order (never more than {{max_beats}})
 - camera: framing and movement
 - actors_in_shot: actor_name plus clothing/behaviour for this clip
 - dialogue: lines spoken (speaker_name = actor name or "narrator"); keep to the target length

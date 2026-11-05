@@ -36,6 +36,9 @@ export function ContextCard({ item, origin, inheritedOff, onToggle, compact }: {
             {item.consent.confirmed && <Tip content={`Consent recorded (${item.consent.statement === "self" ? "this is me" : "permission"})`}><ShieldCheck className="h-3.5 w-3.5 text-ok" /></Tip>}
           </div>
           <div className="truncate text-[11px] text-muted">{item.actor?.description || item.text || item.files.map((f) => f.split("/").pop()).join(", ") || "—"}</div>
+          {!compact && !item.files.length && item.analysis?.auto_photo_error && (
+            <div className="mt-1 text-[11px] text-warn">No photo found: {item.analysis.auto_photo_error}. Open this card and press “Find one for me”.</div>
+          )}
           {!compact && (
             <div className="mt-1 flex flex-wrap gap-1">
               <Badge>{CTX_TYPES.find((t) => t.value === item.type)?.label}</Badge>

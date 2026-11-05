@@ -90,11 +90,16 @@ def estimate_duration(project: Project, node: Node, siblings_share: Optional[flo
     if node.kind == NodeKind.clip and node.voice_seconds:
         s = node.script
         action = len(s.action_beats) * ACTION_SECONDS if s else 0
-        secs = max(node.voice_seconds + 2 * EDGE_PAD * 0.5, action, 2.0)
-        if node.script and node.script.target_seconds and not node.script.dialogue and not node.script.narration:
-            secs = node.script.target_seconds
-        return DurationEstimate(min_s=secs, likely_s=secs, max_s=secs, basis=EstimateBasis.actual,
-                                explain=f"real voice length {node.voice_seconds:.1f} s + padding")
+        target = (s.target_seconds if s else None) or node.target_seconds
+        base = node.voice_seconds + 2 * EDGE_PAD * 0.5
+        if target:
+            secs = max(base, target, 2.0)          # the length you asked for wins; action steps never stretch it
+            why = (f"real voice {node.voice_seconds:.1f} s fits your {target:.0f} s target" if base <= target
+                   else f"real voice {node.voice_seconds:.1f} s is longer than your {target:.0f} s target, so the clip follows the voice")
+        else:
+            secs = max(base, action, 2.0)
+            why = f"real voice length {node.voice_seconds:.1f} s + padding"
+        return DurationEstimate(min_s=secs, likely_s=secs, max_s=secs, basis=EstimateBasis.actual, explain=why)
 
     if node.kind == NodeKind.clip and node.script and (node.script.dialogue or node.script.narration
                                                          or node.script.action_beats or node.script.visual):
@@ -108,16 +113,23 @@ def estimate_duration(project: Project, node: Node, siblings_share: Optional[flo
             speech += _words(text) / wpm * 60
         pauses = LINE_PAUSE * max(len(lines) - 1, 0) + (2 * EDGE_PAD if lines else 0)
         action = len(s.action_beats) * ACTION_SECONDS
-        likely = max(speech + pauses, action, s.target_seconds or 0, 3.0 if not lines else 0, 2.0)
+        target = s.target_seconds or node.target_seconds
+        if target:
+            # the length you asked for wins. Action steps never stretch a clip that has a target;
+            # only the speech can, because words cannot be squeezed.
+            likely = max(speech + pauses, target, 2.0)
+        else:
+            likely = max(speech + pauses, action, 3.0 if not lines else 0, 2.0)
         if lines:
             words = sum(_words(t) for _, t in lines)
             parts.append(f"{words} words ≈ {speech:.0f} s speech")
             if pauses:
                 parts.append(f"{pauses:.1f} s pauses")
-        if action:
+        if target:
+            parts.append(f"your target length ({target:.0f} s)" if likely <= target + 0.01 else
+                         f"the speech is longer than your {target:.0f} s target, so the clip follows the speech")
+        elif action:
             parts.append(f"{len(s.action_beats)} action beat(s) ≈ {action:.0f} s")
-        if s.target_seconds and likely == s.target_seconds:
-            parts.append("your target length")
         return DurationEstimate(min_s=round(likely * 0.88, 1), likely_s=round(likely, 1), max_s=round(likely * 1.2, 1),
                                 basis=EstimateBasis.script, explain=" + ".join(parts) or "minimum clip length")
 
@@ -389,6 +401,15 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
             if leaf.duration.likely_s > max_s + 0.5:
                 leaf.warnings.append(f"~{leaf.duration.likely_s:.0f} s is longer than {plan.video.id} can make in one go "
                                      f"({max_s:.0f} s). Split it into {math.ceil(leaf.duration.likely_s / max_s)} parts?")
+        if leaf.kind == NodeKind.clip and leaf.script:
+            beats = len(leaf.script.action_beats)
+            fits = max(1, round(leaf.duration.likely_s / ACTION_SECONDS))
+            if beats > fits:
+                leaf.warnings.append(f"{beats} action steps in {leaf.duration.likely_s:.0f} s: they will be squeezed. Remove some, or make the clip longer.")
+            tgt = leaf.script.target_seconds or leaf.target_seconds
+            if tgt and leaf.duration.likely_s > tgt * 1.1 + 0.5:
+                leaf.warnings.append(f"The speech needs about {leaf.duration.likely_s:.0f} s, longer than the {tgt:.0f} s you set. "
+                                     "Shorten the lines, or raise the length.")
         for item in effective_context(project, leaf.id):
             if item.item.needs_consent and not item.item.consent.confirmed:
                 leaf.warnings.append(f"consent needed for {item.item.title or 'an actor'} before this clip can be made")

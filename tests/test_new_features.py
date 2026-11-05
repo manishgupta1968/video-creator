@@ -378,3 +378,120 @@ def test_facts_and_explain_answer_from_the_projects_own_numbers(svc, monkeypatch
     assert "Reference picture of Kito" in facts                       # cost lines are quoted so they can be explained
     answer = asyncio.run(svc.explain(p.id, "why does the clip cost so much?"))
     assert answer and "CLIP" in answer                                # offline helper quotes the matching facts
+
+
+# ------------------------------------------------------------------ the length you ask for must win
+BEATS4 = ["lion looks up", "lion turns to camera", "lion opens mouth", "lion blinks"]
+
+
+def lion_12s(svc, mode="balanced", beats=None, speech="hello how are you"):
+    """The user's real test: 12 s video, 3 clips of 4 s, each with 4 AI-written action steps."""
+    p = svc.new_project("Golden hour lion greeting", seconds=12, quality_mode=mode)
+    lion = ContextItem(type=ContextType.actor, title="Kito", actor=ActorDetails(
+        kind="animal", description="adult male African lion, full mane", voice_description="deep, warm, growly"))
+    p.context.append(lion)
+    part = add_child(p, p.root.id, Node(kind=NodeKind.goal, title="Greeting", goal="greeting", target_seconds=12))
+    for i in range(3):
+        c = add_child(p, part.id, Node(kind=NodeKind.clip, title=f"Shot {i + 1}", goal="Kito says hello", target_seconds=4))
+        c.script = ClipScript(shot_type=ShotType.talking_head, visual="close-up of Kito", on_camera_speech=True,
+                              action_beats=list(BEATS4 if beats is None else beats),
+                              actors_in_shot=[ActorInShot(actor_id=lion.id)],
+                              dialogue=[DialogueLine(speaker=lion.id, text=speech)] if speech else [])
+    svc.save(p)
+    return svc.load(p.id)
+
+
+def test_action_steps_never_stretch_a_clip_that_has_a_target(svc):
+    p = lion_12s(svc)
+    for leaf in leaves(p):
+        d = E.estimate_duration(p, leaf)
+        assert d.likely_s == 4.0, d                      # not 4 steps x 2.5 s = 10 s
+    assert svc.summary(p)["seconds"] == 12.0
+
+
+def test_speech_longer_than_target_wins_and_warns(svc):
+    long_line = " ".join(["word"] * 18)                  # about 7 s of speech
+    p = lion_12s(svc, speech=long_line, beats=["lion talks"])
+    svc.refresh(p)
+    leaf = leaves(p)[0]
+    assert leaf.duration.likely_s > 6.5
+    assert any("speech needs about" in w and "4 s you set" in w for w in leaf.warnings)
+
+
+def test_no_target_still_uses_action_steps(svc):
+    p = svc.new_project("A walk", seconds=10)
+    part = add_child(p, p.root.id, Node(kind=NodeKind.goal, title="Walk", goal="walk"))
+    c = add_child(p, part.id, Node(kind=NodeKind.clip, title="Walk", goal="a man walks"))   # no target
+    c.script = ClipScript(shot_type=ShotType.other, visual="a man walks", action_beats=["a", "b", "c"])
+    d = E.estimate_duration(p, c)
+    assert d.likely_s == 7.5                             # old behaviour kept: 3 steps x 2.5 s
+
+
+def test_too_many_steps_for_the_length_gets_a_warning(svc):
+    p = lion_12s(svc)
+    svc.refresh(p)
+    assert all(any("action steps in 4 s" in w for w in l.warnings) for l in leaves(p))
+    p2 = lion_12s(svc, beats=BEATS4[:2])
+    svc.refresh(p2)
+    assert not any("action steps" in w for l in leaves(p2) for w in l.warnings)
+
+
+def test_actual_stage_keeps_the_target_after_the_voice_is_made(svc):
+    p = lion_12s(svc)
+    leaf = leaves(p)[0]
+    leaf.voice_seconds = 1.6
+    d = E.estimate_duration(p, leaf)
+    assert d.basis.value == "actual" and d.likely_s == 4.0
+    leaf.voice_seconds = 6.0                             # voice cannot be squeezed
+    assert E.estimate_duration(p, leaf).likely_s > 6.0
+
+
+def test_lion_project_is_about_12_seconds_and_inside_the_budget(svc, monkeypatch):
+    for k in ("FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.setenv(k, "x")
+    svc.reload()
+    for mode in ("balanced", "budget"):
+        p = lion_12s(svc, mode=mode)                 # the settings the user used: 1 take, music off, $3 budget
+        p.settings.budget_usd = 3.0
+        p.settings.takes_people = 1
+        p.settings.music = False
+        svc.save(p)
+        s = svc.summary(svc.load(p.id))
+        assert s["seconds"] == 12.0
+        assert 1.0 < s["cost"] < 2.0, (mode, s["cost"])            # about $1.5, not $3.44
+        assert not any("budget" in w.lower() for w in s["warnings"]), s["warnings"]
+
+
+def test_clip_script_prompt_carries_the_length_and_step_limit(svc, monkeypatch):
+    from video_generator import brain as B
+    p = lion_12s(svc)
+    leaf = leaves(p)[0]
+    seen = {}
+    real = B.render
+
+    def spy(name, **kw):
+        if name == "clip_script":
+            seen.update(kw)
+        return real(name, **kw)
+
+    monkeypatch.setattr(B, "render", spy)
+    prompt_holder = {}
+    orig_ask = svc.brain.ask
+
+    async def ask(task, prompt, *a, **k):
+        prompt_holder["p"] = prompt
+        return await orig_ask(task, prompt, *a, **k)
+
+    monkeypatch.setattr(svc.brain, "ask", ask)
+    asyncio.run(svc.brain.write_clip_script(p, leaf))
+    assert seen["seconds"] == "4" and seen["max_beats"] == 2          # 4 s fits two steps of 2.5 s
+    assert "exactly 4 seconds" in prompt_holder["p"] and "at most 2 action steps" in prompt_holder["p"]
+
+
+def test_extra_steps_from_the_ai_are_trimmed_to_fit(svc):
+    from video_generator.brain import ClipScriptDraft
+    p = lion_12s(svc)
+    leaf = leaves(p)[0]
+    draft = ClipScriptDraft(shot_type="talking_head", visual="close-up", action_beats=BEATS4)
+    svc._apply_script(p, leaf, draft)
+    assert len(leaf.script.action_beats) == 2 and leaf.script.action_beats == BEATS4[:2]

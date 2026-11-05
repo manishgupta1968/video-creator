@@ -147,6 +147,8 @@ With the fal.ai key (and ElevenLabs for the voice) this works. A presenter who i
 
 **Is it working?** While anything runs you see a bar under the top menu: what is happening now ("Making clip 2.1 · Making video, take 2 of 3"), the time so far, how many clips are done, and Pause/Stop. The browser tab title shows ⏳ while working, 👆 when it needs your pick and ✅ when finished. The browser can also send a notification (it asks once).
 
+**Length.** The length you ask for wins. If you ask for 12 seconds in 3 clips, each clip is 4 seconds, and the AI is told how many action steps fit (about one per 2.5 seconds). A clip only becomes longer when its spoken words need more time, because speech cannot be squeezed; the clip then shows an orange note saying so.
+
 **The final video.** When you use *Generate entire video* or *Continue to end*, the clips are joined automatically at the end. If you make clips one by one, use *Join clips into final video* (same size and speed, transitions, music, subtitles). If you change something afterwards, the final video is marked out of date and the button becomes *Update final video*.
 
 ## 5. Command line (same features)
