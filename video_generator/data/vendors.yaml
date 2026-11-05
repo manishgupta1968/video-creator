@@ -87,7 +87,7 @@
 - id: alibaba
   name: Alibaba Cloud Model Studio (Wan direct)
   env: [DASHSCOPE_API_KEY]
-  used_for: Wan 3.0 direct (not wired in v1; use the fal route)
+  used_for: Wan direct (not wired in v1; use the fal route, which has Wan 2.6)
   signup_url: https://www.alibabacloud.com/product/modelstudio
   pricing_url: https://www.alibabacloud.com/help/en/model-studio/video-generation
   need: Optional

@@ -252,7 +252,7 @@ def test_budget_mode_picks_cheapest_real_models_not_free_placeholders(monkeypatc
     for job in ("image", "voice", "music", "avatar", "lipsync"):
         assert not reg.choose(job, mode="budget").is_free, job
     video = reg.choose("video", "wildlife", mode="budget")
-    assert not video.is_free and video.id == "wan_3"                    # cheapest real model with a good score for wildlife
+    assert not video.is_free and video.id == "wan_2_6"                    # cheapest real model with a good score for wildlife
     assert reg.choose("avatar", need={"non_human": True}, mode="budget").id == "kling_avatar"
 
 

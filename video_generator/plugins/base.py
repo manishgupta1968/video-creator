@@ -20,7 +20,14 @@ from pydantic import BaseModel
 
 
 class PluginError(RuntimeError):
-    """A provider call failed; message is shown to the user."""
+    """A provider call failed; message is shown to the user.
+
+    retry_other_model: the request was refused before any work was done (wrong model name, bad input),
+    so nothing was charged and another model of the same kind can safely be tried."""
+
+    def __init__(self, message: str = "", retry_other_model: bool = False):
+        super().__init__(message)
+        self.retry_other_model = retry_other_model
 
 
 class NotConfigured(PluginError):
@@ -109,6 +116,7 @@ class VideoRequest:
     audio: bool = True
     camera: str = ""
     label: str = ""
+    params: dict = field(default_factory=dict)      # the catalogue row's `params` (field names, allowed lengths …)
 
 
 class VideoGenerator(Plugin):
@@ -239,4 +247,5 @@ async def poll(fetch: Callable[[], Awaitable[dict]], done: Callable[[dict], Opti
 
 def raise_for(r: httpx.Response, who: str) -> None:
     if r.status_code >= 400:
-        raise PluginError(f"{who}: HTTP {r.status_code}: {r.text[:500]}")
+        raise PluginError(f"{who}: HTTP {r.status_code}: {r.text[:500]}",
+                          retry_other_model=r.status_code in (400, 404, 405, 409, 410, 413, 415, 422))

@@ -107,6 +107,39 @@ async def check_fal(client: httpx.AsyncClient) -> list[Check]:
     return [Check("fal.ai key", OK, "Accepted. (Model names can only be fully checked by making a clip; if one fails, the message names it.)")]
 
 
+async def check_fal_models(client: httpx.AsyncClient, catalog) -> list[Check]:
+    """Ask fal.ai whether each fal model in the catalogue exists. A model name that is wrong only shows up when a clip is
+    made, so this looks ahead. Anything unclear is reported as 'could not check', never as 'broken'."""
+    key = os.environ.get("FAL_KEY", "")
+    if not key or catalog is None:
+        return []
+    out: list[Check] = []
+    entries = [e for e in catalog.entries if e.vendor == "fal" and e.enabled and e.model]
+    for e in entries:
+        try:
+            r = await client.get("https://api.fal.ai/v1/models", params={"endpoint_id": e.model}, headers={"Authorization": f"Key {key}"})
+        except httpx.HTTPError:
+            return out + [Check("fal.ai models", WARN, "Could not reach fal.ai to check the model names.")]
+        label = f"fal model {e.id}"
+        try:
+            data = r.json() if r.status_code == 200 else None
+        except ValueError:
+            data = None
+        models = data.get("models") if isinstance(data, dict) else None
+        if isinstance(models, list):
+            ids = {m.get("endpoint_id") for m in models if isinstance(m, dict)}
+            if e.model in ids:
+                out.append(Check(label, OK, f"'{e.model}' is listed by fal.ai."))
+            elif not models:
+                out.append(Check(label, WARN, f"fal.ai did not list '{e.model}'. The name may be out of date. "
+                                 "Check the model name on fal.ai/models and correct it in catalog.yaml."))
+            else:
+                out.append(Check(label, SKIP, f"Could not check '{e.model}' (unexpected answer from fal.ai)."))
+        else:
+            out.append(Check(label, SKIP, f"Could not check '{e.model}' (fal.ai answered {r.status_code})."))
+    return out
+
+
 async def run_checks(client: Optional[httpx.AsyncClient] = None, catalog=None) -> list[Check]:
     own = client is None
     client = client or httpx.AsyncClient(timeout=20, follow_redirects=True)
@@ -120,7 +153,8 @@ async def run_checks(client: Optional[httpx.AsyncClient] = None, catalog=None) -
             except KeyError:
                 pass
         out: list[Check] = []
-        for part in (check_openai(client, image_model), check_elevenlabs(client, voice_model), check_fal(client)):
+        for part in (check_openai(client, image_model), check_elevenlabs(client, voice_model), check_fal(client),
+                     check_fal_models(client, catalog)):
             out += await part
         return out
     finally:

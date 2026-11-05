@@ -521,6 +521,8 @@ def doctor():
     """Check your keys with free calls (nothing is charged): OpenAI, ElevenLabs and fal.ai."""
     from . import doctor as dr
     from .catalog import Catalog
+    from .config import load_env
+    load_env()                       # keys saved in the GUI live in ~/.video-generator/.env
     marks = {dr.OK: "[green]✓[/]", dr.WARN: "[yellow]![/]", dr.BAD: "[red]✗[/]", dr.SKIP: "[dim]-[/]"}
     checks = asyncio.run(dr.run_checks(catalog=Catalog.load()))
     for c in checks:
@@ -529,10 +531,24 @@ def doctor():
     con.print("\n[red]Fix the ✗ lines before you generate.[/]" if bad else "\n[green]No problems found with your keys.[/] A real clip is the final test.")
 
 
+@app.command("smoke-test")
+def smoke_test(max_usd: float = typer.Option(1.0, "--max-usd", help="never spend more than this many dollars"),
+               yes: bool = typer.Option(False, "--yes", help="do not ask before spending"),
+               all_video_models: bool = typer.Option(False, "--all-video-models", help="test up to 3 video models (costs more)")):
+    """A tiny REAL test of voice, picture, video and the talking lion with your own keys (about $1 at most). Asks first."""
+    from . import smoketest
+    svc = _svc()
+    rep = asyncio.run(smoketest.run(svc, max_usd, None if yes else (lambda q: typer.confirm(q)),
+                                    say=lambda s: con.print(s, highlight=False), all_video=all_video_models))
+    con.print("\n" + rep.text(), highlight=False)
+
+
 @app.command("photo-test")
 def photo_test(words: str = typer.Argument("male lion", help="what to search for, e.g. 'male lion'")):
     """Check the automatic photo search on this computer, step by step. Saves the first photo it can download here."""
     from . import stock
+    from .config import load_env
+    load_env()
     lines, saved = asyncio.run(stock.diagnose(words, Path.cwd()))
     for line in lines:
         con.print(line, highlight=False)

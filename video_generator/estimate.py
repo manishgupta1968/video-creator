@@ -233,7 +233,9 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     if video.is_free and not node.takes_override:
         takes = 1              # free previews are identical; one take is enough
     max_refs = int(video.capabilities.get("reference_images", 0) or 0)
-    if ref_images > max(max_refs, 0) and ref_images > 0:
+    picture_carries_refs = bool(image and int(image.capabilities.get("reference_images", 0) or 0) > 0)
+    if ref_images > max(max_refs, 0) and ref_images > 0 and not picture_carries_refs:
+        # normally the picture model (or the previous clip's last frame) carries the actors' looks into the video
         warnings.append(f"{ref_images} reference image(s) but {video.id} accepts {max_refs}; the most relevant will be used")
     if needs_start and not video.capabilities.get("start_frame"):
         warnings.append(f"{video.id} cannot start from the previous clip's last frame")
@@ -305,8 +307,10 @@ def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Option
             step_times.append((plan.image.time.queue_s + plan.image.time.per_output_s) * reg.time_factor(plan.image.id))
         v = plan.video
         max_s = float(v.capabilities.get("max_seconds", 10) or 10)
-        billed = secs
-        add(f"Video ({v.id})", f"{plan.takes} take(s) x {billed:.0f} s x ${v.unit_price}/s",
+        n_parts = math.ceil(secs / max_s - 0.05) if secs > max_s else 1
+        billed = n_parts * v.billed_seconds(secs / n_parts)        # the length the model really makes (and charges for)
+        shown = f"{billed:.0f} s" + (f" (the model makes {billed:.0f} s; your clip is cut to {secs:.0f} s)" if billed - secs >= 0.5 else "")
+        add(f"Video ({v.id})", f"{plan.takes} take(s) x {shown} x ${v.unit_price}/s",
             plan.takes * billed * v.unit_price)
         parts = math.ceil(secs / max_s) if secs > max_s else 1
         step_times.append((v.time.queue_s + v.time.per_output_s * min(secs, max_s) * parts) * reg.time_factor(v.id))

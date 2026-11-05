@@ -7,6 +7,7 @@ import asyncio
 import json
 import math
 import shutil
+import dataclasses
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -440,28 +441,53 @@ class Engine:
                 if plan.voice:
                     await self._actor_voice(pid, a.id, plan.voice)
 
-    async def _make_image(self, pid: str, entry, make_req, what: str, nid: Optional[str] = None):
-        """Make one picture with `entry`. If that model fails, try the other usable picture models (never a free
-        placeholder unless that was the choice) and say so. Only the model that really made it is charged."""
-        reg = self.svc.reg
-        p = self.svc.load(pid)
-        order = [entry]
-        if entry is not None and not entry.is_free:
-            order += [e for e in reg.candidates("image", mode=p.settings.quality_mode) if e.id != entry.id and not e.is_free][:3]
+    async def _with_fallback(self, pid: str, first, alternatives, call, kind: str, what: str, cost_of, expected_of,
+                             nid: Optional[str] = None, any_error: bool = False):
+        """Make something with `first`; if that fails, try `alternatives` (other usable REAL models of the same kind).
+
+        call(entry) does the work and returns its Usage. Only the model that really made it is charged, and the
+        ledger and activity bar say so ("used X because Y failed").
+        Pictures are cheap, so any error moves on (any_error=True). For video and talking animation only an error
+        that means "refused before any work was done" (PluginError.retry_other_model) moves on, because a
+        time-out or server error may already have been billed."""
+        order = [first] + [e for e in alternatives if e is not None and e.id != first.id and not e.is_free][:2]
+        if first.is_free:
+            order = [first]
         problems: list[str] = []
-        for e in order:
+        label = {"image": "picture", "avatar": "talking-animation"}.get(kind, kind)
+        for i, e in enumerate(order):
             t0 = time.monotonic()
             try:
-                _, usage = await reg.plugin(e.plugin).generate(make_req(e))
+                usage = await call(e)
             except Exception as exc:
                 problems.append(f"{e.id}: {exc}" if isinstance(exc, PluginError) else f"{e.id}: {type(exc).__name__}: {exc}")
-                if nid and e is not order[-1]:
-                    self.step(pid, nid, f"Picture model {e.id} failed, trying another one")
-                continue
+                retry = any_error or (isinstance(exc, PluginError) and exc.retry_other_model)
+                if retry and i < len(order) - 1:
+                    if nid:
+                        self.step(pid, nid, f"{e.id} did not work, trying {order[i + 1].id}")
+                    continue
+                if len(problems) == 1 and not any_error:
+                    raise                                           # the vendor's own message, unchanged
+                raise PluginError(f"No {label} model worked. " + " | ".join(problems))
             note = f" (used {e.id} because {order[0].id} failed)" if problems else ""
-            await self.charge(pid, _row("image", what + note, e, e.unit_price, usage, t0, e.time.queue_s + e.time.per_output_s))
+            row = _row(kind, what + note, e, cost_of(e), usage, t0, expected_of(e))
+            if problems:
+                row["failed_first"] = [x[:300] for x in problems]
+            await self.charge(pid, row)
             return e, usage
-        raise PluginError("No picture model worked. " + " | ".join(problems))
+        raise PluginError(f"No {label} model worked. " + " | ".join(problems))      # (only when `order` is empty)
+
+    async def _make_image(self, pid: str, entry, make_req, what: str, nid: Optional[str] = None):
+        """One picture. If the chosen picture model fails, the other usable picture models are tried."""
+        reg = self.svc.reg
+        mode = self.svc.load(pid).settings.quality_mode
+
+        async def call(e):
+            _, usage = await reg.plugin(e.plugin).generate(make_req(e))
+            return usage
+        return await self._with_fallback(pid, entry, reg.candidates("image", mode=mode), call, "image", what,
+                                         cost_of=lambda e: e.unit_price,
+                                         expected_of=lambda e: e.time.queue_s + e.time.per_output_s, nid=nid, any_error=True)
 
     async def _reference_sheet(self, pid: str, cid: str, image_entry) -> None:
         p = self.svc.load(pid)
@@ -656,15 +682,20 @@ class Engine:
                 raw = d / f"{tag}_raw.mp4"
                 if plan.route == "avatar":
                     photo = self._actor_photo(p, n)
-                    a_entry = ventry
-                    t0 = time.monotonic()
                     audio = voice or media.silence(d / "silence.wav", seconds)
-                    _, usage = await self.svc.reg.plugin(a_entry.plugin).generate(
-                        AvatarRequest(photo=photo, audio=audio, out=raw, model=a_entry.model,
-                                      prompt=prompt[:500], aspect=p.settings.aspect, label=label))
-                    cost = seconds * a_entry.unit_price
-                    await self.charge(pid, _row("avatar", f"avatar {tag}", a_entry, cost, usage, t0,
-                                                a_entry.time.queue_s + a_entry.time.per_output_s * seconds))
+                    nonhuman = bool(speaker and speaker.actor and speaker.actor.kind in ("animal", "product"))
+                    alts = self.svc.reg.candidates("avatar", mode=p.settings.quality_mode, need={"non_human": True} if nonhuman else None)
+
+                    async def call_avatar(e, audio=audio, photo=photo, raw=raw):
+                        _, u = await self.svc.reg.plugin(e.plugin).generate(
+                            AvatarRequest(photo=photo, audio=audio, out=raw, model=e.model,
+                                          prompt=prompt[:500], aspect=p.settings.aspect, label=label))
+                        return u
+                    a_entry, _ = await self._with_fallback(
+                        pid, ventry, alts, call_avatar, "avatar", f"avatar {tag}", cost_of=lambda e: seconds * e.unit_price,
+                        expected_of=lambda e: e.time.queue_s + e.time.per_output_s * seconds, nid=nid)
+                    ventry = a_entry
+                    take.model = a_entry.id
                     take.keyframe = self.rel(pid, photo) if photo else None
                     native = True
                 else:
@@ -677,12 +708,16 @@ class Engine:
                             aspect=p.settings.aspect, negative=negative, label=label), f"keyframe {tag}", nid)
                         start = kf
                     take.keyframe = self.rel(pid, start)
-                    await self._video_parts(pid, ventry, VideoRequest(
+                    need_v = {"start_frame": True} if start else {}
+                    v_alts = [e for e in self.svc.reg.candidates("video", n.script.shot_type.value, need_v, p.settings.quality_mode)
+                              if float(e.capabilities.get("max_seconds", 10) or 10) >= min(seconds, 8)] if not entries else []
+                    ventry = await self._video_parts(pid, ventry, VideoRequest(
                         prompt=prompt, out=raw, model=ventry.model, seconds=seconds, aspect=p.settings.aspect,
                         resolution=p.settings.resolution, start_frame=start, end_frame=end_frame,
                         references=refs[: int(ventry.capabilities.get("reference_images", 0) or 0)],
                         negative=negative, audio=bool(ventry.capabilities.get("native_audio")),
-                        camera=n.script.camera, label=label), tag)
+                        camera=n.script.camera, label=label, params=dict(ventry.params)), tag, v_alts, nid)
+                    take.model = ventry.id
                     native = bool(ventry.capabilities.get("native_audio"))
                 # post-process: fit frame, exact length, mix voice + sounds
                 fitted = d / f"{tag}_fit.mp4"
@@ -698,7 +733,7 @@ class Engine:
                     tmp.unlink(missing_ok=True)
                 take.video = self.rel(pid, final)
                 take.seconds = round(media.probe_duration(final), 2)
-                take.cost_usd = round((ventry.unit_price * seconds if ventry else 0)
+                take.cost_usd = round((ventry.unit_price * ventry.billed_seconds(seconds) if ventry else 0)
                                       + (0 if handoff or plan.route == "avatar" or not plan.image else plan.image.unit_price), 4)
                 take.quality = self._quality(p, n, final)
                 done_takes["n"] += 1
@@ -742,31 +777,39 @@ class Engine:
             best = self._best_take(p, n, version)
             await self._finalize_clip(pid, nid, best.id)
 
-    async def _video_parts(self, pid: str, entry, req: VideoRequest, tag: str) -> None:
-        """Make the clip; if it is longer than the model allows, chain parts from each last frame."""
-        plugin = self.svc.reg.plugin(entry.plugin)
+    async def _video_parts(self, pid: str, entry, req: VideoRequest, tag: str, alternatives=(), nid: Optional[str] = None):
+        """Make the clip; if it is longer than the model allows, chain parts from each last frame.
+        If the chosen model refuses the request, the next usable video model is tried (see _with_fallback).
+        Returns the catalogue entry that really made the video."""
+        reg = self.svc.reg
         max_s = float(entry.capabilities.get("max_seconds", 10) or 10)
         parts_n = max(1, math.ceil(req.seconds / max_s - 0.05))
+
+        async def make(first, request: VideoRequest, what: str, secs: float):
+            async def call(e):
+                r = dataclasses.replace(request, model=e.model, params=dict(e.params), audio=bool(e.capabilities.get("native_audio")))
+                _, u = await reg.plugin(e.plugin).generate(r)
+                return u
+            used, _ = await self._with_fallback(
+                pid, first, alternatives, call, "video", what, cost_of=lambda e: e.billed_seconds(secs) * e.unit_price,
+                expected_of=lambda e: e.time.queue_s + e.time.per_output_s * secs, nid=nid)
+            return used
+
         if parts_n == 1:
-            t0 = time.monotonic()
-            _, usage = await plugin.generate(req)
-            await self.charge(pid, _row("video", f"video {tag}", entry, req.seconds * entry.unit_price, usage, t0,
-                                        entry.time.queue_s + entry.time.per_output_s * req.seconds))
-            return
+            return await make(entry, req, f"video {tag}", req.seconds)
         pieces = []
         start = req.start_frame
         each = req.seconds / parts_n
+        current = entry
         for k in range(parts_n):
             piece = req.out.with_name(f"{req.out.stem}_p{k}.mp4")
             sub = VideoRequest(**{**req.__dict__, "out": piece, "seconds": each, "start_frame": start,
                                   "end_frame": req.end_frame if k == parts_n - 1 else None})
-            t0 = time.monotonic()
-            _, usage = await plugin.generate(sub)
-            await self.charge(pid, _row("video", f"video {tag} part {k + 1}", entry, each * entry.unit_price, usage, t0,
-                                        entry.time.queue_s + entry.time.per_output_s * each))
+            current = await make(current, sub, f"video {tag} part {k + 1}", each)
             pieces.append(piece)
             start = media.last_frame(piece, piece.with_suffix(".last.png"))
         media.join_clips(pieces, ["cut"] * len(pieces), req.out, (0, 0), 24)
+        return current
 
     async def _handoff_frame(self, pid: str, nid: str) -> Optional[Path]:
         p = self.svc.load(pid)

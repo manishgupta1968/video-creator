@@ -41,6 +41,8 @@ class CatalogEntry(BaseModel):
     pricing_url: str = ""
     last_checked: str = ""
     live_price: Optional[float] = None     # filled by price_lookup when available
+    # model-specific API details so a fix needs no code: image_field, end_image_field, durations, fields, resolution
+    params: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def unit_price(self) -> float:
@@ -49,6 +51,14 @@ class CatalogEntry(BaseModel):
     @property
     def is_free(self) -> bool:
         return self.vendor == "local"
+
+    def billed_seconds(self, seconds: float) -> float:
+        """The length the vendor really makes (and charges for): the next length the model accepts.
+        A 4 s clip on a model that only makes 5 / 10 / 15 s is billed as 5 s; the final file is still cut to 4 s."""
+        allowed = sorted(float(d) for d in (self.params.get("durations") or []))
+        if not allowed:
+            return seconds
+        return next((d for d in allowed if d >= seconds - 1e-6), allowed[-1])
 
     def strength(self, shot_type: str) -> int:
         return self.strengths.get(shot_type, self.strengths.get("other", self.quality))
