@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import deps as deps_mod
+from . import guide as guide_mod
 from . import estimate as est
 from . import media
 from . import stock
@@ -55,13 +56,15 @@ class Service:
         e = self.refresh(project)
         waiting = sum(1 for l in leaves(project) if l.status == NodeStatus.needs_pick)
         review_flags = sum(1 for r in project.reviews if r.verdict == "does_not_meet_goal")
-        return {"cost_total": e.cost_total, "seconds": e.seconds, "seconds_min": e.seconds_min, "seconds_max": e.seconds_max,
+        out = {"cost_total": e.cost_total, "seconds": e.seconds, "seconds_min": e.seconds_min, "seconds_max": e.seconds_max,
                 "target_seconds": project.settings.target_seconds, "cost": e.cost, "cost_min": e.cost_min,
                 "cost_max": e.cost_max, "time_s": e.time_s, "spent": e.spent, "budget": project.settings.budget_usd,
                 "warnings": e.warnings, "waiting_picks": waiting, "review_flags": review_flags,
                 "clips": len(leaves(project)), "done": sum(1 for l in leaves(project) if l.status == NodeStatus.done),
                 "numbers": numbering(project), "brain": self.reg.llm_plugin_name("default"),
                 "preview": self.preview_info(project), **self.final_info(project)}
+        out["guide"] = guide_mod.compute(self, project, out)
+        return out
 
     HINTS = {
         "video": "Add FAL_KEY (Kling, Seedance, Wan) or GEMINI_API_KEY (Veo) to get real video.",

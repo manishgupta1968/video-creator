@@ -1,5 +1,5 @@
 import { AudioLines, Box, Building2, FileText, Film, Image as ImageIcon, MapPin, Mic, Palette, Play, Search, ShieldAlert, ShieldCheck, Trash2, User } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, Ctx, fileUrl } from "../api";
 import { CTX_ROLES, CTX_TYPES, useP, useSettings } from "../lib";
 import StockSearch from "./StockSearch";
@@ -19,6 +19,11 @@ export function ContextCard({ item, origin, inheritedOff, onToggle, compact }: {
 }) {
   const P = useP();
   const [open, setOpen] = useState(false);
+  useEffect(() => {                       // "Your next step" can ask for this card to open
+    const h = (e: Event) => { if ((e as CustomEvent).detail === item.id) setOpen(true); };
+    window.addEventListener("vg-open-context", h);
+    return () => window.removeEventListener("vg-open-context", h);
+  }, [item.id]);
   const thumb = item.actor?.reference_sheet[0] || item.files.find(isImg);
   const inherited = origin && origin !== "this";
   const needsConsent = item.type === "actor" && (item.files.length > 0 || item.actor?.voice_sample) && ["real_person", "digital_twin"].includes(item.actor?.kind || "") && !item.consent.confirmed;

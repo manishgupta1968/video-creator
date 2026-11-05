@@ -1,5 +1,5 @@
 import { ArrowLeft, Command, Download, GitBranch, HelpCircle, Library, Loader2, Moon, Redo2, Settings2, Sun, Undo2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, fileUrl } from "../api";
 import { useTheme } from "../App";
 import { commandBus, findNode, finalPlayer, fmtSec, fmtUsd, ProjectProvider, useHotkey, useP } from "../lib";
@@ -8,6 +8,7 @@ import ActivityBar, { TopLine, useTabStatus } from "./ActivityBar";
 import { FinalVideoDialog, PreviewBanner } from "./Banners";
 import CommandBar from "./CommandBar";
 import { RunProvider } from "./ConfirmRun";
+import NextStep from "./NextStep";
 import BudgetDialog from "./BudgetDialog";
 import ContextLibrary from "./ContextLibrary";
 import HelpDrawer from "./HelpDrawer";
@@ -44,6 +45,11 @@ function Shell({ onHome }: { onHome: () => void }) {
   const [finalOpen, setFinalOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [budgetOpen, setBudgetOpen] = useState(false);
+  useEffect(() => {                       // the next-step guide can open the budget breakdown
+    const open = () => setBudgetOpen(true);
+    window.addEventListener("vg-open-budget", open);
+    return () => window.removeEventListener("vg-open-budget", open);
+  }, []);
   useHotkey(useCallback((e) => e.key === "?", []), () => setHelpOpen(true));
   useTabStatus();
   const [theme, setTheme] = useTheme();
@@ -105,6 +111,7 @@ function Shell({ onHome }: { onHome: () => void }) {
 
       <ActivityBar />
       <PreviewBanner />
+      <NextStep />
 
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-[300px] shrink-0 flex-col border-r border-line bg-panel md:flex" aria-label="Story">

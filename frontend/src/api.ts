@@ -42,7 +42,11 @@ export interface Project {
   run: { mode: string; status: string; targets: string[]; message: string; started_at: string; spent_usd: number };
   music_advice: string; final_output: string | null; final_review_id: string | null; updated_at: string;
 }
+export interface GuideAction { kind: string; label: string; id?: string; node?: string; mode?: string; title?: string; targets?: string[]; help?: string }
+export interface GuideStep { id: string; title: string; state: "done" | "current" | "attention" | "todo"; detail: string; action: GuideAction | null; also: { text: string; action: GuideAction }[] }
+export interface Guide { headline: string; current: string | null; why: string; action: GuideAction | null; steps: GuideStep[]; issues: { text: string; action: GuideAction }[]; progress: { done: number; total: number } }
 export interface Summary {
+  guide: Guide;
   seconds: number; seconds_min: number; seconds_max: number; target_seconds: number; cost: number; cost_min: number; cost_max: number; cost_total: number;
   time_s: number; spent: number; budget: number; warnings: string[]; waiting_picks: number; review_flags: number; clips: number; done: number;
   numbers: Record<string, string>; brain: string;
