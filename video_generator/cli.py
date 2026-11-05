@@ -516,6 +516,16 @@ def explain(question: str, project: Optional[str] = typer.Option(None, "-p")):
     con.print(asyncio.run(svc.explain(_pid(project), question)))
 
 
+@app.command("photo-test")
+def photo_test(words: str = typer.Argument("male lion", help="what to search for, e.g. 'male lion'")):
+    """Check the automatic photo search on this computer, step by step. Saves the first photo it can download here."""
+    from . import stock
+    lines, saved = asyncio.run(stock.diagnose(words, Path.cwd()))
+    for line in lines:
+        con.print(line, highlight=False)
+    con.print("[green]Photo search works.[/]" if saved else "[yellow]No photo was saved.[/]")
+
+
 @app.command()
 def pause(project: Optional[str] = typer.Option(None, "-p")):
     svc = _svc()

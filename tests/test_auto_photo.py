@@ -2,6 +2,7 @@
 import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 
 from video_generator import stock
@@ -180,3 +181,141 @@ def test_unreachable_photo_sites_give_a_friendly_message(svc, monkeypatch):
     p = project_with(svc, item)
     assert asyncio.run(svc.auto_photos(p.id)) == 0
     assert "internet connection" in get(svc, p.id, item.id).analysis["auto_photo_error"]
+
+
+# ------------------------------------------------------------------ round 3: downloads that fail must not end the search
+JPEG = b"\xff\xd8abc"
+
+
+def mock_client(handler):
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.parametrize("raw,clean", [
+    ("//upload.wikimedia.org/x.jpg", "https://upload.wikimedia.org/x.jpg"),
+    ("http://upload.wikimedia.org/x.jpg", "https://upload.wikimedia.org/x.jpg"),
+    ("  https://upload.wikimedia.org/x.jpg \n", "https://upload.wikimedia.org/x.jpg"),
+    ("http://evil.example/x.jpg", "http://evil.example/x.jpg"),          # never upgraded: it is refused instead
+])
+def test_addresses_are_cleaned_before_they_are_checked(raw, clean):
+    assert stock.clean_url(raw) == clean
+
+
+@pytest.mark.parametrize("host,ok", [
+    ("upload.wikimedia.org", True), ("commons.wikimedia.org", True), ("images.pexels.com", True), ("wikimedia.org", True),
+    ("evil.example", False), ("wikimedia.org.evil.example", False), ("notwikimedia.org", False), ("pexels.com.evil.io", False), ("", False),
+])
+def test_allowed_sites_need_the_dot_in_front(host, ok):
+    assert stock.host_allowed(host) is ok
+
+
+def test_download_accepts_clean_scheme_less_and_http_forms(tmp_path):
+    client = mock_client(lambda r: httpx.Response(200, headers={"content-type": "image/jpeg"}, content=JPEG))
+    for url in ("//upload.wikimedia.org/a.jpg", "http://upload.wikimedia.org/a.jpg", "https://commons.wikimedia.org/a.jpg"):
+        assert asyncio.run(stock.download(url, tmp_path, "lion", client=client)).read_bytes() == JPEG
+
+
+def test_refusal_names_the_host(tmp_path):
+    with pytest.raises(stock.StockError, match=r"host: evil\.example"):
+        asyncio.run(stock.download("https://evil.example/x.jpg", tmp_path, "x"))
+    with pytest.raises(stock.StockError, match="no web address"):
+        asyncio.run(stock.download("", tmp_path, "x"))
+
+
+def test_redirects_are_followed_only_between_allowed_sites(tmp_path):
+    def handler(request: httpx.Request):
+        if request.url.path == "/old.jpg":
+            return httpx.Response(302, headers={"location": "https://upload.wikimedia.org/new.jpg"})
+        if request.url.path == "/new.jpg":
+            return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=JPEG)
+        if request.url.path == "/evil.jpg":
+            return httpx.Response(302, headers={"location": "https://evil.example/x.jpg"})
+        if request.url.path == "/loop.jpg":
+            return httpx.Response(302, headers={"location": "/loop.jpg"})
+        return httpx.Response(404)
+    client = mock_client(handler)
+    assert asyncio.run(stock.download("https://upload.wikimedia.org/old.jpg", tmp_path, "a", client=client)).exists()
+    with pytest.raises(stock.StockError, match="evil.example"):
+        asyncio.run(stock.download("https://upload.wikimedia.org/evil.jpg", tmp_path, "b", client=client))
+    with pytest.raises(stock.StockError, match="too many times"):
+        asyncio.run(stock.download("https://upload.wikimedia.org/loop.jpg", tmp_path, "c", client=client))
+
+
+def test_search_results_with_odd_addresses_are_cleaned():
+    page = {"query": {"pages": {"1": {"index": 1, "title": "File:Lion male.jpg", "imageinfo": [{
+        "mime": "image/jpeg", "width": 4000, "height": 3000, "thumburl": "//upload.wikimedia.org/b.jpg",
+        "extmetadata": {"LicenseShortName": {"value": "CC0"}}}]}}}}
+    client = mock_client(lambda r: httpx.Response(200, json=page))
+    res = asyncio.run(stock.search("lion", "wikimedia", client=client))
+    assert res[0].url == "https://upload.wikimedia.org/b.jpg"
+
+
+def test_when_the_first_photo_cannot_be_downloaded_the_next_one_is_used(svc, monkeypatch, sample_photo):
+    bad = StockPhoto("wikimedia", "Lion male", "https://x.example/t.jpg", "https://x.example/bad.jpg", 1600, 1000, "Bad Author", "CC0", "https://c/1")
+    good = StockPhoto("wikimedia", "Lion portrait", "https://upload.wikimedia.org/t.jpg", "https://upload.wikimedia.org/good.jpg",
+                      1600, 1000, "Good Author", "CC BY 4.0", "https://c/2")
+
+    async def fake_search(q, source="wikimedia", limit=24, client=None):
+        return [bad, good]
+    real_download = stock.download
+
+    async def fake_download(url, dest_dir, name, client=None):
+        if "good" in url:
+            dest = Path(dest_dir) / "found.jpg"
+            dest.write_bytes(sample_photo.read_bytes())
+            return dest
+        return await real_download(url, dest_dir, name)          # the real check refuses the bad address
+    monkeypatch.setattr(stock, "search", fake_search)
+    monkeypatch.setattr(stock, "download", fake_download)
+    p = project_with(svc, lion())
+    cid = p.context[0].id
+    assert asyncio.run(svc.auto_photos(p.id)) == 1
+    item = get(svc, p.id, cid)
+    assert item.files and item.analysis["auto_photo"]["photo"]["author"] == "Good Author"
+    assert "auto_photo_error" not in item.analysis
+
+
+def test_when_no_photo_can_be_downloaded_the_reason_says_how_many_and_why(svc, monkeypatch):
+    photos = [StockPhoto("wikimedia", f"Lion {i}", "https://x.example/t.jpg", f"https://x.example/{i}.jpg", 1600, 1000, "A", "CC0", "https://c") for i in range(3)]
+
+    async def fake_search(q, source="wikimedia", limit=24, client=None):
+        return photos
+    monkeypatch.setattr(stock, "search", fake_search)
+    p = project_with(svc, lion())
+    cid = p.context[0].id
+    assert asyncio.run(svc.auto_photos(p.id)) == 0                              # no exception reaches the caller
+    err = get(svc, p.id, cid).analysis["auto_photo_error"]
+    assert "found 3 photo(s)" in err and "none could be downloaded" in err and "host: x.example" in err
+    assert not err.endswith(".")
+
+
+def test_photo_test_command_describes_every_step(tmp_path, monkeypatch):
+    wiki = {"query": {"pages": {
+        "1": {"index": 1, "title": "File:Male lion portrait.jpg", "imageinfo": [{
+            "mime": "image/jpeg", "width": 4000, "height": 3000, "thumburl": "https://upload.wikimedia.org/a.jpg",
+            "extmetadata": {"Artist": {"value": "Jane"}, "LicenseShortName": {"value": "CC BY 4.0"}}}]},
+        "2": {"index": 2, "title": "File:Lion map.jpg", "imageinfo": [{
+            "mime": "image/jpeg", "width": 4000, "height": 3000, "thumburl": "https://upload.wikimedia.org/b.jpg",
+            "extmetadata": {"LicenseShortName": {"value": "CC0"}}}]}}}}
+
+    def handler(request: httpx.Request):
+        if "commons.wikimedia.org" in request.url.host:
+            return httpx.Response(200, json=wiki)
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=JPEG)
+    lines, saved = asyncio.run(stock.diagnose("male lion", tmp_path, client=mock_client(handler), download_client=mock_client(handler)))
+    text = "\n".join(lines)
+    assert "2 photo(s) came back" in text and "1 left" in text and "removed: “Lion map”" in text
+    assert "address host: upload.wikimedia.org; allowed: yes" in text and "downloaded OK" in text
+    assert saved and saved.exists()
+
+    from typer.testing import CliRunner
+    from video_generator.cli import app
+    monkeypatch.setattr(stock, "diagnose", lambda words, dest: _fake_diag(tmp_path))
+    out = CliRunner().invoke(app, ["photo-test", "male lion"])
+    assert out.exit_code == 0 and "Photo search works" in out.output
+
+
+async def _fake_diag(tmp_path):
+    p = tmp_path / "x.jpg"
+    p.write_bytes(JPEG)
+    return ["1. Search on wikimedia for “male lion”: 3 photo(s) came back."], p

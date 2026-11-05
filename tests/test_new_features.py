@@ -226,7 +226,7 @@ def test_stock_download_only_from_allowed_hosts(tmp_path):
     with pytest.raises(stock.StockError):
         asyncio.run(stock.download("https://evil.example/x.jpg", tmp_path, "x"))
     with pytest.raises(stock.StockError):
-        asyncio.run(stock.download("http://upload.wikimedia.org/x.jpg", tmp_path, "x"))
+        asyncio.run(stock.download("http://evil.example/x.jpg", tmp_path, "x"))      # plain http to an unknown site: refused
 
     def handler(request):
         return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=b"\xff\xd8abc")

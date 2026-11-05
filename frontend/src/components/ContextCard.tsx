@@ -37,7 +37,7 @@ export function ContextCard({ item, origin, inheritedOff, onToggle, compact }: {
           </div>
           <div className="truncate text-[11px] text-muted">{item.actor?.description || item.text || item.files.map((f) => f.split("/").pop()).join(", ") || "—"}</div>
           {!compact && !item.files.length && item.analysis?.auto_photo_error && (
-            <div className="mt-1 text-[11px] text-warn">No photo found: {item.analysis.auto_photo_error}. Open this card and press “Find one for me”.</div>
+            <div className="mt-1 text-[11px] text-warn">No photo found: {String(item.analysis.auto_photo_error).replace(/[.\s]+$/, "")}. Open this card and press “Find one for me”.</div>
           )}
           {!compact && (
             <div className="mt-1 flex flex-wrap gap-1">
@@ -112,7 +112,7 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
             </div>
           )}
           {!item.analysis?.auto_photo && item.analysis?.auto_photo_error && item.files.length === 0 && (
-            <div className="mt-2 rounded-lg bg-warn/10 px-3 py-2 text-warn">No photo was found automatically ({item.analysis.auto_photo_error}). Upload one, or pick one with Find a photo. Otherwise a picture is made with an AI image model.</div>
+            <div className="mt-2 rounded-lg bg-warn/10 px-3 py-2 text-warn">No photo was found automatically ({String(item.analysis.auto_photo_error).replace(/[.\s]+$/, "")}). Upload one, or pick one with Find a photo. Otherwise a picture is made with an AI image model.</div>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button help="find-photo" size="sm" variant="outline" onClick={() => setFinding(true)}><Search className="h-3.5 w-3.5" />Find a photo</Button>

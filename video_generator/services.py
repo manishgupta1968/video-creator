@@ -556,28 +556,41 @@ class Service:
                                                  else f"no suitable photo found for “{query}”")
             ProjectStore.save(q, snapshot=False)
             return False
-        choice = ranked[0]
+        order = list(ranked)
         if len(ranked) > 1 and self.reg.llm_plugin_name("default") != "fake_llm":
-            choice = await self._pick_by_eye(q, subject, ranked) or choice     # a vision-capable brain looks at them
-        tmp = Path(tempfile.mkdtemp())
-        try:
-            path = await stock.download(choice.url, tmp, choice.title)
-            q = self.load(pid)
-            item = item_by_id(q, cid)
-            if item.files and not force:
-                return False                                              # the user added one while we searched
-            self.add_context_file(q, path, ctx_id=cid, save=False)
-            item = item_by_id(q, cid)
-            meta = {k: str(getattr(choice, k))[:300] for k in ("title", "author", "license", "source_url", "source")}
-            item.analysis.setdefault("credits", []).append(meta)
-            item.analysis["auto_photo"] = {"query": query, "photo": meta, "candidates": [stock.to_dict(c) for c in ranked]}
-            item.analysis["auto_photo_tried"] = True
-            item.analysis.pop("auto_photo_error", None)
-            item.analysis.pop("auto_photo_off", None)
-            self.save(q)
-            return True
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            best = await self._pick_by_eye(q, subject, ranked)                 # a vision-capable brain looks at them
+            if best is not None:
+                order = [best] + [c for c in ranked if c is not best]
+        last_problem = ""
+        for choice in order[:4]:                                                # if one cannot be downloaded, try the next
+            tmp = Path(tempfile.mkdtemp())
+            try:
+                path = await stock.download(choice.url, tmp, choice.title)
+                q = self.load(pid)
+                item = item_by_id(q, cid)
+                if item.files and not force:
+                    return False                                              # the user added one while we searched
+                self.add_context_file(q, path, ctx_id=cid, save=False)
+                item = item_by_id(q, cid)
+                meta = {k: str(getattr(choice, k))[:300] for k in ("title", "author", "license", "source_url", "source")}
+                item.analysis.setdefault("credits", []).append(meta)
+                item.analysis["auto_photo"] = {"query": query, "photo": meta, "candidates": [stock.to_dict(c) for c in ranked]}
+                item.analysis["auto_photo_tried"] = True
+                item.analysis.pop("auto_photo_error", None)
+                item.analysis.pop("auto_photo_off", None)
+                self.save(q)
+                return True
+            except stock.StockError as exc:
+                last_problem = str(exc)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+        q = self.load(pid)
+        item = item_by_id(q, cid)
+        item.analysis["auto_photo_tried"] = True
+        item.analysis["auto_photo_error"] = (f"found {len(ranked)} photo(s) for “{query}” but none could be downloaded "
+                                             f"(last problem: {last_problem.rstrip('.')})")[:300]
+        ProjectStore.save(q, snapshot=False)
+        return False
 
     async def _pick_by_eye(self, project: Project, subject: str, ranked: list):
         tmp = Path(tempfile.mkdtemp())
