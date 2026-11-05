@@ -1,8 +1,9 @@
-import { Clapperboard, FastForward, Link2, Loader2, MousePointerClick, Pause, Play, SkipForward, Square } from "lucide-react";
+import { Clapperboard, Download, FastForward, Link2, Loader2, MousePointerClick, Pause, Play, SkipForward, Square } from "lucide-react";
 import { api } from "../api";
-import { fmtSec, fmtTime, fmtUsd, leaves, STATUS, useP } from "../lib";
+import { finalPlayer, fmtSec, fmtTime, fmtUsd, leaves, STATUS, useP } from "../lib";
 import { Badge, Button, cn, Tip } from "../ui";
 import { useRun } from "./ConfirmRun";
+import { fileUrl } from "../api";
 
 export default function Timeline() {
   const P = useP();
@@ -18,6 +19,9 @@ export default function Timeline() {
   const allDone = clips.length > 0 && remaining === 0;
   const continues = new Set(p.dependencies.filter((d) => d.type === "continues_from").map((d) => d.to_id));
   const over = s.target_seconds ? (s.seconds - s.target_seconds) / s.target_seconds : 0;
+  const working = new Set((P.view!.engine.activity || []).map((a) => a.node));
+  const finalReady = s.final_ready && !s.final_stale;
+  const joining = working.has("final");
 
   return (
     <footer className="shrink-0 border-t border-line bg-panel">
@@ -30,7 +34,8 @@ export default function Timeline() {
               <button onClick={() => P.select(c.id)} style={{ flexGrow: c.duration.likely_s, minWidth: 34 }}
                 className={cn("relative flex items-center gap-1 overflow-hidden rounded-md border px-1.5 text-[10px] font-medium transition-colors",
                   P.selected === c.id ? "border-brand bg-brand/10" : "border-line bg-sunken hover:border-brand/40",
-                  c.status === "done" && "bg-ok/10", c.status === "needs_pick" && "bg-warn/15", c.status === "failed" && "bg-bad/10")}>
+                  c.status === "done" && "bg-ok/10", c.status === "needs_pick" && "bg-warn/15", c.status === "failed" && "bg-bad/10",
+                  (working.has(c.id) || c.status === "generating") && "working")}>
                 <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", st.dot)} />
                 {continues.has(c.id) && <Link2 className="h-2.5 w-2.5 shrink-0 text-info" aria-label="continues from the previous clip" />}
                 <span className="truncate">{P.numbers[c.id]} {c.title}</span>
@@ -43,13 +48,28 @@ export default function Timeline() {
 
       {/* run bar */}
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-        {!running && !paused && (
+        {!running && !paused && !joining && (
           <>
-            <Button variant="primary" disabled={!clips.length} onClick={() => run({ mode: "all", title: "Generate the entire video" })}>
-              <Clapperboard className="h-3.5 w-3.5" />{allDone ? "Stitch final video" : doneSome ? "Generate the rest" : "Generate entire video"}
-            </Button>
-            {!allDone && <Button onClick={() => run({ mode: "next", title: "Generate the next clip" })}><SkipForward className="h-3.5 w-3.5" />Generate next</Button>}
-            {doneSome && !allDone && <Button onClick={() => run({ mode: "continue", title: "Continue to the end" })}><FastForward className="h-3.5 w-3.5" />Continue to end</Button>}
+            {finalReady ? (
+              <>
+                <Button variant="primary" onClick={() => finalPlayer.open()}><Play className="h-3.5 w-3.5" />Play final video</Button>
+                <a href={fileUrl(P.pid, p.final_output)} download><Button><Download className="h-3.5 w-3.5" />Download</Button></a>
+              </>
+            ) : allDone ? (
+              <Tip content={s.final_stale ? "Something changed since your final video was made. This makes a new one from the current clips." : "All clips are made. This joins them into ONE video: same size and speed, transitions, music and subtitles."}>
+                <Button variant="primary" onClick={() => P.act("Joining", () => api.assemble(P.pid))}>
+                  <Clapperboard className="h-3.5 w-3.5" />{s.final_stale ? "Update final video" : "Join clips into final video"}
+                </Button>
+              </Tip>
+            ) : (
+              <>
+                <Button variant="primary" disabled={!clips.length} onClick={() => run({ mode: "all", title: "Generate the entire video" })}>
+                  <Clapperboard className="h-3.5 w-3.5" />{doneSome ? "Generate the rest" : "Generate entire video"}
+                </Button>
+                <Button onClick={() => run({ mode: "next", title: "Generate the next clip" })}><SkipForward className="h-3.5 w-3.5" />Generate next</Button>
+                {doneSome && <Button onClick={() => run({ mode: "continue", title: "Continue to the end" })}><FastForward className="h-3.5 w-3.5" />Continue to end</Button>}
+              </>
+            )}
           </>
         )}
         {running && <Button onClick={() => P.act("Pause", () => api.pause(P.pid))}><Pause className="h-3.5 w-3.5" />Pause</Button>}

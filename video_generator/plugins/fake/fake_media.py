@@ -20,7 +20,7 @@ class FakeImage(ImageGenerator):
         size = media.frame_size(req.aspect, "720p")
         base = req.references[0] if req.references else None
         seed = abs(hash(req.prompt)) % 97
-        media.placeholder_image(req.prompt[:220], req.out, size, subtitle="preview keyframe", seed=seed, base=base)
+        media.placeholder_image(req.prompt, req.out, size, subtitle="", seed=seed, base=base, label=req.label)
         return req.out, Usage()
 
 
@@ -34,7 +34,7 @@ class FakeVideo(VideoGenerator):
         still = req.start_frame
         if not still or not Path(still).exists():
             still = req.out.with_suffix(".png")
-            media.placeholder_image(req.prompt[:220], still, size, subtitle="preview")
+            media.placeholder_image(req.prompt, still, size, label=req.label)
         media.still_to_clip(Path(still), req.out, max(req.seconds, 1.0), size, 24, zoom=True)
         return req.out, Usage(seconds=req.seconds)
 
@@ -50,7 +50,7 @@ class FakeAvatar(AvatarGenerator):
         still = req.photo
         if not still or not Path(still).exists():
             still = req.out.with_suffix(".png")
-            media.placeholder_image(req.prompt[:200] or "Presenter", still, size, subtitle="preview presenter")
+            media.placeholder_image(req.prompt or "Presenter", still, size, subtitle="preview presenter", label=req.label)
         tmp = req.out.with_name(req.out.stem + "_silent.mp4")
         media.still_to_clip(Path(still), tmp, secs, size, 24, zoom=True)
         media.replace_audio(tmp, req.audio, req.out, keep_original=0)

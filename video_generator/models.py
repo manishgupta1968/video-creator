@@ -340,4 +340,5 @@ class Project(BaseModel):
     reviews: list[Review] = Field(default_factory=list)
     run: RunState = Field(default_factory=RunState)
     final_output: Optional[str] = None
+    final_hash: str = ""
     final_review_id: Optional[str] = None

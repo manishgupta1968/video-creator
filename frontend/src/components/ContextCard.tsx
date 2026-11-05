@@ -1,7 +1,9 @@
-import { AudioLines, Box, Building2, FileText, Film, Image as ImageIcon, MapPin, Mic, Palette, Play, ShieldAlert, ShieldCheck, Trash2, User } from "lucide-react";
+import { AudioLines, Box, Building2, FileText, Film, Image as ImageIcon, MapPin, Mic, Palette, Play, Search, ShieldAlert, ShieldCheck, Trash2, User } from "lucide-react";
 import { useState } from "react";
 import { api, Ctx, fileUrl } from "../api";
-import { CTX_ROLES, CTX_TYPES, useP } from "../lib";
+import { CTX_ROLES, CTX_TYPES, useP, useSettings } from "../lib";
+import StockSearch from "./StockSearch";
+import { RecordVoiceDialog } from "./VoiceRecorder";
 import { Badge, Button, cn, Dialog, DropZone, Editable, Select, Switch, Tip } from "../ui";
 
 export const typeIcon = (t: string) => ({
@@ -59,7 +61,12 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
   const save = (patch: any) => P.act("Save", () => api.patchContext(P.pid, item.id, patch));
   const saveActor = (patch: any) => save({ actor: patch });
   const [playing, setPlaying] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const settings = useSettings();
+  const canClone = ["elevenlabs", "cartesia"].some((n) => settings.data?.plugins?.find((x: any) => x.name === n)?.configured);
   const a = item.actor;
+  const isPerson = item.type === "actor" && (!a || ["ai_person", "real_person", "digital_twin"].includes(a.kind));
   const scopes = [{ value: "project", label: "Shared — all clips" },
     ...Object.entries(P.numbers).filter(([id, num]) => num && id !== p.root.id).map(([id, num]) => ({ value: `node:${id}`, label: `Part/clip ${num} and below` }))];
   const photos = item.analysis?.photos || {};
@@ -90,6 +97,10 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
             <DropZone compact className="h-20 w-28 grid place-items-center" label="+ Add files"
               onFiles={(files) => P.act("Upload", () => api.upload(P.pid, files, { ctx_id: item.id }), "Added")} />
           </div>
+          <div className="mt-2 flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setFinding(true)}><Search className="h-3.5 w-3.5" />Find a photo</Button>
+            {isPerson && <span className="text-[11px] text-muted">Photos of people must be uploaded (your own, or with permission).</span>}
+          </div>
         </div>
 
         <div>
@@ -115,16 +126,29 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <div className="field-label mb-1 flex items-center gap-1"><Mic className="h-3 w-3" />Voice</div>
+                <div className="field-label mb-1 flex items-center gap-1"><Mic className="h-3 w-3" />Voice sample</div>
+                <div className="mb-1.5 text-[11px] text-muted">Used only to <b>copy the voice</b>. Your recording is not placed in the video; every script line is spoken fresh in that voice.</div>
+                {a?.voice_sample && !canClone && (
+                  <div className="mb-1.5 rounded-lg bg-warn/10 px-2 py-1.5 text-warn">
+                    Not used yet: no voice-copying service is connected. A stock voice that matches the description is used instead.
+                    <button className="ml-1 underline" onClick={() => { onOpenChange(false); P.openSettings("keys"); }}>Add an ElevenLabs key</button>
+                  </div>
+                )}
                 {a?.voice_sample ? (
                   <div className="space-y-1">
                     <audio src={fileUrl(P.pid, a.voice_sample)} controls className="h-8 w-full" />
                     {voiceCheck?.problems?.map((x: string) => <div key={x} className="text-warn">{x}</div>)}
-                    <button className="text-bad hover:underline" onClick={() => saveActor({ voice_sample: null, voice_id: null })}>Remove sample</button>
+                    <div className="flex gap-3">
+                      <button className="text-brand hover:underline" onClick={() => setRecording(true)}>Record again</button>
+                      <button className="text-bad hover:underline" onClick={() => saveActor({ voice_sample: null, voice_id: null })}>Remove sample</button>
+                    </div>
                   </div>
                 ) : (
-                  <DropZone compact label="Drop a voice recording (30 s – 2 min)" accept="audio/*"
-                    onFiles={(files) => P.act("Upload", () => api.upload(P.pid, files, { ctx_id: item.id }), "Voice sample added")} />
+                  <div className="space-y-1.5">
+                    <Button size="sm" variant="primary" onClick={() => setRecording(true)}><Mic className="h-3.5 w-3.5" />Record my voice</Button>
+                    <DropZone compact label="…or drop a voice file (30 s – 2 min)" accept="audio/*"
+                      onFiles={(files) => P.act("Upload", () => api.upload(P.pid, files, { ctx_id: item.id }), "Voice sample added")} />
+                  </div>
                 )}
               </div>
               <div>
@@ -160,6 +184,8 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
           </div>
         )}
       </div>
+      <RecordVoiceDialog item={item} open={recording} onOpenChange={setRecording} />
+      <StockSearch item={item} open={finding} onOpenChange={setFinding} />
     </Dialog>
   );
 }

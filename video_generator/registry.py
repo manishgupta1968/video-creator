@@ -147,7 +147,8 @@ class Registry:
         return out
 
     def choose(self, job: str, shot_type: str = "other", need: Optional[dict] = None,
-               override: Optional[str] = None, mode: Optional[str] = None) -> CatalogEntry:
+               override: Optional[str] = None, mode: Optional[str] = None, strict: bool = False) -> CatalogEntry:
+        """Best usable model. strict=True: never relax `need` (raises LookupError instead)."""
         if override:
             try:
                 e = self.catalog.get(override)
@@ -156,6 +157,8 @@ class Registry:
             except KeyError:
                 pass
         c = self.candidates(job, shot_type, need, mode)
+        if not c and need and strict:
+            raise LookupError(f"no usable {job} model with {need}")
         if not c and need:
             c = self.candidates(job, shot_type, None, mode)  # relax capabilities, warn upstream
         if not c:

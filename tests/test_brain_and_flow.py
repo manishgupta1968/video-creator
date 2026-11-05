@@ -146,6 +146,13 @@ def test_end_to_end_offline_render(svc, sample_pdf, sample_clip):
     p = svc.load(p.id)
     done = [l for l in leaves(p) if l.status == NodeStatus.done]
     assert len(done) == 1 and p.final_output is None
+    # pretend the finished clip came from a real (non-free) video model, so its last frame is a real hand-off
+    p = svc.load(p.id)
+    for l in leaves(p):
+        for t in l.takes:
+            if l.status == NodeStatus.done and l.kind.value == "clip":
+                t.model = "kling_3"
+    svc.save(p, snapshot=False)
     asyncio.run(go("continue"))
     p = svc.load(p.id)
     assert all(l.status == NodeStatus.done for l in leaves(p)), [(numbering(p)[l.id], l.status, l.warnings) for l in leaves(p)]

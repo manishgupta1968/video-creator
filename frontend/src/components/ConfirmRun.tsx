@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState } from "react";
 import { api, Estimate } from "../api";
 import { fmtTime, fmtUsd, useP } from "../lib";
 import { Button, Dialog, Meter, Switch } from "../ui";
+import { askNotificationPermission } from "./ActivityBar";
 
 type Req = { mode: string; targets?: string[]; title: string };
 const Ctx = createContext<(r: Req) => void>(() => {});
@@ -25,12 +26,15 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
   const go = async () => {
     if (!req) return;
     setLoading(true);
+    askNotificationPermission();      // so the browser can tell you when it needs you, or is done
     await P.act("Starting", () => api.run(P.pid, req.mode, req.targets, autoPick));
     setLoading(false);
     setReq(null);
   };
   const nums = P.numbers;
   const free = est && est.cost_usd === 0;
+  const prev = P.view?.summary.preview;
+  const previewClips = est && prev ? est.clips.filter((id) => (prev.clips[id] || []).length > 0) : [];
   return (
     <Ctx.Provider value={open}>
       {children}
@@ -47,6 +51,13 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
               <Stat icon={<Coins className="h-4 w-4" />} label="Cost" value={fmtUsd(est.cost_usd)} />
               <Stat icon={<Clock className="h-4 w-4" />} label="Time" value={`~${fmtTime(est.time_s)}`} />
             </div>
+            {previewClips.length > 0 && (
+              <div className="rounded-lg bg-warn/10 px-3 py-2 text-xs text-warn">
+                <div className="flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5" />{previewClips.length} of these {est.clips.length} clip(s) will only be text-card previews, not real footage.</div>
+                <div className="mt-1">{Object.values(prev!.jobs).slice(0, 2).join(" ")}</div>
+                <button className="mt-1 underline" onClick={() => { setReq(null); P.openSettings("keys"); }}>Add keys in Settings</button>
+              </div>
+            )}
             {est.extra_upstream.length > 0 && (
               <div className="rounded-lg bg-info/10 px-3 py-2 text-xs text-info">
                 Includes {est.extra_upstream.length} earlier clip(s) this one needs first: {est.extra_upstream.map((i) => nums[i]).join(", ")}

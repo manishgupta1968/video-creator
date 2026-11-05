@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import media
+from .. import stock
 from ..brain import CommandPlan
 from ..catalog import Catalog, load_vendors
 from ..config import ENV_FILE_KEYS, Config, save_key
@@ -302,6 +303,31 @@ async def upload_context(pid: str, files: list[UploadFile] = File(...), scope: s
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return {**view(pid), "new_ids": ids}
+
+
+@app.post("/api/projects/{pid}/context/{cid}/voice-recording")
+async def voice_recording(pid: str, cid: str, file: UploadFile = File(...), consent_self: str = Form("")):
+    """A voice sample recorded in the browser. Used only to copy the voice; never placed in the video."""
+    data = await file.read()
+    await guard(svc.add_voice_recording)(pid, cid, data, file.filename or "", consent_self.lower() in ("1", "true", "yes"))
+    return view(pid)
+
+
+@app.get("/api/stock/search")
+async def stock_search(q: str, source: str = "wikimedia"):
+    try:
+        found = await stock.search(q, source)
+    except stock.StockError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"Photo search failed: {exc}")
+    return {"sources": stock.sources_available(), "results": [stock.to_dict(x) for x in found]}
+
+
+@app.post("/api/projects/{pid}/context/{cid}/stock")
+async def stock_add(pid: str, cid: str, body: dict = Body(...)):
+    await guard(svc.add_stock_photo)(pid, cid, body["url"], body)
+    return view(pid)
 
 
 @app.patch("/api/projects/{pid}/context/{cid}")

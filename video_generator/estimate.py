@@ -16,7 +16,7 @@ from typing import Optional
 from .catalog import CatalogEntry
 from .context import effective_context
 from .deps import topo_order, upstream
-from .models import (ContextRole, ContextType, CostEstimate, CostLine, DependencyType,
+from .models import (ContextItem, ContextRole, ContextType, CostEstimate, CostLine, DependencyType,
                      DurationEstimate, EstimateBasis, Node, NodeKind, Project, ShotType, TimeEstimate)
 from .registry import Registry
 from .tree import find, leaves, walk
@@ -152,6 +152,24 @@ def clip_actors(project: Project, node: Node):
     return [e.item for e in effective_context(project, node.id) if e.item.type == ContextType.actor]
 
 
+def _actor_ids(node: Node) -> set[str]:
+    if not node.script:
+        return set()
+    return {a.actor_id for a in node.script.actors_in_shot} | {d.speaker for d in node.script.dialogue if d.speaker != "narrator"}
+
+
+def speaking_actor(project: Project, node: Node) -> Optional[ContextItem]:
+    """The visible actor who speaks on camera in this clip (None for voice-over only)."""
+    s = node.script
+    if not s or not (s.on_camera_speech or s.shot_type == ShotType.talking_head):
+        return None
+    speakers = {d.speaker.lower() for d in s.dialogue if d.speaker and d.speaker != "narrator" and d.text.strip()}
+    for a in clip_actors(project, node):
+        if a.actor and (a.id.lower() in speakers or a.title.lower() in speakers):
+            return a
+    return None
+
+
 def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     warnings: list[str] = []
     if node.kind in (NodeKind.slides, NodeKind.user_clip):
@@ -165,20 +183,36 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
                      for e in eff if e.item.role in (ContextRole.must_appear, ContextRole.look_reference))
     needs_start = any(d.type == DependencyType.continues_from for d in upstream(project, node.id))
     mode = "free" if project.settings.quality_mode == "free" else project.settings.quality_mode
-    voice = reg.choose("voice", mode=mode) if (s and (s.dialogue or s.narration)) else None
+    has_lines = bool(s and (s.dialogue or s.narration))
+    # a voice sample can only be used by a voice-copying service (ElevenLabs, Cartesia)
+    used_ids = _actor_ids(node)
+    sample_actors = [a for a in clip_actors(project, node) if a.actor and a.actor.voice_sample and (
+        a.id in used_ids or (bool(s and s.narration) and ("narrat" in a.title.lower() or a.role == ContextRole.voice)))]
+    voice = reg.choose("voice", mode=mode, need={"clone": True} if sample_actors else None) if has_lines else None
+    if voice and sample_actors and not voice.capabilities.get("clone"):
+        names = ", ".join(a.title for a in sample_actors)
+        warnings.append(f"The voice sample of {names} is not used yet: no voice-copying service is connected "
+                        "(ElevenLabs or Cartesia). A stock voice that matches the description is used instead.")
     image = reg.choose("image", mode=mode)
 
-    avatar_actor = None
-    if s and s.shot_type == ShotType.talking_head:
-        for a in clip_actors(project, node):
-            if a.actor and (a.files or a.actor.reference_sheet) and a.id in {x.actor_id for x in s.actors_in_shot} | {d.speaker for d in s.dialogue}:
-                avatar_actor = a
-                break
-    if avatar_actor:
-        av = reg.choose("avatar", mode=mode, override=node.provider_override)
-        if av.is_free and not node.takes_override:
+    speaker = speaking_actor(project, node)
+    avatar_entry = None
+    if speaker and speaker.actor:
+        nonhuman = speaker.actor.kind in ("animal", "product")
+        if nonhuman or s.shot_type == ShotType.talking_head:
+            try:
+                avatar_entry = reg.choose("avatar", mode=mode, override=node.provider_override,
+                                          need={"non_human": True} if nonhuman else None, strict=nonhuman)
+            except LookupError:
+                avatar_entry = None
+            # real footage beats a free preview: if only the free avatar exists but a paid video model does too
+            if avatar_entry and avatar_entry.is_free and mode != "free" and any(
+                    not e.is_free for e in reg.candidates("video", shot, mode=mode)):
+                avatar_entry = None
+    if avatar_entry:
+        if avatar_entry.is_free and not node.takes_override:
             takes = 1          # free previews are identical; one take is enough
-        return ClipPlan("avatar", av, image, voice, None, takes, False, ref_images, False, warnings)
+        return ClipPlan("avatar", avatar_entry, image, voice, None, takes, False, ref_images, False, warnings)
 
     need: dict = {}
     if needs_start:
@@ -221,7 +255,7 @@ def _music_entry(reg: Registry, project: Project) -> Optional[CatalogEntry]:
 
 
 def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Optional[ClipPlan] = None,
-                       total_seconds: float = 0) -> tuple[CostEstimate, TimeEstimate]:
+                       total_seconds: float = 0, new_sheets: Optional[list[str]] = None) -> tuple[CostEstimate, TimeEstimate]:
     plan = plan or plan_clip(project, node, reg)
     d = node.duration
     lines: list[CostLine] = []
@@ -231,6 +265,10 @@ def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Option
         lines.append(CostLine(item=item, calc=calc, cost=round(cost, 4)))
 
     step_times: list[float] = []
+    for who in new_sheets or []:
+        if plan.image:
+            add(f"Reference picture of {who} ({plan.image.id})", "1 image, made once and reused", plan.image.unit_price)
+            step_times.append((plan.image.time.queue_s + plan.image.time.per_output_s) * reg.time_factor(plan.image.id))
     if node.script is None and node.kind == NodeKind.clip:
         e = _llm_entry(reg, "write_clip_script")
         add("AI brain: write script", f"~{SCRIPT_TOKENS[0] // 1000}k in + {SCRIPT_TOKENS[1] // 1000}k out tokens", _llm_cost(e, SCRIPT_TOKENS))
@@ -331,8 +369,18 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
     total = project.root.duration.likely_s
 
     clip_time: dict[str, float] = {}
+    seen_sheets: set[str] = set()
     for leaf in leaves(project):
         plan = plan_clip(project, leaf, reg)
+        new_sheets: list[str] = []
+        if leaf.kind == NodeKind.clip and leaf.script and plan.image:
+            for a in clip_actors(project, leaf):
+                if a.id in _actor_ids(leaf) and a.actor and a.id not in seen_sheets:
+                    seen_sheets.add(a.id)
+                    nonhuman = a.actor.kind in ("animal", "product")
+                    has_photo = any(f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) for f in a.files)
+                    if not a.actor.reference_sheet and not (has_photo and (nonhuman or plan.image.is_free)):
+                        new_sheets.append(a.title)
         kept = [w for w in leaf.warnings if leaf.status.value == "failed" and w.startswith(("failed:", "compare failed:"))]
         leaf.warnings = kept + list(plan.warnings)
         if leaf.script and plan.video and plan.route == "video":
@@ -343,7 +391,7 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
         for item in effective_context(project, leaf.id):
             if item.item.needs_consent and not item.item.consent.confirmed:
                 leaf.warnings.append(f"consent needed for {item.item.title or 'an actor'} before this clip can be made")
-        leaf.cost, leaf.time = estimate_clip_cost(project, leaf, reg, plan, total)
+        leaf.cost, leaf.time = estimate_clip_cost(project, leaf, reg, plan, total, new_sheets)
         if leaf.status.value == "done":
             leaf.time = TimeEstimate(likely_s=0, explain="already made")
         clip_time[leaf.id] = leaf.time.likely_s
@@ -376,7 +424,9 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
         finish[nid] = start + clip_time.get(nid, 0)
     critical = max(finish.values() or [0])
     parallel = max(reg.config.max_parallel_jobs, 1)
-    wall = max(critical, sum(clip_time.values()) / parallel) + (20 if order else 0)  # + final stitch
+    all_done = bool(order) and all(find(project, n).status.value == "done" for n in order)
+    joined = all_done and bool(project.final_output)
+    wall = max(critical, sum(clip_time.values()) / parallel) + (20 if order and not joined else 0)  # + final join
     project.root.time = TimeEstimate(likely_s=round(wall), explain=f"{len(order)} clip(s), up to {parallel} at the same time")
 
     target = project.settings.target_seconds

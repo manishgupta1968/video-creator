@@ -122,6 +122,25 @@ Keyboard shortcuts:
 - **Ctrl/⌘ Z**: undo
 - **Ctrl/⌘ Shift Z**: redo
 
+### Things worth knowing
+
+**Preview mode.** Without keys for a video or image service, the tool cannot make real footage. It makes *text-card previews* instead (each card says "PREVIEW — not real footage"). A banner at the top, a "preview" mark on each clip, and the Generate box all tell you this and what to add.
+
+**A talking animal or object** (for example a lion that says "hello how are you"). The tool does it in three steps:
+1. a picture of the lion: made by an image model (GPT Image, Nano Banana, Flux), or a real photo you choose;
+2. the voice: spoken by a voice service (ElevenLabs, Cartesia), from your description such as "deep, growly";
+3. the animation: a talking-animation model (Kling Avatar through fal.ai) moves the mouth to the voice.
+
+With the fal.ai key (and ElevenLabs for the voice) this works. A presenter who is a person uses the same steps with HeyGen or VEED as an alternative.
+
+**Find a real photo.** On an animal, object, place or style item, press *Find a photo*. It searches Wikimedia Commons (no key needed; optional Pexels key). You see each photo's licence and author. Credits are saved in `output/credits.txt`. Photos of **people** cannot be searched: upload your own, or use a photo you have permission for.
+
+**Record your voice in the tool.** On an actor press *Record my voice* (or *My voice* in the Context tab). Read the shown text for 30 seconds to 2 minutes. The recording is used **only to copy your voice**. It is not placed in the video: every line of the script is spoken fresh in the copied voice. Copying a voice needs ElevenLabs or Cartesia; without one, the tool warns you and uses a stock voice. If Safari blocks the microphone: Safari → Settings → Websites → Microphone.
+
+**Is it working?** While anything runs you see a bar under the top menu: what is happening now ("Making clip 2.1 · Making video, take 2 of 3"), the time so far, how many clips are done, and Pause/Stop. The browser tab title shows ⏳ while working, 👆 when it needs your pick and ✅ when finished. The browser can also send a notification (it asks once).
+
+**The final video.** When you use *Generate entire video* or *Continue to end*, the clips are joined automatically at the end. If you make clips one by one, use *Join clips into final video* (same size and speed, transitions, music, subtitles). If you change something afterwards, the final video is marked out of date and the button becomes *Update final video*.
+
 ## 5. Command line (same features)
 
 Each command below is shown on its own line so you can copy it.

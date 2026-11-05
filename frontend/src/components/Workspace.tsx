@@ -2,8 +2,10 @@ import { ArrowLeft, Command, Download, GitBranch, Library, Loader2, Moon, Redo2,
 import { useCallback, useState } from "react";
 import { api, fileUrl } from "../api";
 import { useTheme } from "../App";
-import { findNode, fmtSec, fmtUsd, ProjectProvider, useHotkey, useP } from "../lib";
+import { findNode, finalPlayer, fmtSec, fmtUsd, ProjectProvider, useHotkey, useP } from "../lib";
 import { Badge, Button, Editable, Meter, Tip } from "../ui";
+import ActivityBar, { TopLine, useTabStatus } from "./ActivityBar";
+import { FinalVideoDialog, PreviewBanner } from "./Banners";
 import CommandBar from "./CommandBar";
 import { RunProvider } from "./ConfirmRun";
 import ContextLibrary from "./ContextLibrary";
@@ -14,6 +16,11 @@ import SettingsDialog from "./Settings";
 import StoryTree from "./StoryTree";
 import Timeline from "./Timeline";
 import Tour from "./Tour";
+
+function FinalOpenBridge({ open }: { open: () => void }) {
+  finalPlayer.open = open;
+  return null;
+}
 
 export default function Workspace({ pid, onHome }: { pid: string; onHome: () => void }) {
   return (
@@ -30,7 +37,8 @@ function Shell({ onHome }: { onHome: () => void }) {
   const [cmd, setCmd] = useState(false);
   const [graph, setGraph] = useState(false);
   const [library, setLibrary] = useState(false);
-  const [settings, setSettings] = useState(false);
+  const [finalOpen, setFinalOpen] = useState(false);
+  useTabStatus();
   const [theme, setTheme] = useTheme();
   useHotkey(useCallback((e) => (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k", []), () => setCmd(true), true);
   useHotkey(useCallback((e) => (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !e.shiftKey, []),
@@ -54,6 +62,7 @@ function Shell({ onHome }: { onHome: () => void }) {
 
   return (
     <div className="flex h-full flex-col">
+      <TopLine />
       {/* top bar */}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-panel px-3">
         <Tip content="All projects"><Button variant="ghost" size="icon" onClick={onHome} aria-label="All projects"><ArrowLeft className="h-4 w-4" /></Button></Tip>
@@ -77,19 +86,16 @@ function Shell({ onHome }: { onHome: () => void }) {
         <Tip content="Links between clips (graph)"><Button variant="ghost" size="icon" aria-label="Graph" onClick={() => setGraph(true)}><GitBranch className="h-4 w-4" /></Button></Tip>
         <Tip content="Context library: every actor, photo, sound and note"><Button variant="ghost" size="icon" aria-label="Context library" onClick={() => setLibrary(true)}><Library className="h-4 w-4" /></Button></Tip>
         <Tip content="Light / dark"><Button variant="ghost" size="icon" aria-label="Theme" onClick={() => setTheme(dark ? "light" : "dark")}>{dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</Button></Tip>
-        <Tip content="Settings: AI brain, API keys, budget, model catalogue"><Button variant="ghost" size="icon" aria-label="Settings" onClick={() => setSettings(true)}><Settings2 className="h-4 w-4" /></Button></Tip>
-        {p.final_output && (
+        <Tip content="Settings: AI brain, API keys, budget, model catalogue"><Button variant="ghost" size="icon" aria-label="Settings" onClick={() => P.openSettings("keys")}><Settings2 className="h-4 w-4" /></Button></Tip>
+        {s.final_ready && (
           <a href={fileUrl(P.pid, p.final_output)} download>
-            <Button variant="primary" size="sm"><Download className="h-3.5 w-3.5" />Download</Button>
+            <Button variant={s.final_stale ? "outline" : "primary"} size="sm"><Download className="h-3.5 w-3.5" />{s.final_stale ? "Download (out of date)" : "Download"}</Button>
           </a>
         )}
       </header>
 
-      {drafting && (
-        <div className="flex items-center gap-2 border-b border-line bg-brand/5 px-4 py-2 text-xs text-brand">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Drafting your plan: parts, clips, scripts, actors and estimates…
-        </div>
-      )}
+      <ActivityBar />
+      <PreviewBanner />
 
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-[300px] shrink-0 flex-col border-r border-line bg-panel md:flex" aria-label="Story">
@@ -107,7 +113,9 @@ function Shell({ onHome }: { onHome: () => void }) {
       <CommandBar open={cmd} onOpenChange={setCmd} />
       <GraphView open={graph} onOpenChange={setGraph} />
       <ContextLibrary open={library} onOpenChange={setLibrary} />
-      <SettingsDialog open={settings} onOpenChange={setSettings} />
+      <SettingsDialog open={P.settings.open} onOpenChange={(o) => (o ? P.openSettings(P.settings.tab) : P.closeSettings())} tab={P.settings.tab} />
+      <FinalVideoDialog open={finalOpen} onOpenChange={setFinalOpen} />
+      <FinalOpenBridge open={() => setFinalOpen(true)} />
       <Tour />
       <span className="sr-only" aria-live="polite">{p.run.message}</span>
       {false && fmtSec(0)}

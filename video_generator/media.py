@@ -130,8 +130,9 @@ def _font(size: int) -> ImageFont.ImageFont:
 
 
 def placeholder_image(text: str, out: Path, size: tuple[int, int], subtitle: str = "",
-                      seed: int = 0, base: Optional[Path] = None) -> Path:
-    """A clean storyboard card (free preview keyframe)."""
+                      seed: int = 0, base: Optional[Path] = None, label: str = "") -> Path:
+    """A clean storyboard card used when no real image/video model is connected.
+    Always stamped PREVIEW so nobody mistakes it for real footage."""
     w, h = size
     palette = [(30, 41, 59), (49, 46, 129), (22, 78, 99), (63, 63, 70), (88, 28, 135), (20, 83, 45)]
     top = palette[seed % len(palette)]
@@ -151,17 +152,41 @@ def placeholder_image(text: str, out: Path, size: tuple[int, int], subtitle: str
         dark = Image.new("RGB", (w, h), tuple(int(c * 0.35) for c in top))
         img = Image.composite(dark, img, grad.resize((w, h)))
     d = ImageDraw.Draw(img)
-    size1 = max(min(h // 18, w // 26), 16)
-    f1, f2 = _font(size1), _font(max(h // 34, 12))
-    chars = max(int(w * 0.86 / (size1 * 0.55)), 12)
-    lines = textwrap.wrap(text, width=chars)[:6]
-    step = int(size1 * 1.35)
-    y = h // 2 - len(lines) * step // 2
+    pad = int(w * 0.07)
+    # stamp (top-left) and clip label (top-right)
+    stamp_font = _font(max(h // 36, 12))
+    stamp = "PREVIEW — not real footage"
+    tw = d.textlength(stamp, font=stamp_font)
+    d.rounded_rectangle([pad, pad * 0.6, pad + tw + 24, pad * 0.6 + stamp_font.size + 14], radius=8, fill=(245, 158, 11))
+    d.text((pad + 12, pad * 0.6 + 6), stamp, fill=(20, 20, 20), font=stamp_font)
+    if label:
+        lf = _font(max(h // 36, 12))
+        lw = d.textlength(label, font=lf)
+        d.text((w - pad - lw, pad * 0.6 + 6), label, fill=(226, 232, 240), font=lf)
+    # main text: shrink the font until it fits, then cut with an ellipsis
+    box_w, box_h = w - 2 * pad, int(h * 0.62)
+    size1 = max(min(h // 17, w // 24), 16)
+    text = " ".join(text.split())
+    lines: list[str] = []
+    while True:
+        font = _font(size1)
+        chars = max(int(box_w / (size1 * 0.55)), 10)
+        lines = textwrap.wrap(text, width=chars) or [""]
+        step = int(size1 * 1.35)
+        if len(lines) * step <= box_h or size1 <= 15:
+            break
+        size1 -= 2
+    max_lines = max(box_h // step, 1)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1].rstrip(" ,.;:") + " …"
+    y = int(h * 0.2) + (box_h - len(lines) * step) // 2
     for line in lines:
-        tw = d.textlength(line, font=f1)
-        d.text(((w - tw) / 2, y), line, fill=(248, 250, 252), font=f1)
+        tw = d.textlength(line, font=font)
+        d.text(((w - tw) / 2, y), line, fill=(248, 250, 252), font=font)
         y += step
     if subtitle:
+        f2 = _font(max(h // 34, 12))
         tw = d.textlength(subtitle, font=f2)
         d.text(((w - tw) / 2, h - h // 8), subtitle, fill=(203, 213, 225), font=f2)
     out.parent.mkdir(parents=True, exist_ok=True)

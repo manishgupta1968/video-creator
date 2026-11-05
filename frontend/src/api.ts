@@ -46,8 +46,12 @@ export interface Summary {
   seconds: number; seconds_min: number; seconds_max: number; target_seconds: number; cost: number; cost_min: number; cost_max: number;
   time_s: number; spent: number; budget: number; warnings: string[]; waiting_picks: number; review_flags: number; clips: number; done: number;
   numbers: Record<string, string>; brain: string;
+  preview: { clips: Record<string, string[]>; jobs: Record<string, string>; all_preview: boolean; chosen_free_mode: boolean; voice_sample_unused: string[] };
+  final_ready: boolean; final_stale: boolean; all_clips_done: boolean;
 }
-export interface View { project: Project; summary: Summary; engine: { active: boolean; running_clips: string[] } }
+export interface Activity { node: string; step: string; elapsed_s: number; step_elapsed_s: number; started: number; since: number; now: number; expected_s: number }
+export interface View { project: Project; summary: Summary; engine: { active: boolean; running_clips: string[]; activity: Activity[] } }
+export interface StockPhoto { source: string; title: string; thumb: string; url: string; width: number; height: number; author: string; license: string; source_url: string }
 export interface Estimate { clips: string[]; extra_upstream: string[]; cost_usd: number; time_s: number; spent_usd: number; budget_usd: number; over_budget: boolean }
 export interface CommandPlan { summary: string; ops: { op: string; target: string; field: string; value: string }[] }
 
@@ -108,6 +112,14 @@ export const api = {
   patchContext: (pid: string, cid: string, patch: any) => req<View>("PATCH", `${P(pid)}/context/${cid}`, patch),
   removeContext: (pid: string, cid: string) => req<View>("DELETE", `${P(pid)}/context/${cid}`),
   consent: (pid: string, cid: string, statement: "self" | "permission") => req<View>("POST", `${P(pid)}/context/${cid}/consent`, { statement }),
+  voiceRecording: (pid: string, cid: string, blob: Blob, filename: string, consentSelf: boolean) => {
+    const fd = new FormData();
+    fd.append("file", blob, filename);
+    fd.append("consent_self", consentSelf ? "true" : "");
+    return req<View>("POST", `${P(pid)}/context/${cid}/voice-recording`, fd);
+  },
+  stockSearch: (q: string, source: string) => req<{ sources: string[]; results: StockPhoto[] }>("GET", `/api/stock/search?q=${encodeURIComponent(q)}&source=${source}`),
+  stockAdd: (pid: string, cid: string, photo: StockPhoto) => req<View>("POST", `${P(pid)}/context/${cid}/stock`, photo),
   voicePreview: (pid: string, cid: string) => req<{ url: string }>("POST", `${P(pid)}/context/${cid}/voice-preview`),
 
   addDep: (pid: string, from_id: string, to_id: string, type: string) => req<View>("POST", `${P(pid)}/deps`, { from_id, to_id, type }),

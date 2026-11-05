@@ -262,7 +262,7 @@ avatar:
     plugin: fal_avatar
     model: fal-ai/kling-video/ai-avatar/v2/pro
     vendor: fal
-    capabilities: {max_seconds: 60, needs_photo: true}
+    capabilities: {max_seconds: 60, needs_photo: true, non_human: true}   # animates animals/characters too
     quality: 4
     price: {unit: second, usd: 0.115}
     time: {queue_s: 60, per_output_s: 8}
@@ -273,7 +273,7 @@ avatar:
     plugin: fake_avatar
     model: still-with-audio
     vendor: local
-    capabilities: {max_seconds: 3600, needs_photo: false}
+    capabilities: {max_seconds: 3600, needs_photo: false, non_human: true}
     quality: 1
     price: {unit: second, usd: 0}
     time: {queue_s: 0, per_output_s: 0.2}

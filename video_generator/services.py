@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
 from . import deps as deps_mod
 from . import estimate as est
 from . import media
+from . import stock
 from .brain import (Brain, ClipScriptDraft, CommandPlan, Op, ProjectDraft, draft_to_script)
 from .catalog import Catalog
 from .config import Config
@@ -58,7 +60,48 @@ class Service:
                 "cost_max": e.cost_max, "time_s": e.time_s, "spent": e.spent, "budget": project.settings.budget_usd,
                 "warnings": e.warnings, "waiting_picks": waiting, "review_flags": review_flags,
                 "clips": len(leaves(project)), "done": sum(1 for l in leaves(project) if l.status == NodeStatus.done),
-                "numbers": numbering(project), "brain": self.reg.llm_plugin_name("default")}
+                "numbers": numbering(project), "brain": self.reg.llm_plugin_name("default"),
+                "preview": self.preview_info(project), **self.final_info(project)}
+
+    HINTS = {
+        "video": "Add FAL_KEY (Kling, Seedance, Wan) or GEMINI_API_KEY (Veo) to get real video.",
+        "avatar": "Add FAL_KEY to get a real talking animation (Kling Avatar); a presenter can also use HEYGEN_API_KEY.",
+        "image": "Add FAL_KEY, GEMINI_API_KEY or OPENAI_API_KEY to get real pictures.",
+        "voice": "Add ELEVENLABS_API_KEY or CARTESIA_API_KEY to get natural voices (and to copy a voice).",
+    }
+
+    def preview_info(self, project: Project) -> dict:
+        """Which clips will only get free placeholder output, and what to add to fix that."""
+        clips: dict[str, list[str]] = {}
+        jobs: dict[str, str] = {}
+        unused: list[str] = []
+        for leaf in leaves(project):
+            if leaf.kind != NodeKind.clip:
+                continue
+            plan = est.plan_clip(project, leaf, self.reg)
+            reasons = []
+            if plan.route in ("video", "avatar") and plan.video and plan.video.is_free:
+                reasons.append(plan.route)
+            if plan.image and plan.image.is_free and plan.route in ("video", "avatar"):
+                reasons.append("image")
+            if plan.voice and plan.voice.is_free:
+                reasons.append("voice")
+            if reasons:
+                clips[leaf.id] = reasons
+                for r in reasons:
+                    jobs[r] = self.HINTS[r]
+            unused += [w for w in plan.warnings if w.startswith("The voice sample")]
+        needs_media = [l for l in leaves(project) if l.kind == NodeKind.clip]
+        all_preview = bool(needs_media) and all(any(r in ("video", "avatar") for r in clips.get(l.id, [])) for l in needs_media)
+        return {"clips": clips, "jobs": jobs, "all_preview": all_preview, "chosen_free_mode": project.settings.quality_mode == "free",
+                "voice_sample_unused": sorted(set(unused))}
+
+    def final_info(self, project: Project) -> dict:
+        path = ProjectStore.path_for(project.id) / project.final_output if project.final_output else None
+        ready = bool(path and path.exists())
+        stale = ready and bool(project.final_hash) and project.final_hash != ProjectStore.final_signature(project)
+        all_done = bool(leaves(project)) and all(l.status == NodeStatus.done for l in leaves(project))
+        return {"final_ready": ready, "final_stale": stale, "all_clips_done": all_done}
 
     def new_project(self, goal: str, seconds: float = 60, aspect: str = "16:9", fmt: str = "mp4",
                     files: Optional[list[Path]] = None, name: str = "", budget: Optional[float] = None,
@@ -104,11 +147,31 @@ class Service:
             if not g.children:
                 g.kind = NodeKind.clip
             p.root.children.append(g)
+        self._fit_to_target(p)
         self._attach_media_context(p)
         self.save(p)
         if write_scripts:
             p = await self.write_all_scripts(pid)
         return p
+
+    def _fit_to_target(self, p: Project) -> None:
+        """The AI brain sometimes plans more seconds than asked. Scale clip lengths to the project target."""
+        target = p.settings.target_seconds
+        clips = [n for n, _ in walk(p.root) if n.kind == NodeKind.clip]
+        total = sum((n.target_seconds or 6.0) for n in clips)
+        if not clips or not target or total <= 0 or abs(total - target) / target <= 0.1:
+            return
+        f = target / total
+        for n in clips:
+            n.target_seconds = max(2.0, min(round((n.target_seconds or 6.0) * f * 2) / 2, 15.0))
+
+        def roll(node: Node) -> None:
+            for c in node.children:
+                if c.kind == NodeKind.goal:
+                    roll(c)
+            if node is not p.root and node.children:
+                node.target_seconds = round(sum((c.target_seconds or 0) for c in node.children), 1) or node.target_seconds
+        roll(p.root)
 
     def _attach_media_context(self, p: Project) -> None:
         """Slides / footage the user dropped become leaves of their own."""
@@ -419,6 +482,70 @@ class Service:
         if save:
             self.save(p)
         return item
+
+    async def add_stock_photo(self, pid: str, cid: str, url: str, meta: dict) -> Project:
+        """Download a chosen stock photo into an animal/object/place/style item (never a person)."""
+        p = self.load(pid)
+        item = item_by_id(p, cid)
+        if item.type == ContextType.actor and (item.actor is None or item.actor.kind in ("ai_person", "real_person", "digital_twin")):
+            raise ValueError("Photos of people must be your own, or used with the person's permission. "
+                             "Upload them instead of searching. Stock search is for animals, objects, places and styles.")
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            path = await stock.download(url, tmp, meta.get("title") or "photo")
+            self.add_context_file(p, path, ctx_id=cid, save=False)
+            item = item_by_id(p, cid)
+            item.analysis.setdefault("credits", []).append({k: str(meta.get(k, ""))[:300] for k in
+                                                           ("title", "author", "license", "source_url", "source")})
+            self.save(p)
+        except stock.StockError as exc:
+            raise ValueError(str(exc))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        return self.load(pid)
+
+    def add_voice_recording(self, pid: str, cid: str, data: bytes, filename: str, consent_self: bool = False) -> Project:
+        """Save a voice sample recorded in the browser (webm / mp4 / wav) as the actor's voice sample.
+        The sample is only used to COPY the voice; it is never placed in the video."""
+        if len(data) > 80_000_000:
+            raise ValueError("The recording is too large.")
+        p = self.load(pid)
+        item = item_by_id(p, cid)
+        if item.type != ContextType.actor:
+            raise ValueError("A voice recording belongs to an actor.")
+        inputs = ProjectStore.path_for(pid) / "inputs"
+        inputs.mkdir(parents=True, exist_ok=True)
+        ext = Path(filename or "").suffix.lower()
+        if ext not in (".webm", ".m4a", ".mp4", ".ogg", ".wav", ".mp3", ".aac", ".caf", ".oga"):
+            ext = ".webm"
+        raw = inputs / f"recording_raw{ext}"
+        raw.write_bytes(data)
+        n = 1
+        while (inputs / f"voice_recording_{n}.wav").exists():
+            n += 1
+        out = inputs / f"voice_recording_{n}.wav"
+        try:
+            media.ff("-i", str(raw), "-vn", "-ar", "44100", "-ac", "1", str(out))
+        except media.MediaError:
+            raise ValueError("Could not read that recording. Try recording again.")
+        finally:
+            raw.unlink(missing_ok=True)
+        secs = media.probe_duration(out)
+        if secs < 1.5:
+            out.unlink(missing_ok=True)
+            raise ValueError("The recording is empty or too short.")
+        item.actor = item.actor or ActorDetails()
+        item.actor.voice_sample = f"inputs/{out.name}"
+        item.actor.voice_id = None
+        item.actor.voice_provider = None
+        if item.actor.kind == "ai_person":
+            item.actor.kind = "real_person"
+        item.analysis["voice_check"] = media.audio_check(out)
+        if consent_self:
+            item.consent = Consent(confirmed=True, statement="self", confirmed_by=self.config.user_name or "user",
+                                   confirmed_at=now_iso(), files=list(item.files) + [item.actor.voice_sample])
+        self.save(p)
+        return self.load(pid)
 
     def _analyse(self, p: Project, item: ContextItem, path: Path) -> None:
         ext = path.suffix.lower()

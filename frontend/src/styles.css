@@ -47,5 +47,10 @@ body { @apply bg-bg text-ink font-sans antialiased text-[13px] leading-relaxed; 
 
 @keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgb(var(--brand) / .45); } 100% { box-shadow: 0 0 0 8px rgb(var(--brand) / 0); } }
 .pulse { animation: pulse-ring 1.4s ease-out infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
+.indeterminate { position: relative; overflow: hidden; }
+.indeterminate::after { content: ""; position: absolute; inset: 0; width: 30%; background: rgb(var(--brand)); border-radius: 999px; animation: slide 1.3s ease-in-out infinite; }
+@keyframes stripes { 0% { background-position: 0 0; } 100% { background-position: 28px 0; } }
+.working { background-image: repeating-linear-gradient(135deg, rgb(var(--brand) / .14) 0 8px, transparent 8px 16px); background-size: 28px 28px; animation: stripes 1s linear infinite; }
 @keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
 .skeleton { background: linear-gradient(90deg, rgb(var(--sunken)) 0, rgb(var(--line)) 50%, rgb(var(--sunken)) 100%); background-size: 800px 100%; animation: shimmer 1.4s infinite linear; }

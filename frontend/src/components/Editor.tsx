@@ -4,6 +4,8 @@ import { api, fileUrl, Line, Node, Review, Script, Take } from "../api";
 import { fmtRange, fmtSec, fmtTime, fmtUsd, leaves, SHOT_TYPES, STATUS, useP, useSettings } from "../lib";
 import { Badge, Button, Card, cn, Dialog, Editable, Empty, Select, Switch, Textarea, Tip } from "../ui";
 import { useRun } from "./ConfirmRun";
+import { FinalVideoDialog, PreviewBadge } from "./Banners";
+import { finalPlayer } from "../lib";
 
 export default function Editor({ node }: { node: Node }) {
   const P = useP();
@@ -29,6 +31,7 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
     return out;
   }, [node]);
   const unscripted = clipsBelow.filter((c) => c.kind === "clip" && !c.script).length;
+  const sum = P.view!.summary;
   const breaking = P.busy.includes("Breaking down");
   return (
     <div className="space-y-5">
@@ -45,6 +48,19 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
           <span className="text-muted">· ~{fmtTime(node.time.likely_s)} to make</span>
         </div>
       </Card>
+      {isRoot && sum.final_ready && (
+        <Card className="overflow-hidden">
+          <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+            <div className="text-sm font-semibold">Final video</div>
+            {sum.final_stale ? <Badge tone="warn">Out of date — something changed since it was made</Badge> : <Badge tone="ok">Up to date</Badge>}
+            <div className="flex-1" />
+            <Button size="sm" variant="outline" onClick={() => finalPlayer.open()}>Open</Button>
+            <a href={fileUrl(P.pid, p.final_output)} download><Button size="sm" variant="primary">Download</Button></a>
+          </div>
+          <video key={p.final_output || ""} src={fileUrl(P.pid, p.final_output)} controls preload="metadata" className="aspect-video w-full bg-black" />
+          <div className="px-4 py-2 text-[11px] text-muted">The clips were joined with transitions, music and subtitles. When you change a clip, use “Update final video” in the bottom bar.</div>
+        </Card>
+      )}
       <AskAI node={node} placeholder={isRoot ? "e.g. make the whole video more emotional" : "e.g. make this part shorter and punchier"} />
       <div className="flex flex-wrap gap-2">
         <Button variant="primary" loading={breaking} onClick={() => P.act("Breaking down", () => api.decompose(P.pid, node.id), "Broken down into clips")}>
@@ -132,6 +148,7 @@ function ClipEditor({ node }: { node: Node }) {
   const chosen = node.takes.find((t) => t.id === node.chosen_take);
   const videoModels = (settings.data?.catalog || []).filter((e: any) => (e.job === "video" || e.job === "avatar") && e.usable);
   const generating = node.status === "generating";
+  const liveStep = (P.view!.engine.activity || []).find((a) => a.node === node.id);
 
   return (
     <div className="space-y-4">
@@ -141,6 +158,7 @@ function ClipEditor({ node }: { node: Node }) {
           <div className="field-label mb-0.5 flex items-center gap-2">Clip {P.numbers[node.id]}
             {node.kind !== "clip" && <Badge>{node.kind === "slides" ? "Your slides" : "Your video"}</Badge>}
             {node.version > 1 && <Badge tone="info">v{node.version}</Badge>}
+            <PreviewBadge nodeId={node.id} />
           </div>
           <Editable value={node.title} onSave={(title) => saveNode({ title })} className="text-xl font-semibold" ariaLabel="Clip title" />
         </div>
@@ -160,7 +178,8 @@ function ClipEditor({ node }: { node: Node }) {
             <img src={fileUrl(P.pid, shownTakes[0].keyframe)} className="h-full w-full object-contain" alt="Keyframe" />
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-white/60">
-              {generating ? <><RefreshCw className="h-6 w-6 animate-spin" /><span className="text-xs">{p.run.message || "Making this clip…"}</span></>
+              {generating ? <><RefreshCw className="h-6 w-6 animate-spin" /><span className="text-xs">{liveStep?.step || p.run.message || "Making this clip…"}</span>
+                {liveStep && <span className="text-[11px] tabular-nums text-white/50">{Math.round(liveStep.elapsed_s + (Date.now() - P.fetchedAt) / 1000)} s so far{liveStep.expected_s ? ` · about ${Math.round(liveStep.expected_s)} s expected` : ""}</span>}</>
                 : <><Film className="h-7 w-7" /><span className="text-xs">Not made yet</span></>}
             </div>
           )}

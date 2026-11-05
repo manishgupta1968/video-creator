@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Film, Link2, MoreHorizontal, Paperclip, Plus, Presentation, Sparkles, Trash2, Video } from "lucide-react";
+import { ChevronDown, ChevronRight, Film, Link2, Loader2, MoreHorizontal, Paperclip, Plus, Presentation, Sparkles, Trash2, Video } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { useState } from "react";
 import { api, Node } from "../api";
@@ -61,6 +61,8 @@ function Row({ node, depth, drag, setDrag, parentId }: { node: Node; depth: numb
   const ownCtx = p.context.filter((c) => c.scope === `node:${node.id}` || c.scope === `clip:${node.id}`).length + node.context_add.length;
   const selected = P.selected === node.id;
   const warn = node.warnings.length > 0;
+  const act = (P.view!.engine.activity || []).find((a) => a.node === node.id);
+  const preview = (P.view!.summary.preview.clips[node.id] || []).length > 0;
 
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault();
@@ -109,11 +111,14 @@ function Row({ node, depth, drag, setDrag, parentId }: { node: Node; depth: numb
         <Tip content={`${node.duration.explain} — ${fmtRange(node.cost.min_usd, node.cost.max_usd)}`}>
           <span className="shrink-0 text-[11px] tabular-nums text-muted">{fmtSec(node.duration.likely_s)}</span>
         </Tip>
-        {!isGoal && (
+        {!isGoal && preview && node.status !== "done" && <Tip content="Only a free placeholder will be made until you add keys"><span className="text-[10px] font-medium text-warn">preview</span></Tip>}
+        {!isGoal && (act ? (
+          <Tip content={`Working: ${act.step}`}><span aria-label="Working"><Loader2 className="ml-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-brand" /></span></Tip>
+        ) : (
           <Tip content={warn ? node.warnings[0] : st.label}>
             <span className={cn("ml-0.5 h-2 w-2 shrink-0 rounded-full", warn && node.status !== "done" ? "bg-warn" : st.dot)} aria-label={st.label} />
           </Tip>
-        )}
+        ))}
         <RowMenu node={node} parentId={parentId} />
       </div>
       {isGoal && open && node.children.map((c) => <Row key={c.id} node={c} depth={depth + 1} drag={drag} setDrag={setDrag} parentId={node.id} />)}

@@ -84,6 +84,7 @@ class ImageRequest:
     references: list[Path] = field(default_factory=list)
     aspect: str = "16:9"
     negative: str = ""
+    label: str = ""              # e.g. "Clip 2.1 · The Greeting" (shown on free preview cards)
 
 
 class ImageGenerator(Plugin):
@@ -107,6 +108,7 @@ class VideoRequest:
     negative: str = ""
     audio: bool = True
     camera: str = ""
+    label: str = ""
 
 
 class VideoGenerator(Plugin):
@@ -125,6 +127,7 @@ class AvatarRequest:
     prompt: str = ""
     avatar_id: Optional[str] = None
     aspect: str = "16:9"
+    label: str = ""
 
 
 class AvatarGenerator(Plugin):

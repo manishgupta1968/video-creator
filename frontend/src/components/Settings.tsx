@@ -1,5 +1,5 @@
 import { CheckCircle2, ExternalLink, KeyRound, XCircle } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { fmtUsd, useSettings, useSettingsMutation, useToast } from "../lib";
@@ -8,7 +8,9 @@ import { Badge, Button, Dialog, Input, Select, Switch, TabList, TabPanel, Tabs }
 const BRAINS = [{ value: "auto", label: "Automatic (first with a key)" }, { value: "anthropic", label: "Anthropic Claude" },
   { value: "openai", label: "OpenAI GPT" }, { value: "gemini", label: "Google Gemini" }, { value: "fake_llm", label: "Offline (free, simple)" }];
 
-export default function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+export default function SettingsDialog({ open, onOpenChange, tab: initialTab }: { open: boolean; onOpenChange: (v: boolean) => void; tab?: string }) {
+  const [tab, setTab] = useState(initialTab || "keys");
+  useEffect(() => { if (open) setTab(initialTab || "keys"); }, [open, initialTab]);
   const q = useSettings();
   const m = useSettingsMutation();
   const qc = useQueryClient();
@@ -18,7 +20,7 @@ export default function SettingsDialog({ open, onOpenChange }: { open: boolean; 
   return (
     <Dialog open={open} onOpenChange={onOpenChange} wide="xl" title="Settings" description="Saved on this computer in ~/.video-generator">
       {!d ? <div className="skeleton h-40 rounded-lg" /> : (
-        <Tabs defaultValue="keys">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabList tabs={[{ value: "keys", label: "Vendors & keys" }, { value: "brain", label: "AI brain" }, { value: "budget", label: "Budget & quality" },
             { value: "catalog", label: "Model catalogue" }, { value: "plugins", label: "Plugins" }]} />
           <div className="pt-4">

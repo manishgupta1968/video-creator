@@ -3,6 +3,9 @@ import { AlertTriangle, CheckCircle2, Circle, CircleDashed, Clock, Hourglass, Lo
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { api, Node, Project, Status, View } from "./api";
 
+/** lets any component open the final-video player without prop drilling */
+export const finalPlayer = { open: () => {} };
+
 export const fmtSec = (s?: number | null) => {
   const v = Math.round(s || 0);
   return v < 60 ? `${v}s` : `${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}`;
@@ -94,7 +97,8 @@ export function ToastHost({ children }: { children: React.ReactNode }) {
 export interface ProjectApi {
   pid: string; view: View | undefined; busy: string[]; selected: string; select: (id: string) => void;
   set: (v: View) => void; act: <T extends View | any>(label: string, fn: () => Promise<T>, okText?: string) => Promise<T | undefined>;
-  numbers: Record<string, string>;
+  numbers: Record<string, string>; online: boolean; fetchedAt: number;
+  settings: { open: boolean; tab: string }; openSettings: (tab?: string) => void; closeSettings: () => void;
 }
 const PCtx = createContext<ProjectApi | null>(null);
 export const useP = () => useContext(PCtx)!;
@@ -104,6 +108,8 @@ export function ProjectProvider({ pid, children }: { pid: string; children: Reac
   const toast = useToast();
   const [busy, setBusy] = useState<string[]>([]);
   const [selected, setSelected] = useState<string>("");
+  const [online, setOnline] = useState(true);
+  const [settings, setSettingsState] = useState({ open: false, tab: "keys" });
   const q = useQuery({ queryKey: ["project", pid], queryFn: () => api.get(pid), refetchInterval: (query) => {
     const d = query.state.data as View | undefined;
     return d && (d.engine.active || d.project.run.status === "running") ? 4000 : 15000;
@@ -118,6 +124,7 @@ export function ProjectProvider({ pid, children }: { pid: string; children: Reac
     const connect = () => {
       const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/${encodeURIComponent(pid)}`);
       wsRef.current = ws;
+      ws.onopen = () => setOnline(true);
       ws.onmessage = (m) => {
         const ev = JSON.parse(m.data);
         if (ev.type === "busy") setBusy((b) => (ev.busy ? [...b, ev.label] : b.filter((x) => x !== ev.label)));
@@ -127,7 +134,7 @@ export function ProjectProvider({ pid, children }: { pid: string; children: Reac
         clearTimeout(timer);
         timer = setTimeout(() => qc.invalidateQueries({ queryKey: ["project", pid] }), 150);
       };
-      ws.onclose = () => { if (!closed) setTimeout(connect, 1500); };
+      ws.onclose = () => { if (!closed) { setOnline(false); setTimeout(connect, 1500); } };
     };
     connect();
     return () => { closed = true; wsRef.current?.close(); };
@@ -157,7 +164,8 @@ export function ProjectProvider({ pid, children }: { pid: string; children: Reac
   }, [view, selected]);
 
   return (
-    <PCtx.Provider value={{ pid, view, busy, selected, select: setSelected, set, act, numbers: view?.summary.numbers || {} }}>
+    <PCtx.Provider value={{ pid, view, busy, selected, select: setSelected, set, act, numbers: view?.summary.numbers || {}, online, fetchedAt: q.dataUpdatedAt,
+      settings, openSettings: (tab = "keys") => setSettingsState({ open: true, tab }), closeSettings: () => setSettingsState((s) => ({ ...s, open: false })) }}>
       {children}
     </PCtx.Provider>
   );

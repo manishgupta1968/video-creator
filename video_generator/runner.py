@@ -53,6 +53,7 @@ class Engine:
         self.locks: dict[str, asyncio.Lock] = {}
         self.reviewer = Reviewer(service)
         service.engine = self
+        self.activity: dict[str, dict[str, dict]] = {}     # pid -> node id (or "final") -> live step
 
     # ================================================================ helpers
     def emit(self, pid: str, event: dict) -> None:
@@ -108,10 +109,25 @@ class Engine:
         await self.mutate(pid, f)
 
     # ================================================================ public API
+    def step(self, pid: str, nid: str, text: str, expected_s: float = 0) -> None:
+        """Record what a clip (or the final join, nid="final") is doing right now."""
+        cur = self.activity.setdefault(pid, {}).get(nid)
+        since = cur["since"] if cur and cur.get("text") == text else time.time()
+        self.activity[pid][nid] = {"text": text, "since": since, "expected_s": expected_s,
+                                   "started": cur["started"] if cur else time.time()}
+        self.emit(pid, {"type": "clip", "node": nid, "step": text})
+
+    def end_step(self, pid: str, nid: str) -> None:
+        self.activity.get(pid, {}).pop(nid, None)
+
     def status(self, pid: str) -> dict:
         ctl = self.runs.get(pid)
+        now = time.time()
+        acts = [{"node": nid, "step": a["text"], "elapsed_s": round(now - a["started"]), "step_elapsed_s": round(now - a["since"]),
+                 "started": round(a["started"], 1), "since": round(a["since"], 1), "now": round(now, 1),
+                 "expected_s": a["expected_s"]} for nid, a in self.activity.get(pid, {}).items()]
         return {"active": bool(ctl and ctl.task and not ctl.task.done()),
-                "running_clips": list(ctl.running.keys()) if ctl else []}
+                "running_clips": list(ctl.running.keys()) if ctl else [], "activity": acts}
 
     async def start(self, pid: str, mode: str, targets: Optional[list[str]] = None,
                     auto_pick: Optional[bool] = None) -> dict:
@@ -348,6 +364,7 @@ class Engine:
                 pr.run.message = f"run failed: {exc}"
             await self.mutate(pid, f)
         finally:
+            self.activity.pop(pid, None)
             self.emit(pid, {"type": "run_finished"})
 
     # ================================================================ one clip
@@ -360,6 +377,7 @@ class Engine:
             p.run.message = f"making clip {numbering(p).get(nid, '')}"
         await self.mutate(pid, start)
         self.emit(pid, {"type": "clip", "node": nid, "status": "generating", "step": "starting"})
+        self.step(pid, nid, "Starting", find(self.svc.load(pid), nid).time.likely_s)
         try:
             p = self.svc.load(pid)
             n = find(p, nid)
@@ -383,8 +401,10 @@ class Engine:
                 n.status = NodeStatus.failed
                 n.warnings = [f"failed: {msg}"] + [w for w in n.warnings if not w.startswith("failed:")]
             await self.mutate(pid, fail)
+            self.end_step(pid, nid)
             self.emit(pid, {"type": "clip", "node": nid, "status": "failed", "message": msg})
             return
+        self.end_step(pid, nid)
         self.emit(pid, {"type": "clip", "node": nid, "status": "made", "seconds": round(time.monotonic() - t0)})
 
     async def _check_consent(self, pid: str, nid: str) -> None:
@@ -404,6 +424,8 @@ class Engine:
         plan = est.plan_clip(p, n, self.svc.reg)
         used = _actor_ids_in(n)
         actors = [e.item for e in effective_context(p, nid) if e.item.type == ContextType.actor and e.item.id in used]
+        if actors:
+            self.step(pid, nid, "Preparing actors (picture and voice)", n.time.likely_s)
         for a in actors:
             if a.actor and not a.actor.reference_sheet:
                 await self._reference_sheet(pid, a.id, plan.image)
@@ -418,18 +440,28 @@ class Engine:
         out_dir.mkdir(parents=True, exist_ok=True)
         photos = [self.abs(pid, f) for f in a.files if f.lower().endswith(IMG_EXT)]
         out = out_dir / "sheet.png"
-        if photos and (not image_entry or image_entry.is_free):
+        kind = a.actor.kind if a.actor else "ai_person"
+        nonhuman = kind in ("animal", "product")
+        if photos and (nonhuman or not image_entry or image_entry.is_free):
+            # a photo of an animal/product (uploaded or found by search) is used exactly as it is
             shutil.copy(photos[0], out.with_suffix(photos[0].suffix))
             sheet = out.with_suffix(photos[0].suffix)
         else:
             desc = a.actor.description if a.actor else a.text
-            prompt = (f"Photoreal character reference portrait of {a.title}: {desc}. Wearing {a.actor.clothing if a.actor else ''}. "
-                      "Front view, head and shoulders, even soft studio light, neutral background, natural skin texture with pores, "
-                      "sharp focus, true-to-life colours.")
+            if kind == "animal":
+                prompt = (f"Photoreal wildlife portrait of {a.title}: {desc}. Facing the camera, head and upper body, mouth closed and relaxed, "
+                          "natural fur/feather texture, soft natural daylight, shallow depth of field, sharp eyes, true-to-life colours.")
+            elif kind == "product":
+                prompt = (f"Photoreal product reference photo of {a.title}: {desc}. Front view on a clean neutral background, "
+                          "soft studio light, sharp focus, true-to-life colours.")
+            else:
+                prompt = (f"Photoreal character reference portrait of {a.title}: {desc}. Wearing {a.actor.clothing if a.actor else ''}. "
+                          "Front view, head and shoulders, even soft studio light, neutral background, natural skin texture with pores, "
+                          "sharp focus, true-to-life colours.")
             plugin = self.svc.reg.plugin(image_entry.plugin)
             t0 = time.monotonic()
             _, usage = await plugin.generate(ImageRequest(prompt=prompt, out=out, model=image_entry.model,
-                                                          references=photos[:4], aspect="1:1"))
+                                                          references=photos[:4], aspect="1:1", label=f"{a.title} · reference"))
             await self.charge(pid, _row("image", f"reference sheet {a.title}", image_entry, image_entry.unit_price,
                                         usage, t0, image_entry.time.queue_s + image_entry.time.per_output_s))
             sheet = out
@@ -486,6 +518,7 @@ class Engine:
             return
         if n.voice_audio and self.abs(pid, n.voice_audio).exists() and n.voice_seconds:
             return
+        self.step(pid, nid, "Making the voice", n.time.likely_s)
         plan = est.plan_clip(p, n, self.svc.reg)
         entry = plan.voice
         plugin = self.svc.reg.plugin(entry.plugin)
@@ -578,6 +611,12 @@ class Engine:
         end_frame = self._end_frame(p, nid)
         refs = self._references(p, n, plan)
         prompt = build_visual_prompt(p, n)
+        label = f"Clip {numbering(p).get(nid, '')} · {n.title}"
+        speaker = est.speaking_actor(p, n)
+        if plan.route == "avatar" and speaker and speaker.actor and speaker.actor.kind in ("animal", "product"):
+            prompt = (f"A talking {speaker.title}: natural mouth movement in sync with the speech, subtle head and eye movement, "
+                      f"looking at the camera. {prompt}")
+        done_takes = {"n": 0}
         negative = (n.script.negative + ", " if n.script.negative else "") + "extra fingers, deformed hands, warped face, waxy skin, flicker, text, watermark"
         voice = self.abs(pid, n.voice_audio) if n.voice_audio else None
         sem = asyncio.Semaphore(max(self.svc.config.max_parallel_jobs, 1))
@@ -595,7 +634,7 @@ class Engine:
                     audio = voice or media.silence(d / "silence.wav", seconds)
                     _, usage = await self.svc.reg.plugin(a_entry.plugin).generate(
                         AvatarRequest(photo=photo, audio=audio, out=raw, model=a_entry.model,
-                                      prompt=prompt[:500], aspect=p.settings.aspect))
+                                      prompt=prompt[:500], aspect=p.settings.aspect, label=label))
                     cost = seconds * a_entry.unit_price
                     await self.charge(pid, _row("avatar", f"avatar {tag}", a_entry, cost, usage, t0,
                                                 a_entry.time.queue_s + a_entry.time.per_output_s * seconds))
@@ -610,7 +649,7 @@ class Engine:
                         _, usage = await self.svc.reg.plugin(img.plugin).generate(
                             ImageRequest(prompt=prompt + f" (variation {i})" if i > 1 else prompt, out=kf, model=img.model,
                                          references=refs[: int(img.capabilities.get("reference_images", 0) or 0)],
-                                         aspect=p.settings.aspect, negative=negative))
+                                         aspect=p.settings.aspect, negative=negative, label=label))
                         await self.charge(pid, _row("image", f"keyframe {tag}", img, img.unit_price, usage, t0,
                                                     img.time.queue_s + img.time.per_output_s))
                         start = kf
@@ -620,7 +659,7 @@ class Engine:
                         resolution=p.settings.resolution, start_frame=start, end_frame=end_frame,
                         references=refs[: int(ventry.capabilities.get("reference_images", 0) or 0)],
                         negative=negative, audio=bool(ventry.capabilities.get("native_audio")),
-                        camera=n.script.camera), tag)
+                        camera=n.script.camera, label=label), tag)
                     native = bool(ventry.capabilities.get("native_audio"))
                 # post-process: fit frame, exact length, mix voice + sounds
                 fitted = d / f"{tag}_fit.mp4"
@@ -639,10 +678,13 @@ class Engine:
                 take.cost_usd = round((ventry.unit_price * seconds if ventry else 0)
                                       + (0 if handoff or plan.route == "avatar" or not plan.image else plan.image.unit_price), 4)
                 take.quality = self._quality(p, n, final)
+                done_takes["n"] += 1
+                self.step(pid, nid, f"{done_takes['n']} of {count} take(s) finished" if done_takes["n"] < count else "Finishing takes", n.time.likely_s)
                 return take
 
-        self.emit(pid, {"type": "clip", "node": nid, "step": f"making {plan.takes} take(s)"})
         count = len(entries) if entries else plan.takes
+        what = "talking animation" if plan.route == "avatar" else "picture, then video"
+        self.step(pid, nid, f"Making {count} take(s): {what} ({plan.video.id if plan.video else 'free preview'})", n.time.likely_s)
         results = await asyncio.gather(*(one(i) for i in range(1, count + 1)), return_exceptions=True)
         takes = [r for r in results if isinstance(r, Take)]
         errors = [r for r in results if isinstance(r, Exception)]
@@ -662,8 +704,8 @@ class Engine:
         p = self.svc.load(pid)
         n = find(p, nid)
         if p.settings.review_enabled and n.review_enabled:
-            self.emit(pid, {"type": "clip", "node": nid, "step": "reviewing"})
-            for t in takes:
+            for k, t in enumerate(takes, start=1):
+                self.step(pid, nid, f"Review Agent is checking take {k} of {len(takes)}", 30)
                 try:
                     await self.reviewer.review_take(pid, nid, t.id)
                 except Exception as exc:  # review failure must not lose the takes
@@ -708,6 +750,12 @@ class Engine:
         for dep in deps_mod.upstream(p, nid):
             if dep.type == DependencyType.continues_from:
                 up = find(p, dep.from_id)
+                chosen = next((t for t in up.takes if t.id == up.chosen_take), None)
+                try:
+                    if chosen and self.svc.catalog.get(chosen.model).is_free:
+                        continue        # a placeholder card is not a real last frame
+                except KeyError:
+                    pass
                 src = self.abs(pid, up.output) if up.output else None
                 if src and src.exists():
                     frame = self.cdir(pid, nid) / f"handoff_from_{up.id}.png"
@@ -811,7 +859,7 @@ class Engine:
         if plan.lipsync_needed and plan.lipsync and n.voice_audio and plan.route == "video":
             synced = self.cdir(pid, nid) / f"{Path(take.video).stem}_lipsync.mp4"
             t0 = time.monotonic()
-            self.emit(pid, {"type": "clip", "node": nid, "step": "lip-sync"})
+            self.step(pid, nid, "Matching the lips to the voice (lip-sync)", plan.lipsync.time.queue_s + plan.lipsync.time.per_output_s * take.seconds)
             try:
                 _, usage = await self.svc.reg.plugin(plan.lipsync.plugin).sync(src, self.abs(pid, n.voice_audio), synced,
                                                                                 plan.lipsync.model)
@@ -895,12 +943,20 @@ class Engine:
 
     # ================================================================ assembly
     async def assemble(self, pid: str) -> Optional[str]:
+        """Join the finished clips into the final video (transitions, music, subtitles, export)."""
+        self.step(pid, "final", "Joining the clips into one video", 30)
+        try:
+            return await self._assemble(pid)
+        finally:
+            self.end_step(pid, "final")
+            self.emit(pid, {"type": "project"})
+
+    async def _assemble(self, pid: str) -> Optional[str]:
         p = self.svc.load(pid)
         if not all(n.status == NodeStatus.done for n in leaves(p)):
             await self.message(pid, "Some clips are not made yet")
             return None
         await self.message(pid, "stitching the final video")
-        self.emit(pid, {"type": "assemble", "step": "joining parts"})
         size = media.frame_size(p.settings.aspect, p.settings.resolution)
         fps = p.settings.fps
 
@@ -937,7 +993,7 @@ class Engine:
         current = root_out
         p = self.svc.load(pid)
         if p.settings.music:
-            self.emit(pid, {"type": "assemble", "step": "music"})
+            self.step(pid, "final", "Making and mixing the background music", 30)
             try:
                 m_entry = self.svc.reg.choose("music", mode=p.settings.quality_mode)
                 music = out_dir / "music.mp3"
@@ -961,6 +1017,7 @@ class Engine:
             except Exception as exc:
                 traceback.print_exc()
                 await self.message(pid, f"music skipped: {exc}")
+        self.step(pid, "final", "Adding subtitles and exporting the file", 20)
         # subtitles
         srt = out_dir / "final.srt"
         media.write_srt(self._subtitle_entries(p), srt)
@@ -971,18 +1028,34 @@ class Engine:
         except media.MediaError:
             pass
 
+        self._write_credits(p, out_dir)
+
         def done(pr: Project):
             pr.final_output = self.rel(pid, final)
+            pr.final_hash = ProjectStore.final_signature(pr)
             pr.run.message = f"Final video ready ({total:.0f} s)"
         await self.mutate(pid, done, snapshot=True)
         self.emit(pid, {"type": "final", "path": self.rel(pid, final)})
         p = self.svc.load(pid)
         if p.settings.review_enabled:
+            self.step(pid, "final", "Review Agent is checking the whole video", 40)
             try:
                 await self.reviewer.review_node(pid, p.root.id, final)
             except Exception:
                 traceback.print_exc()
         return str(final)
+
+    def _write_credits(self, p: Project, out_dir: Path) -> None:
+        """Credits for stock photos the user chose (many licences require attribution)."""
+        lines = []
+        for c in p.context:
+            for cr in c.analysis.get("credits", []):
+                lines.append(f"{c.title}: \"{cr.get('title', '')}\" by {cr.get('author', 'unknown')} — {cr.get('license', '')} — {cr.get('source_url', '')}")
+        path = out_dir / "credits.txt"
+        if lines:
+            path.write_text("Photo credits\n\n" + "\n".join(lines) + "\n")
+        elif path.exists():
+            path.unlink()
 
     def _subtitle_entries(self, p: Project) -> list[tuple[float, float, str]]:
         entries = []

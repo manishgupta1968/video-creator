@@ -91,6 +91,13 @@
   signup_url: https://www.alibabacloud.com/product/modelstudio
   pricing_url: https://www.alibabacloud.com/help/en/model-studio/video-generation
   need: Optional
+- id: pexels
+  name: Pexels (free photo search)
+  env: [PEXELS_API_KEY]
+  used_for: Search real photos (animals, objects, places) to use as pictures. Wikimedia Commons search works without a key.
+  signup_url: https://www.pexels.com/api/
+  pricing_url: https://www.pexels.com/api/
+  need: Optional (free)
 - id: local
   name: Free local tools
   env: []

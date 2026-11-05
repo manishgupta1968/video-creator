@@ -103,6 +103,24 @@ class ProjectStore:
     def delete(cls, project_id: str) -> None:
         shutil.rmtree(cls.path_for(project_id), ignore_errors=True)
 
+    @classmethod
+    def final_signature(cls, project: Project) -> str:
+        """Fingerprint of everything the final video is made from."""
+        import hashlib
+        from .tree import leaves, walk
+        h = hashlib.sha1()
+        base = cls.path_for(project.id)
+        for leaf in leaves(project):
+            f = base / leaf.output if leaf.output else None
+            stamp = f"{f.stat().st_mtime_ns}:{f.stat().st_size}" if f and f.exists() else "none"
+            h.update(f"{leaf.id}|{leaf.output}|{stamp}|{leaf.transition_in}\n".encode())
+        for n, _ in walk(project.root):
+            if not n.is_leaf:
+                h.update(f"{n.id}|{[c.transition_in for c in n.children]}\n".encode())
+        s = project.settings
+        h.update(f"{s.format}|{s.music}|{s.subtitles}|{s.aspect}|{s.resolution}|{s.fps}".encode())
+        return h.hexdigest()
+
     # ------------------------------------------------------------- undo / redo
     @classmethod
     def _hist(cls, project_id: str) -> Path:

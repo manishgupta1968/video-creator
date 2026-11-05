@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, History, Link2, Plus, Sparkles, Trash2 } from "lucide-react";
+import { ArrowRight, History, Link2, Mic, Plus, Search, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, Node } from "../api";
 import { DEP_TYPES, depLabel, fmtRange, fmtSec, fmtTime, fmtUsd, leaves, TRANSITIONS, useP, useSettings } from "../lib";
 import { Badge, Button, DropZone, Empty, Input, Select, TabList, TabPanel, Tabs } from "../ui";
 import { ContextCard } from "./ContextCard";
+import StockSearch from "./StockSearch";
+import { RecordVoiceDialog } from "./VoiceRecorder";
 
 export default function Inspector({ node }: { node: Node }) {
   const P = useP();
@@ -40,6 +42,8 @@ function ContextTab({ node }: { node: Node }) {
   const off = new Set(node.context_off);
   const offItems = p.context.filter((c) => off.has(c.id));
   const [note, setNote] = useState("");
+  const [recordFor, setRecordFor] = useState<string | null>(null);
+  const [findFor, setFindFor] = useState<string | null>(null);
   const scope = isRoot ? "project" : `node:${node.id}`;
   const addNote = async (target: string) => {
     if (!note.trim()) return;
@@ -83,7 +87,19 @@ function ContextTab({ node }: { node: Node }) {
           <Button size="sm" variant="ghost" onClick={() => P.act("Add", () => api.addContext(P.pid, { type: "location", role: "look_reference", title: "Location", scope }))}><Plus className="h-3.5 w-3.5" />Location</Button>
           <Button size="sm" variant="ghost" onClick={() => P.act("Add", () => api.addContext(P.pid, { type: "object", role: "must_appear", title: "Object", scope }))}><Plus className="h-3.5 w-3.5" />Object</Button>
         </div>
+        <div className="flex flex-wrap gap-1.5">
+          <Button size="sm" variant="outline" onClick={async () => {
+            const r: any = await P.act("Add voice", () => api.addContext(P.pid, { type: "actor", role: "voice", title: "Me (narrator)", scope: "project", actor: { kind: "real_person", description: "my own voice" } }));
+            if (r?.new_id) setRecordFor(r.new_id);
+          }}><Mic className="h-3.5 w-3.5" />My voice</Button>
+          <Button size="sm" variant="outline" onClick={async () => {
+            const r: any = await P.act("Add photo", () => api.addContext(P.pid, { type: "object", role: "must_appear", title: "Photo", scope }));
+            if (r?.new_id) setFindFor(r.new_id);
+          }}><Search className="h-3.5 w-3.5" />Find a photo</Button>
+        </div>
       </section>
+      <RecordVoiceDialog item={p.context.find((c) => c.id === recordFor)} open={!!recordFor} onOpenChange={(o) => !o && setRecordFor(null)} />
+      <StockSearch item={p.context.find((c) => c.id === findFor)} open={!!findFor} onOpenChange={(o) => !o && setFindFor(null)} />
     </div>
   );
 }
