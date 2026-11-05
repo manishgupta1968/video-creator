@@ -132,13 +132,18 @@ class Service:
             if a.name.lower() in existing:
                 c = existing[a.name.lower()]
                 if c.actor:
-                    for f in ("description", "clothing", "behaviour", "voice_description"):
+                    for f in ("description", "clothing", "behaviour", "voice_description", "voice_gender", "voice_age",
+                              "voice_pitch", "voice_pace", "voice_accent"):
                         if not getattr(c.actor, f):
                             setattr(c.actor, f, getattr(a, f))
                 continue
-            p.context.append(ContextItem(type=ContextType.actor, title=a.name, role=ContextRole.must_appear,
+            narrator = a.name.lower().startswith("narrator")
+            p.context.append(ContextItem(type=ContextType.actor, title=a.name, role=ContextRole.voice if narrator else ContextRole.must_appear,
                                          actor=ActorDetails(kind=a.kind, description=a.description, clothing=a.clothing,
-                                                            behaviour=a.behaviour, voice_description=a.voice_description)))
+                                                            behaviour=a.behaviour, voice_description=a.voice_description,
+                                                            voice_gender=a.voice_gender, voice_age=a.voice_age, voice_pitch=a.voice_pitch,
+                                                            voice_pace=a.voice_pace, voice_accent=a.voice_accent)))
+        p.music_advice = d.music_advice or p.music_advice
         p.root.children = []
         for part in d.parts:
             g = Node(kind=NodeKind.goal, title=part.title, goal=part.goal, target_seconds=part.seconds or None)
@@ -732,8 +737,16 @@ class Service:
                 data["analysis"] = {k: v for k, v in data["analysis"].items() if k not in ("auto_photo", "credits")}
                 data["analysis"]["auto_photo_off"] = True
         new = ContextItem.model_validate(data)
-        if new.actor and item.actor and new.actor.voice_description != item.actor.voice_description:
+        profile = ("voice_description", "voice_gender", "voice_age", "voice_pitch", "voice_pace", "voice_accent")
+        if (new.actor and item.actor and any(getattr(new.actor, f) != getattr(item.actor, f) for f in profile)
+                and not new.analysis.get("voice_user_picked") and not new.actor.voice_sample):
+            # the voice profile changed: choose the voice again next time (a voice the user picked by hand stays)
             new.actor.voice_id = None
+            new.actor.voice_provider = None
+            new.actor.voice_name = ""
+            new.actor.voice_note = ""
+            for k in ("voice_shift", "voice_alternatives"):
+                new.analysis.pop(k, None)
         p.context = [new if c.id == cid else c for c in p.context]
         return self.save(p)
 

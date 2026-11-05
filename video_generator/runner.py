@@ -14,11 +14,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from . import casting
 from . import deps as deps_mod
 from . import estimate as est
 from . import media
 from .context import effective_context, item_by_id
-from .models import (ContextItem, ContextRole, ContextType, DependencyType, EstimateBasis, Node, NodeKind,
+from .models import (ActorDetails, ContextItem, ContextRole, ContextType, DependencyType, EstimateBasis, Node, NodeKind,
                      NodeStatus, Project, ShotType, Take, now_iso)
 from .plugins.base import (AvatarRequest, ImageRequest, PluginError, Usage, VideoRequest, VoiceSpec)
 from .project import ProjectStore
@@ -172,10 +173,15 @@ class Engine:
             pr.run.message = "starting"
             if auto_pick is not None:
                 pr.settings.auto_pick = auto_pick
+            explicit = set(targets or []) if mode == "clip" else set()
             for nid in chosen:
                 n = find(pr, nid)
                 if n.status == NodeStatus.failed:
                     n.status = NodeStatus.ready
+                elif nid in explicit and n.status in (NodeStatus.done, NodeStatus.needs_pick):
+                    # "Re-make" on a finished clip: you asked for this clip again, so make it again.
+                    n.status = NodeStatus.ready
+                    deps_mod.mark_downstream_stale(pr, nid)             # clips that continue from it must follow
         await self.mutate(pid, setup)
         ctl = RunCtl()
         ctl.resume.set()
@@ -437,7 +443,8 @@ class Engine:
         for a in actors:
             if a.actor and not a.actor.reference_sheet:
                 await self._reference_sheet(pid, a.id, plan.image)
-            if a.actor and (a.actor.voice_provider != (plan.voice.plugin if plan.voice else None) or not a.actor.voice_id):
+            if a.actor and (a.actor.voice_provider != (plan.voice.plugin if plan.voice else None) or not a.actor.voice_id
+                            or not a.actor.voice_name):       # a voice with no name was chosen by the old text match: choose it again
                 if plan.voice:
                     await self._actor_voice(pid, a.id, plan.voice)
 
@@ -543,15 +550,55 @@ class Engine:
             vid = await plugin.clone(clean, f"{a.title} ({pid})")
             ProjectStore.ledger_add(pid, {"kind": "voice_clone", "what": a.title, "plugin": voice_entry.plugin,
                                           "estimated_usd": 0, "actual_usd": 0})
-        else:
-            desc = (a.actor.voice_description if a.actor else "") or (a.actor.description if a.actor else "")
-            vid = await plugin.match(desc)
+            await self._store_voice(pid, cid, voice_entry.plugin, vid, "your cloned voice", "")
+            return
+        await self._cast_actor(pid, cid, voice_entry)
 
+    async def _store_voice(self, pid: str, cid: str, provider: str, vid: Optional[str], name: str, note: str,
+                           alternatives: Optional[list] = None, profile=None) -> None:
         def f(pr: Project):
             item = item_by_id(pr, cid)
             if item.actor:
                 item.actor.voice_id = vid
-                item.actor.voice_provider = voice_entry.plugin
+                item.actor.voice_provider = provider
+                item.actor.voice_name = name
+                item.actor.voice_note = note
+                if alternatives is not None:
+                    item.analysis["voice_alternatives"] = alternatives
+                item.analysis.pop("voice_shift", None)               # a new voice must be measured again
+                if profile:                                           # show what was decided, so the user can change it
+                    a = item.actor
+                    a.voice_gender = a.voice_gender or profile.gender
+                    a.voice_age = a.voice_age or profile.age
+                    a.voice_pitch = a.voice_pitch or profile.pitch
+                    a.voice_pace = a.voice_pace or profile.pace
+        await self.mutate(pid, f)
+
+    async def _cast_actor(self, pid: str, cid: str, voice_entry) -> None:
+        """Choose this speaker's voice from the planner's profile: gender and age are hard filters, every speaker gets
+        a different voice, and the choice is kept for the whole video."""
+        p = self.svc.load(pid)
+        a = item_by_id(p, cid)
+        plugin = self.svc.reg.plugin(voice_entry.plugin)
+        profile = casting.profile_for(a, p)
+        taken = tuple(c.actor.voice_id for c in p.context
+                      if c.id != cid and c.actor and c.actor.voice_id and c.actor.voice_provider == voice_entry.plugin)
+        cands, note = await casting.choose_voice(plugin, profile, taken)
+        top = cands[0] if cands else None
+        await self._store_voice(pid, cid, voice_entry.plugin, top.voice_id if top else None, top.name if top else "", note,
+                                [vars(c) for c in cands[:6]], profile)
+
+    async def _ensure_narrator(self, pid: str) -> None:
+        """A narrator is a speaker like any other: give them an actor card (voice only) so the user can see and edit the voice."""
+        p = self.svc.load(pid)
+        for c in p.context:
+            if c.type == ContextType.actor and c.actor and ("narrat" in c.title.lower() or c.role == ContextRole.voice):
+                return
+
+        def f(pr: Project):
+            pr.context.append(ContextItem(type=ContextType.actor, title="Narrator", role=ContextRole.voice, scope="project",
+                                          actor=ActorDetails(kind="ai_person", description="the voice-over narrator (never seen)",
+                                                             voice_description="warm, clear, natural narrator")))
         await self.mutate(pid, f)
 
     # ---------------------------------------------------------------- voice
@@ -569,12 +616,28 @@ class Engine:
                 nn.voice_audio, nn.voice_seconds = None, None
             await self.mutate(pid, f)
             return
-        if n.voice_audio and self.abs(pid, n.voice_audio).exists() and n.voice_seconds:
-            return
-        self.step(pid, nid, "Making the voice", n.time.likely_s)
         plan = est.plan_clip(p, n, self.svc.reg)
         entry = plan.voice
         plugin = self.svc.reg.plugin(entry.plugin)
+        if any(sp == "narrator" for sp, _, _ in lines):
+            await self._ensure_narrator(pid)
+        for sp in {sp for sp, _, _ in lines}:                        # every speaker has a voice chosen from their profile
+            item = self._speaker_item(self.svc.load(pid), sp)
+            if item and item.actor and not entry.is_free and not (
+                    item.actor.voice_id and item.actor.voice_provider == entry.plugin and item.actor.voice_name):
+                await self._actor_voice(pid, item.id, entry)
+        p = self.svc.load(pid)
+        n = find(p, nid)
+        voices_now = {sp: (self._speaker_item(p, sp).actor.voice_id if self._speaker_item(p, sp) and self._speaker_item(p, sp).actor else None)
+                      for sp in {sp for sp, _, _ in lines}}
+        lines_file = d / "voice_lines.json"
+        if n.voice_audio and self.abs(pid, n.voice_audio).exists() and n.voice_seconds and lines_file.exists():
+            try:
+                if json.loads(lines_file.read_text()).get("voices") == voices_now:
+                    return                                           # made with these same voices: nothing to do
+            except ValueError:
+                pass                                                 # (older files have no voice list: make it again)
+        self.step(pid, nid, "Making the voice", n.time.likely_s)
         parts, timings, chars = [], [], 0
         t0 = time.monotonic()
         for i, (speaker, text, emotion) in enumerate(lines):
@@ -582,23 +645,44 @@ class Engine:
             out = d / f"line_{i:02d}.wav"
             try:
                 await plugin.synthesize(text, spec, out, entry.model)
-            except PluginError:
+            except PluginError as exc:
                 if entry.is_free:
                     raise
-                # fall back to a free local voice so the run can continue
-                for alt in ("kokoro", "system_voice", "flite"):
-                    if self.svc.reg.configured(alt):
-                        await self.svc.reg.plugin(alt).synthesize(text, VoiceSpec(description=spec.description), out)
-                        break
-                else:
-                    raise
+                # a voice the vendor refuses (wrong id, no permission): try the speaker's next best voices first
+                item = self._speaker_item(p, speaker)
+                tried = False
+                for alt in ((item.analysis.get("voice_alternatives") or []) if item else []):
+                    if alt.get("voice_id") in (None, "", spec.voice_id):
+                        continue
+                    try:
+                        await plugin.synthesize(text, dataclasses.replace(spec, voice_id=alt["voice_id"]), out, entry.model)
+                    except PluginError:
+                        continue
+                    await self._store_voice(pid, item.id, entry.plugin, alt["voice_id"], alt.get("name", ""),
+                                            alt.get("note", ""), item.analysis.get("voice_alternatives"), None)
+                    tried = True
+                    break
+                if not tried:
+                    # last resort: a free local voice, so the run can continue (and say so)
+                    for alt in ("kokoro", "system_voice", "flite"):
+                        if self.svc.reg.configured(alt):
+                            await self.svc.reg.plugin(alt).synthesize(text, dataclasses.replace(spec, voice_id=None), out)
+                            if item:
+                                await self._store_voice(pid, item.id, alt, None, f"free {alt} voice",
+                                                        f"{entry.id} refused the voice ({str(exc)[:80]}); a free voice was used instead", None, None)
+                            break
+                    else:
+                        raise
+                p = self.svc.load(pid)
+            out = await self._fit_voice(pid, p, speaker, out)
             parts.append(out)
             timings.append({"speaker": speaker, "text": text, "seconds": round(media.probe_duration(out), 2)})
             chars += len(text)
         voice = d / "voice.wav"
         media.concat_audio(parts, voice, gap=est.LINE_PAUSE, lead=est.EDGE_PAD)
         secs = media.probe_duration(voice)
-        (d / "voice_lines.json").write_text(json.dumps({"lead": est.EDGE_PAD, "gap": est.LINE_PAUSE, "lines": timings}))
+        (d / "voice_lines.json").write_text(json.dumps({"lead": est.EDGE_PAD, "gap": est.LINE_PAUSE, "lines": timings,
+                                                         "voices": self._voices_of(self.svc.load(pid), lines)}))
         cost = chars / 1000 * entry.unit_price
         await self.charge(pid, {"kind": "voice", "what": f"voice {numbering(p).get(nid, '')}", "plugin": entry.plugin,
                                 "catalog_id": entry.id, "model": entry.model, "units": f"{chars} chars",
@@ -613,21 +697,51 @@ class Engine:
         await self.mutate(pid, f)
         self.emit(pid, {"type": "clip", "node": nid, "step": "voice ready", "seconds": secs})
 
-    def _voice_spec(self, p: Project, speaker: str, plugin: str, emotion: str) -> VoiceSpec:
-        actor: Optional[ContextItem] = None
+    async def _fit_voice(self, pid: str, p: Project, speaker: str, wav: Path) -> Path:
+        """Check the finished voice against the speaker's profile (pitch, pace) and correct it a little.
+        The first measurable line decides the correction; later lines of the same voice reuse it, so one speaker
+        never changes pitch from line to line."""
+        item = self._speaker_item(p, speaker)
+        prof = casting.profile_for(item, p)
+        known = None
+        if item:
+            saved = item.analysis.get("voice_shift") or {}
+            if saved.get("voice_id") == (item.actor.voice_id if item.actor else None) and "semitones" in saved:
+                known = float(saved["semitones"])
+        out, note, shift = await asyncio.to_thread(casting.fit_voice, wav, prof, known)
+        if item and shift is not None and known is None:
+            vid = item.actor.voice_id if item.actor else None
+
+            def f(pr: Project):
+                it = item_by_id(pr, item.id)
+                it.analysis["voice_shift"] = {"voice_id": vid, "semitones": shift}
+                if note and it.actor:
+                    it.actor.voice_note = (it.actor.voice_note + "; " if it.actor.voice_note else "") + note
+            await self.mutate(pid, f)
+        return out
+
+    def _voices_of(self, p: Project, lines) -> dict:
+        out = {}
+        for sp in {sp for sp, _, _ in lines}:
+            it = self._speaker_item(p, sp)
+            out[sp] = it.actor.voice_id if it and it.actor else None
+        return out
+
+    def _speaker_item(self, p: Project, speaker: str) -> Optional[ContextItem]:
         for c in p.context:
             if c.type == ContextType.actor and (c.id == speaker or c.title.lower() == speaker.lower()):
-                actor = c
-        if not actor and speaker == "narrator":
+                return c
+        if speaker == "narrator":
             for c in p.context:
                 if c.type == ContextType.actor and c.actor and ("narrat" in c.title.lower() or c.role == ContextRole.voice):
-                    actor = c
-                    break
-        if actor and actor.actor:
-            vid = actor.actor.voice_id if actor.actor.voice_provider == plugin else None
-            return VoiceSpec(voice_id=vid, description=actor.actor.voice_description or actor.actor.description,
-                             language=p.settings.language, emotion=emotion)
-        return VoiceSpec(description="warm clear narrator", language=p.settings.language, emotion=emotion)
+                    return c
+        return None
+
+    def _voice_spec(self, p: Project, speaker: str, plugin: str, emotion: str) -> VoiceSpec:
+        actor = self._speaker_item(p, speaker)
+        prof = casting.profile_for(actor, p)
+        vid = actor.actor.voice_id if actor and actor.actor and actor.actor.voice_provider == plugin else None
+        return casting.spec_from(prof, vid, emotion)
 
     # ---------------------------------------------------------------- takes
     async def compare(self, pid: str, nid: str, model_ids: list[str]) -> None:
@@ -681,7 +795,13 @@ class Engine:
                 take = Take(version=version, index=i, model=ventry.id if ventry else "")
                 raw = d / f"{tag}_raw.mp4"
                 if plan.route == "avatar":
-                    photo = self._actor_photo(p, n)
+                    # the picture that speaks: where the previous clip ended (continuity), else the look this character
+                    # already has in the video, else their photo; always fitted to the video's shape
+                    photo = handoff or (self._anchor(p, speaker) if speaker else None) or self._actor_photo(p, n)
+                    if photo:
+                        fitted_photo = d / f"{tag}_speaker.png"
+                        media.fit_image(photo, fitted_photo, p.settings.aspect, mode=p.settings.fill if p.settings.fill != "crop" else "cover")
+                        photo = fitted_photo
                     audio = voice or media.silence(d / "silence.wav", seconds)
                     nonhuman = bool(speaker and speaker.actor and speaker.actor.kind in ("animal", "product"))
                     alts = self.svc.reg.candidates("avatar", mode=p.settings.quality_mode, need={"non_human": True} if nonhuman else None)
@@ -702,10 +822,12 @@ class Engine:
                     start = handoff
                     if not start:
                         kf = d / f"{tag}_keyframe.png"
+                        compose = f" Compose for a {p.settings.aspect} frame with the subject well inside it and room around."
                         await self._make_image(pid, plan.image, lambda e: ImageRequest(
-                            prompt=prompt + f" (variation {i})" if i > 1 else prompt, out=kf, model=e.model,
+                            prompt=(prompt + f" (variation {i})" if i > 1 else prompt) + compose, out=kf, model=e.model,
                             references=refs[: int(e.capabilities.get("reference_images", 0) or 0)],
                             aspect=p.settings.aspect, negative=negative, label=label), f"keyframe {tag}", nid)
+                        media.fit_image(kf, kf, p.settings.aspect, mode="cover")     # picture models make 3:2; the video is not
                         start = kf
                     take.keyframe = self.rel(pid, start)
                     need_v = {"start_frame": True} if start else {}
@@ -721,9 +843,13 @@ class Engine:
                     native = bool(ventry.capabilities.get("native_audio"))
                 # post-process: fit frame, exact length, mix voice + sounds
                 fitted = d / f"{tag}_fit.mp4"
-                media.normalize_clip(raw, fitted, size, p.settings.fps, seconds=seconds, keep_audio=native)
+                media.normalize_clip(raw, fitted, size, p.settings.fps, seconds=seconds, keep_audio=native, fill=p.settings.fill)
                 final = d / f"{tag}.mp4"
                 sounds = [(path, 0.5) for path in self._sounds(p, nid)]
+                if not entries and est.wants_ambience(p, n, plan):
+                    amb = await self._ambience(pid, nid, p, n, fitted, seconds, d / f"{tag}_amb.wav", tag)
+                    if amb:
+                        sounds.append((amb, 0.35 if (voice or plan.route == "avatar") else 0.8))
                 if plan.route == "avatar":
                     media.replace_audio(fitted, None, final, keep_original=1.0, extra=sounds)
                 else:
@@ -776,6 +902,32 @@ class Engine:
         if not entries and (len([t for t in n.takes if t.version == version]) == 1 or p.settings.auto_pick):
             best = self._best_take(p, n, version)
             await self._finalize_clip(pid, nid, best.id)
+
+    async def _ambience(self, pid: str, nid: str, p: Project, n: Node, clip: Path, seconds: float, out: Path, tag: str) -> Optional[Path]:
+        """Natural sound for a clip that has none of its own, from the planner's sound notes. A sound model that fails
+        never stops the clip: the next one is tried, and the free local sound is the last resort."""
+        reg = self.svc.reg
+        notes = (n.script.sound_notes or "").strip() or f"natural ambience that fits: {n.script.visual[:120]}"
+        self.step(pid, nid, "Making natural sound", 15)
+        real = [e for e in reg.candidates("sfx", mode=p.settings.quality_mode) if not e.is_free]
+        if real:
+            async def call(e):
+                _, u = await reg.plugin(e.plugin).generate(notes, seconds, out, e.model, clip, dict(e.params))
+                return u
+            try:
+                await self._with_fallback(pid, real[0], real[1:], call, "sfx", f"natural sound {tag}",
+                                          cost_of=lambda e: e.unit_price * seconds,
+                                          expected_of=lambda e: e.time.queue_s + e.time.per_output_s * seconds, nid=nid, any_error=True)
+                return out
+            except Exception as exc:
+                traceback.print_exc()
+                await self.message(pid, f"natural sound model failed ({str(exc)[:120]}); a free sound is used instead")
+        try:
+            local = reg.catalog.get("local_ambience")
+            await reg.plugin(local.plugin).generate(notes, seconds, out, local.model)
+            return out
+        except Exception:
+            return None
 
     async def _video_parts(self, pid: str, entry, req: VideoRequest, tag: str, alternatives=(), nid: Optional[str] = None):
         """Make the clip; if it is longer than the model allows, chain parts from each last frame.
@@ -851,9 +1003,13 @@ class Engine:
         for e in eff:
             c = e.item
             if c.type == ContextType.actor and c.id in used and c.actor:
+                anchor = self._anchor(p, c)
+                if anchor:
+                    out.append(anchor)               # the look this character already has in the video comes first
                 for f in (c.actor.reference_sheet or c.files)[:2]:
                     if f.lower().endswith(IMG_EXT):
                         out.append(self.abs(p.id, f))
+        out += self._scene_frames(p, n)
         for role in (ContextRole.must_appear, ContextRole.start_frame, ContextRole.look_reference):
             for e in eff:
                 c = e.item
@@ -865,6 +1021,57 @@ class Engine:
                 seen.add(str(x))
                 uniq.append(x)
         return uniq
+
+    def _anchor(self, p: Project, c: ContextItem) -> Optional[Path]:
+        """The frame where this character first appeared in a made clip. It keeps their look the same in every later
+        scene, unless the user supplied their own photo (then the photo stays the truth)."""
+        rel = c.analysis.get("anchor")
+        user_photo = bool(c.files) and not c.analysis.get("auto_photo")
+        if rel and not user_photo:
+            path = self.abs(p.id, rel)
+            if path and path.exists():
+                return path
+        return None
+
+    def _scene_frames(self, p: Project, n: Node) -> list[Path]:
+        """Frames of earlier clips of the SAME scene (planned as 'same location'), so a new angle keeps the place,
+        light and props. Clips that continue a shot use the hand-off frame instead; new scenes carry only the actors."""
+        out: list[Path] = []
+        for dep in deps_mod.upstream(p, n.id):
+            if dep.type == DependencyType.same_location:
+                up = find(p, dep.from_id)
+                src = self.abs(p.id, up.output) if up.output else None
+                if src and src.exists():
+                    frame = self.cdir(p.id, n.id) / f"scene_from_{up.id}.png"
+                    try:
+                        media.last_frame(src, frame)
+                        out.append(frame)
+                    except media.MediaError:
+                        pass
+        return out
+
+    async def _remember_anchor(self, pid: str, nid: str, video: Path) -> None:
+        """When a character appears alone in a finished clip for the first time, keep a frame of them as the anchor
+        for their look in all later clips."""
+        p = self.svc.load(pid)
+        n = find(p, nid)
+        if not n.script or len(_actor_ids_in(n)) != 1:
+            return
+        cid = next(iter(_actor_ids_in(n)))
+        item = next((c for c in p.context if c.id == cid and c.type == ContextType.actor and c.actor), None)
+        if not item or item.analysis.get("anchor") or (item.actor and item.actor.kind in ("real_person", "digital_twin")):
+            return                                       # real people always keep their own photos
+        dst = self.pdir(pid) / "cast" / cid / "anchor.png"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            media.extract_frame(video, dst, at=max(media.probe_duration(video) * 0.4, 0.0))
+        except media.MediaError:
+            return
+
+        def f(pr: Project):
+            it = item_by_id(pr, cid)
+            it.analysis["anchor"] = self.rel(pid, dst)
+        await self.mutate(pid, f)
 
     def _actor_photo(self, p: Project, n: Node) -> Optional[Path]:
         used = _actor_ids_in(n)
@@ -932,7 +1139,7 @@ class Engine:
                                                                                 plan.lipsync.model)
                 fixed = synced.with_name(synced.stem + "_fit.mp4")
                 size = media.frame_size(p.settings.aspect, p.settings.resolution)
-                media.normalize_clip(synced, fixed, size, p.settings.fps, seconds=take.seconds)
+                media.normalize_clip(synced, fixed, size, p.settings.fps, seconds=take.seconds, fill=p.settings.fill)
                 out = fixed
                 await self.charge(pid, _row("lipsync", f"lip-sync {nid}", plan.lipsync, take.seconds * plan.lipsync.unit_price,
                                             usage, t0, plan.lipsync.time.queue_s + plan.lipsync.time.per_output_s * take.seconds))
@@ -948,6 +1155,12 @@ class Engine:
             nn.cost.actual_usd = round(sum(r.get("actual_usd", 0) for r in ledger
                                            if nid in r.get("what", "") or r.get("node") == nid), 4) or take.cost_usd
         await self.mutate(pid, f, snapshot=True)
+        try:
+            real = bool(take.model) and not self.svc.catalog.get(take.model).is_free
+            if real:
+                await self._remember_anchor(pid, nid, out)
+        except Exception:                               # the anchor is a bonus: never fail a finished clip
+            traceback.print_exc()
         self.emit(pid, {"type": "clip", "node": nid, "status": "done"})
 
     # ---------------------------------------------------------------- slides & user clips
@@ -1176,6 +1389,8 @@ def build_visual_prompt(p: Project, n: Node) -> str:
     s = n.script
     style = effective_style(p, n.id)
     parts = [s.visual.strip()]
+    if s.start_state.strip():
+        parts.append(f"The clip begins as: {s.start_state.strip()}")
     used = _actor_ids_in(n)
     shot_actor = {a.actor_id: a for a in s.actors_in_shot}
     for e in effective_context(p, n.id):
@@ -1194,6 +1409,8 @@ def build_visual_prompt(p: Project, n: Node) -> str:
             parts.append(f"Look: {c.text}")
     if s.action_beats:
         parts.append("Action: " + "; then ".join(s.action_beats))
+    if s.end_state.strip():
+        parts.append(f"The clip ends as: {s.end_state.strip()}")
     if s.camera:
         parts.append(f"Camera: {s.camera}")
     if style:

@@ -56,6 +56,15 @@ def probe(path: Path) -> dict:
     return json.loads(out)
 
 
+def video_size(path: Path) -> tuple[int, int]:
+    """(width, height) of the first video stream, or (0, 0)."""
+    try:
+        v = next(x for x in probe(path)["streams"] if x.get("codec_type") == "video")
+        return int(v["width"]), int(v["height"])
+    except Exception:
+        return 0, 0
+
+
 def probe_duration(path: Path) -> float:
     try:
         return float(probe(path)["format"]["duration"])
@@ -315,10 +324,25 @@ def ambient_pad(out: Path, seconds: float, mood: str = "") -> Path:
 
 # ----------------------------------------------------------------- video building
 def normalize_clip(src: Path, out: Path, size: tuple[int, int], fps: int, seconds: Optional[float] = None,
-                   keep_audio: bool = True) -> Path:
-    """Scale/pad to frame, set fps, optional exact length (trim or freeze last frame)."""
+                   keep_audio: bool = True, fill: str = "black") -> Path:
+    """Fit to the frame, set fps, optional exact length (trim or freeze last frame).
+
+    fill: what goes around a picture that is not the frame's shape. black (bars), blur (a blurred, enlarged
+    copy of the picture behind it) or crop (fill the frame, losing the edges). Matching shapes are not touched."""
     w, h = size
-    vf = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={fps},format=yuv420p"
+    sw, sh = video_size(src)
+    if sw and sh and abs(sw / sh - w / h) < 0.02:
+        fill = "same"                                   # already the right shape: only scale, never blur or pad
+    if fill == "same":
+        fit = f"scale={w}:{h}"
+    elif fill == "blur":
+        fit = (f"split[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},boxblur=24:4[bg];"
+               f"[b]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2")
+    elif fill == "crop":
+        fit = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
+    else:
+        fit = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black"
+    vf = f"{fit},setsar=1,fps={fps},format=yuv420p"
     args = ["-i", str(src)]
     if seconds:
         dur = probe_duration(src)
@@ -334,6 +358,177 @@ def normalize_clip(src: Path, out: Path, size: tuple[int, int], fps: int, second
     else:
         args += ["-shortest"] if not a_ok else []
     ff(*args, str(out))
+    return out
+
+
+def fit_image(src: Path, out: Path, aspect: str, mode: str = "cover", long_side: int = 1536) -> Path:
+    """Make a picture exactly the shape of the video (aspect like 16:9, 9:16, 1:1, 4:5).
+
+    cover: fill the frame and crop the overflow (centre). blur: keep the whole picture on a blurred copy of itself.
+    black: keep the whole picture on black. Pictures that already have the shape are only copied."""
+    from PIL import Image, ImageFilter
+    try:
+        a, b = (float(x) for x in aspect.split(":"))
+    except ValueError:
+        a, b = 16.0, 9.0
+    target = a / b
+    img = Image.open(src).convert("RGB")
+    iw, ih = img.size
+    if abs(iw / ih - target) < 0.02:
+        img.save(out)
+        return out
+    tw, th = (long_side, round(long_side / target)) if target >= 1 else (round(long_side * target), long_side)
+    if mode == "cover":
+        scale = max(tw / iw, th / ih)
+        r = img.resize((max(round(iw * scale), tw), max(round(ih * scale), th)), Image.LANCZOS)
+        left, top = (r.width - tw) // 2, (r.height - th) // 2
+        canvas = r.crop((left, top, left + tw, top + th))
+    else:
+        scale = min(tw / iw, th / ih)
+        fg = img.resize((max(round(iw * scale), 1), max(round(ih * scale), 1)), Image.LANCZOS)
+        if mode == "blur":
+            bs = max(tw / iw, th / ih)
+            bg = img.resize((max(round(iw * bs), tw), max(round(ih * bs), th)), Image.BILINEAR)
+            bl, bt = (bg.width - tw) // 2, (bg.height - th) // 2
+            canvas = bg.crop((bl, bt, bl + tw, bt + th)).filter(ImageFilter.GaussianBlur(28))
+        else:
+            canvas = Image.new("RGB", (tw, th), (0, 0, 0))
+        canvas.paste(fg, ((tw - fg.width) // 2, (th - fg.height) // 2))
+    canvas.save(out)
+    return out
+
+
+def bars(video_or_image: Path, at: float = 0.5) -> dict:
+    """Detect black bars: the share of each side that is (almost) pure black. Used to prove nothing is padded with black."""
+    import subprocess
+    import tempfile
+    from PIL import Image
+    tmp = Path(tempfile.mkdtemp()) / "f.png"
+    if video_or_image.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+        img = Image.open(video_or_image).convert("L")
+    else:
+        extract_frame(video_or_image, tmp, at=at)
+        img = Image.open(tmp).convert("L")
+    w, h = img.size
+    px = img.load()
+
+    def dark_cols() -> tuple[int, int]:
+        def run(rng):
+            n = 0
+            for x in rng:
+                if max(px[x, y] for y in range(0, h, max(h // 40, 1))) <= 12:
+                    n += 1
+                else:
+                    break
+            return n
+        return run(range(w)), run(range(w - 1, -1, -1))
+
+    def dark_rows() -> tuple[int, int]:
+        def run(rng):
+            n = 0
+            for y in rng:
+                if max(px[x, y] for x in range(0, w, max(w // 40, 1))) <= 12:
+                    n += 1
+                else:
+                    break
+            return n
+        return run(range(h)), run(range(h - 1, -1, -1))
+    l, r = dark_cols()
+    t, b = dark_rows()
+    return {"left": l / w, "right": r / w, "top": t / h, "bottom": b / h}
+
+
+# ----------------------------------------------------------------- voice pitch
+def voice_pitch(path: Path) -> Optional[float]:
+    """Median pitch of the speech in Hz (about 85-180 for most men, 165-260 for most women), or None.
+    Plain autocorrelation on 8 kHz audio: no extra libraries needed."""
+    import array
+    import statistics
+    import tempfile
+    import wave
+    tmp = Path(tempfile.mkdtemp()) / "p.wav"
+    try:
+        ff("-i", str(path), "-vn", "-ac", "1", "-ar", "8000", "-sample_fmt", "s16", str(tmp))
+        with wave.open(str(tmp)) as w:
+            data = array.array("h", w.readframes(w.getnframes()))
+    except Exception:
+        return None
+    sr, frame, hop = 8000, 320, 160
+    if len(data) < frame * 3:
+        return None
+    peak = max(abs(x) for x in data) or 1
+    x = [v / peak for v in data]
+    lo, hi = sr // 400, sr // 70
+    try:
+        import numpy as np
+        arr = np.asarray(x)
+    except ImportError:
+        arr = None
+    f0s: list[float] = []
+    for i in range(0, len(x) - frame, hop):
+        seg = x[i:i + frame]
+        if (sum(v * v for v in seg) / frame) ** 0.5 < 0.06:
+            continue
+        mean = sum(seg) / frame
+        seg = [v - mean for v in seg]
+        if arr is not None:
+            s = np.asarray(seg)
+            ac = np.correlate(s, s, "full")[frame - 1:]
+            k = lo + int(np.argmax(ac[lo:hi]))
+            ratio = ac[k] / (ac[0] + 1e-9)
+        else:
+            ac0 = sum(v * v for v in seg) or 1e-9
+            best_k, best = lo, -1.0
+            for k_ in range(lo, hi):
+                c = sum(seg[j] * seg[j + k_] for j in range(frame - k_))
+                if c > best:
+                    best, best_k = c, k_
+            k, ratio = best_k, best / ac0
+        if ratio > 0.45:
+            f0s.append(sr / k)
+    return round(statistics.median(f0s), 1) if len(f0s) >= 5 else None
+
+
+def shift_voice(src: Path, out: Path, semitones: float = 0.0, tempo: float = 1.0) -> Path:
+    """Change a voice's pitch (semitones, negative = deeper) and speed (tempo < 1 = slower) with ffmpeg.
+    The pitch change keeps the speed; asetrate+atempo does the work, no extra libraries."""
+    rate = 44100
+    ratio = 2 ** (semitones / 12.0)
+    chain = [f"asetrate={rate * ratio:.0f}", f"aresample={rate}"]
+    speed = tempo / ratio                      # undo the speed change that asetrate causes, then apply the wanted tempo
+    while speed < 0.5 or speed > 2.0:
+        step = 0.5 if speed < 0.5 else 2.0
+        chain.append(f"atempo={step}")
+        speed /= step
+    chain.append(f"atempo={speed:.4f}")
+    ff("-i", str(src), "-af", ",".join(chain), "-ar", str(rate), str(out))
+    return out
+
+
+# ----------------------------------------------------------------- free natural sound
+AMBIENCE_RECIPES = {
+    # keywords -> (noise colour, low-pass Hz, high-pass Hz, slow movement Hz, level)
+    "wind": ("pink", 900, 80, 0.12, 0.22), "breeze": ("pink", 700, 60, 0.10, 0.18), "grass": ("pink", 1200, 120, 0.15, 0.18),
+    "rain": ("white", 6000, 600, 0.0, 0.22), "storm": ("brown", 2500, 60, 0.08, 0.30), "sea": ("brown", 1500, 50, 0.09, 0.25),
+    "wave": ("brown", 1500, 50, 0.09, 0.25), "river": ("white", 3500, 300, 0.1, 0.18),
+    "crowd": ("pink", 2800, 200, 0.3, 0.2), "street": ("brown", 2500, 90, 0.2, 0.2), "traffic": ("brown", 1800, 60, 0.15, 0.22),
+    "office": ("brown", 1200, 70, 0.0, 0.07), "room": ("brown", 900, 60, 0.0, 0.06), "studio": ("brown", 900, 60, 0.0, 0.05),
+    "kitchen": ("brown", 1400, 70, 0.0, 0.08), "forest": ("pink", 3000, 150, 0.12, 0.16), "city": ("brown", 2200, 80, 0.18, 0.2),
+}
+
+
+def local_ambience(out: Path, seconds: float, notes: str = "") -> Path:
+    """A free, plain natural-sound bed made with ffmpeg noise filters, picked from the words in the sound notes
+    (wind, rain, sea, crowd, traffic, office, room tone ...). It is a safety net: a real sound model sounds better."""
+    text = (notes or "").lower()
+    recipe = next((r for k, r in AMBIENCE_RECIPES.items() if k in text), ("brown", 900, 60, 0.0, 0.06))   # default: quiet room tone
+    colour, lp, hp, move, level = recipe
+    sec = max(seconds, 0.5)
+    chain = f"highpass=f={hp},lowpass=f={lp},volume={level * 2.5:.3f}"
+    if move > 0:
+        chain += f",tremolo=f={move}:d=0.5"
+    chain += f",afade=t=in:d=0.4,afade=t=out:st={max(sec - 0.6, 0):.2f}:d=0.6,aformat=channel_layouts=stereo"
+    ff("-f", "lavfi", "-i", f"anoisesrc=color={colour}:r=44100:d={sec:.2f}", "-af", chain, str(out))
     return out
 
 
@@ -450,6 +645,12 @@ def to_format(video: Path, out: Path, fmt: str) -> Path:
            "-movflags", "+faststart", "-f", "mov", str(out))
     else:
         ff("-i", str(video), "-c", "copy", "-movflags", "+faststart", str(out))
+    return out
+
+
+def silent_proxy(video: Path, out: Path, height: int = 360) -> Path:
+    """A small copy of a clip without sound (for models that only need to see the pictures)."""
+    ff("-i", str(video), "-an", "-vf", f"scale=-2:{height}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", str(out))
     return out
 
 

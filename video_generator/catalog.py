@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from .config import vg_home
 
-JOBS = ("video", "image", "voice", "avatar", "lipsync", "music", "llm", "transcribe")
+JOBS = ("video", "image", "voice", "avatar", "lipsync", "music", "sfx", "llm", "transcribe")
 
 
 class Price(BaseModel):

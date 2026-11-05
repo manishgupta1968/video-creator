@@ -2,7 +2,7 @@ import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clapperboard, Film, Mic
 import { useMemo, useState } from "react";
 import { api, fileUrl, Line, Node, Review, Script, Take } from "../api";
 import { fmtRange, fmtSec, fmtTime, fmtUsd, leaves, SHOT_TYPES, STATUS, useP, useSettings } from "../lib";
-import { Badge, Button, Card, cn, Dialog, Editable, Empty, Select, Switch, Textarea, Tip } from "../ui";
+import { Badge, Button, Card, cn, Dialog, Editable, Empty, HelpTip, Select, Switch, Textarea, Tip } from "../ui";
 import { useRun } from "./ConfirmRun";
 import { FinalVideoDialog, PreviewBadge } from "./Banners";
 import { commandBus, finalPlayer } from "../lib";
@@ -48,6 +48,14 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
           <span className="text-muted">· ~{fmtTime(node.time.likely_s)} to make</span>
         </div>
       </Card>
+      {isRoot && p.music_advice && (
+        <Card className="flex flex-wrap items-center gap-3 p-3 text-xs">
+          <div className="min-w-0 flex-1"><span className="font-semibold">Music suggestion from the plan:</span> <span className="text-muted">{p.music_advice}</span></div>
+          {!p.settings.music && !/^none/i.test(p.music_advice) && (
+            <Button size="sm" variant="outline" onClick={() => P.act("Save", () => api.patch(P.pid, { settings: { music: true } }), "Background music is on")}>Turn music on</Button>
+          )}
+        </Card>
+      )}
       {isRoot && sum.final_ready && (
         <Card data-help="final-card" className="overflow-hidden">
           <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
@@ -317,8 +325,15 @@ function ClipEditor({ node }: { node: Node }) {
             <Editable value={s.narration} onSave={(narration) => saveScript({ narration })} multiline placeholder="Optional voice-over" />
           </div>
           <div className="grid gap-4 p-4 sm:grid-cols-2">
-            <div><div className="field-label mb-1">Sound</div><Editable value={s.sound_notes} onSave={(sound_notes) => saveScript({ sound_notes })} placeholder="Ambience, effects" /></div>
+            <div><HelpTip id="natural-sound"><div className="field-label mb-1">Natural sound (the plan)</div></HelpTip>
+              <Editable value={s.sound_notes} onSave={(sound_notes) => saveScript({ sound_notes })} placeholder="Wind, birds, room tone, footsteps… or “silence”" /></div>
             <div><div className="field-label mb-1">Avoid</div><Editable value={s.negative} onSave={(negative) => saveScript({ negative })} placeholder="e.g. extra fingers, text" /></div>
+          </div>
+          <div className="grid gap-4 p-4 sm:grid-cols-2">
+            <div><div className="field-label mb-1">The clip starts as</div>
+              <Editable value={s.start_state || ""} onSave={(start_state) => saveScript({ start_state })} multiline placeholder="Pose, place, time of day, framing, light (a clip that continues the previous one starts where it ended)" /></div>
+            <div><div className="field-label mb-1">The clip ends as</div>
+              <Editable value={s.end_state || ""} onSave={(end_state) => saveScript({ end_state })} multiline placeholder="How it ends: the next clip that continues starts from here" /></div>
           </div>
         </Card>
       )}

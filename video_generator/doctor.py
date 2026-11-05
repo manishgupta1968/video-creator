@@ -80,6 +80,23 @@ async def check_elevenlabs(client: httpx.AsyncClient, model: str = "eleven_v3") 
         return out
     else:
         out.append(Check("ElevenLabs key", WARN, f"ElevenLabs answered {r.status_code}: {_short(r)}"))
+    try:
+        vr = await client.get("https://api.elevenlabs.io/v1/voices", headers=headers)
+    except httpx.HTTPError:
+        vr = None
+    if vr is not None:
+        voices = vr.json().get("voices") if vr.status_code == 200 and isinstance(vr.json(), dict) else None
+        if isinstance(voices, list):
+            def n(g):
+                return sum(1 for v in voices if (v.get("labels") or {}).get("gender") == g)
+            out.append(Check("ElevenLabs voices", OK, f"The key can list voices: {len(voices)} found ({n('male')} male, {n('female')} female). "
+                             "The tool chooses each speaker's voice from this list."))
+        elif vr.status_code in (401, 403):
+            out.append(Check("ElevenLabs voices", WARN, "This key cannot list voices, so the tool cannot pick the best voice for each speaker "
+                             "and falls back to a short list of stock voices. In ElevenLabs open Developers → API Keys, edit the key and allow "
+                             "'Voices: Read' (or make a new key without restrictions) and save it in Settings."))
+        else:
+            out.append(Check("ElevenLabs voices", SKIP, f"Could not check the voice list (ElevenLabs answered {vr.status_code})."))
     if m.status_code == 200 and isinstance(m.json(), list):
         ids = [x.get("model_id", "") for x in m.json()]
         out.append(Check("ElevenLabs voice model", OK if model in ids else WARN,

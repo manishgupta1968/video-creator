@@ -3,7 +3,7 @@ import { ArrowRight, History, Link2, Mic, Plus, Search, Sparkles, Trash2 } from 
 import { useState } from "react";
 import { api, Node } from "../api";
 import { DEP_TYPES, depLabel, fmtRange, fmtSec, fmtTime, fmtUsd, leaves, TRANSITIONS, useP, useSettings } from "../lib";
-import { Badge, Button, DropZone, Empty, Input, Select, TabList, TabPanel, Tabs } from "../ui";
+import { Badge, Button, DropZone, Empty, HelpTip, Input, Select, TabList, TabPanel, Tabs } from "../ui";
 import { ContextCard } from "./ContextCard";
 import StockSearch from "./StockSearch";
 import { RecordVoiceDialog } from "./VoiceRecorder";
@@ -167,10 +167,13 @@ function CostTab({ node }: { node: Node }) {
               <Select value={String((p.settings as any)[key])} options={opts}
                 onChange={(v) => P.act("Save", () => api.patch(P.pid, { settings: { [key]: key === "takes_people" ? Number(v) : v } }))} /></div>
           ))}
+          <div className="flex items-center justify-between gap-2"><HelpTip id="fill-mode"><span className="text-muted">Empty space around pictures</span></HelpTip>
+            <Select value={p.settings.fill || "blur"} options={[{ value: "blur", label: "Blur" }, { value: "black", label: "Black" }, { value: "crop", label: "Crop" }]}
+              onChange={(v) => P.act("Save", () => api.patch(P.pid, { settings: { fill: v } }))} /></div>
           <div className="flex items-center justify-between gap-2"><span className="text-muted">Budget ($)</span>
             <input type="number" defaultValue={p.settings.budget_usd} key={p.settings.budget_usd} className="h-7 w-24 rounded-md border border-line bg-panel px-2 text-right"
               onBlur={(e) => P.act("Save", () => api.patch(P.pid, { settings: { budget_usd: Number(e.target.value) } }))} /></div>
-          {[["Background music", "music"], ["Review Agent", "review_enabled"], ["Auto-pick best take", "auto_pick"], ["Find photos by itself", "auto_photo"]].map(([label, key]) => (
+          {[["Background music", "music"], ["Natural sound (wind, room tone…)", "ambience"], ["Review Agent", "review_enabled"], ["Auto-pick best take", "auto_pick"], ["Find photos by itself", "auto_photo"]].map(([label, key]) => (
             <div key={key} className="flex items-center justify-between gap-2"><span className="text-muted">{label}</span>
               <Select value={(p.settings as any)[key] ? "on" : "off"} options={[{ value: "on", label: "On" }, { value: "off", label: "Off" }]}
                 onChange={(v) => P.act("Save", () => api.patch(P.pid, { settings: { [key]: v === "on" } }))} /></div>

@@ -5,11 +5,27 @@ import os
 
 import httpx
 
-from ..base import PluginError, Usage, VoiceSpec, VoiceSynth, raise_for
+import re
+
+from ..base import PluginError, Usage, VoiceChoice, VoiceSpec, VoiceSynth, raise_for
 from ... import media
 
 API = "https://api.elevenlabs.io/v1"
-DEFAULT_VOICE = "21m00Tcm4TlvDq8ikWAM"   # "Rachel" stock voice
+DEFAULT_VOICE = "21m00Tcm4TlvDq8ikWAM"   # "Rachel" stock voice (only when nothing is known about the speaker)
+
+# Stock ("premade") voices, used ONLY when the vendor's voice list cannot be read (a restricted API key).
+# The ids are from memory: casting tries them one by one and a wrong id simply fails without a charge.
+STOCK = {
+    "male": [("pNInz6obpgDQGcFmaJgB", "Adam", "low"), ("TxGEqnHWrfWFTfGW9XjX", "Josh", "low"), ("nPczCjzI2devNBz1zQrb", "Brian", "low"),
+             ("onwK4e9ZLuTAKqWW03F9", "Daniel", "low"), ("pqHfZKP75CvOlQylNhV4", "Bill", "low"), ("JBFqnCBsd6RMkjVDRZzb", "George", "medium"),
+             ("VR6AewLTigWG4xSOukaG", "Arnold", "medium"), ("ErXwobaYiN019PkySvjV", "Antoni", "medium"), ("yoZ06aMxZJJ28mfd3POQ", "Sam", "high")],
+    "female": [("21m00Tcm4TlvDq8ikWAM", "Rachel", "medium"), ("EXAVITQu4vr4xnSDxMaL", "Sarah", "medium"), ("XrExE9yKIg1WjnnlVkGX", "Matilda", "medium"),
+               ("Xb7hH8MSUJpSbSDYk0k2", "Alice", "medium"), ("cgSgspJ2msm6clMCkdW9", "Jessica", "high"), ("AZnzlk1XvdvUeBnXmlld", "Domi", "high"),
+               ("MF3mGyEYCl7XYWbV9V6O", "Elli", "high"), ("pFZP5JQG7iQjIQuC4Bku", "Lily", "high")],
+}
+AGE_LABEL = {"child": "young", "teen": "young", "young": "young", "adult": "middle_aged", "older": "old"}
+DEEP_WORDS = ("deep", "authoritative", "gravel", "raspy", "resonant", "warm", "calm", "narrat", "baritone", "bass")
+HIGH_WORDS = ("bright", "young", "energetic", "cheerful", "upbeat", "child")
 
 
 class ElevenLabsVoice(VoiceSynth):
@@ -58,18 +74,53 @@ class ElevenLabsVoice(VoiceSynth):
                 self._voices = r.json().get("voices", [])
         return self._voices
 
-    async def match(self, description: str, language: str = "en"):
-        if not description:
-            return None
+    def _stock(self, spec: VoiceSpec, taken: tuple, why: str) -> list[VoiceChoice]:
+        genders = [spec.gender] if spec.gender in STOCK else ["female", "male"]
+        order = {"low": 0, "medium": 1, "high": 2}
+        out: list[VoiceChoice] = []
+        for g in genders:
+            want = order.get(spec.pitch or "medium", 1)
+            for vid, name, pitch in sorted(STOCK[g], key=lambda x: abs(order[x[2]] - want)):
+                out.append(VoiceChoice(vid, name, self.name, 1.0, g, note=why))
+        return sorted(out, key=lambda c: c.voice_id in taken)
+
+    async def candidates(self, spec: VoiceSpec, taken: tuple = ()) -> list[VoiceChoice]:
+        """Voices that fit the profile, best first. Gender is a hard filter; voices already used by another
+        speaker come last. If the voice list cannot be read, a short stock list for the gender is used (with a note)."""
         try:
             voices = await self.list_voices()
         except PluginError:
-            return None
-        words = set(description.lower().replace(",", " ").split())
-        best, best_score = None, -1
+            return self._stock(spec, taken, "stock voice: the voice list could not be read (the ElevenLabs key may need "
+                                            "the 'Voices: Read' permission), so the voice may not be the best match")
+        words = {w for w in re.findall(r"[a-z]{3,}", (spec.description or "").lower())}
+        accent = {w for w in re.findall(r"[a-z]{3,}", (spec.accent or "").lower())}
+        scored: list[VoiceChoice] = []
         for v in voices:
-            labels = " ".join(str(x) for x in (v.get("labels") or {}).values()).lower() + " " + (v.get("description") or "").lower()
-            score = sum(1 for w in words if w in labels)
-            if score > best_score:
-                best, best_score = v.get("voice_id"), score
-        return best
+            lab = {k: str(x).lower() for k, x in (v.get("labels") or {}).items()}
+            g = lab.get("gender", "")
+            if spec.gender in ("male", "female") and g and g != spec.gender:
+                continue                                            # hard filter: never a male voice for a female speaker
+            text = " ".join(lab.values()) + " " + (v.get("description") or "").lower() + " " + (v.get("name") or "").lower()
+            score = 4.0 if (spec.gender in ("male", "female") and g == spec.gender) else 0.0
+            if spec.age and lab.get("age") == AGE_LABEL.get(spec.age):
+                score += 2
+            score += min(sum(1 for w in words if w in text), 3)
+            score += 2 * sum(1 for w in accent if w in lab.get("accent", ""))
+            if spec.pitch == "low" and any(w in text for w in DEEP_WORDS):
+                score += 1.5
+            if spec.pitch == "high" and any(w in text for w in HIGH_WORDS):
+                score += 1.5
+            if spec.pace == "slow" and any(w in text for w in ("calm", "soothing", "relaxed", "gentle")):
+                score += 0.5
+            if v.get("voice_id") in taken:
+                score -= 100
+            scored.append(VoiceChoice(v.get("voice_id", ""), v.get("name", ""), self.name, score, g))
+        scored = [c for c in scored if c.voice_id]
+        scored.sort(key=lambda c: -c.score)
+        if not scored and spec.gender in STOCK:
+            return self._stock(spec, taken, f"no {spec.gender} voice in your ElevenLabs voice list; stock voices are tried instead")
+        return scored[:8]
+
+    async def match(self, description: str, language: str = "en"):
+        cands = await self.candidates(VoiceSpec(description=description, language=language))
+        return cands[0].voice_id if cands else None

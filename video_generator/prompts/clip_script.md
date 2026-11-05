@@ -31,7 +31,9 @@ Fields:
 - dialogue: lines spoken (speaker_name = actor name or "narrator"); keep to the target length
 - narration: voice-over text if any
 - on_camera_speech: true only if a visible person speaks on camera
-- sound_notes: ambience / sound effects
+- sound_notes: the sound design for this clip, always filled: the ambience of the place (for example wind and birds outdoors, room tone indoors, street or crowd), effects tied to the action (footsteps, a door, pouring water), or the single word "silence" when silence is the right choice. Do not describe music here.
+- start_state: how the clip begins, in one sentence: where the subject is and what they are doing (pose), the place, time of day, framing, clothing, light. If continues_from_previous is true this MUST be the same as the previous clip's end state.
+- end_state: how the clip ends, in one sentence, in the same terms. The next clip that continues from this one starts exactly here, so plan the end deliberately (for example "she stops walking, faces the camera, hands at her sides").
 - negative: things to avoid (e.g. "extra fingers, warped face, text artifacts")
 - continues_from_previous: true if this clip must start exactly where the previous clip ended
 - same_location_as_previous: true if it is the same place as the previous clip

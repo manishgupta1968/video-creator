@@ -4,7 +4,7 @@ import { api, Ctx, fileUrl } from "../api";
 import { CTX_ROLES, CTX_TYPES, useP, useSettings } from "../lib";
 import StockSearch from "./StockSearch";
 import { RecordVoiceDialog } from "./VoiceRecorder";
-import { Badge, Button, cn, Dialog, DropZone, Editable, Select, Switch, Tip } from "../ui";
+import { Badge, Button, cn, Dialog, DropZone, Editable, HelpTip, Select, Switch, Tip } from "../ui";
 
 export const typeIcon = (t: string) => ({
   actor: <User className="h-3.5 w-3.5" />, object: <Box className="h-3.5 w-3.5" />, entity: <Building2 className="h-3.5 w-3.5" />,
@@ -175,9 +175,30 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
               <div>
                 <div className="field-label mb-1">Or describe the voice</div>
                 <Editable value={a?.voice_description || ""} onSave={(voice_description) => saveActor({ voice_description })} placeholder="e.g. deep, warm, Indian English, slow" />
-                <Button help="preview-voice" size="sm" variant="ghost" className="mt-1" loading={P.busy.includes("Voice preview")}
-                  onClick={async () => { const r: any = await P.act("Voice preview", () => api.voicePreview(P.pid, item.id)); if (r?.url) { setPlaying(r.url); } }}>
-                  <Play className="h-3 w-3" />Preview voice</Button>
+                <HelpTip id="voice-profile"><div className="field-label mb-1 mt-2">Voice profile</div></HelpTip>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <Select value={a?.voice_gender || ""} onChange={(voice_gender) => saveActor({ voice_gender })} className="w-full" options={[
+                    { value: "", label: "Gender: decide for me" }, { value: "male", label: "Male" }, { value: "female", label: "Female" }, { value: "neutral", label: "Neutral" }]} />
+                  <Select value={a?.voice_age || ""} onChange={(voice_age) => saveActor({ voice_age })} className="w-full" options={[
+                    { value: "", label: "Age: decide for me" }, { value: "child", label: "Child" }, { value: "teen", label: "Teen" }, { value: "young", label: "Young adult" },
+                    { value: "adult", label: "Adult" }, { value: "older", label: "Older" }]} />
+                  <Select value={a?.voice_pitch || ""} onChange={(voice_pitch) => saveActor({ voice_pitch })} className="w-full" options={[
+                    { value: "", label: "Pitch: decide for me" }, { value: "low", label: "Low / deep" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" }]} />
+                  <Select value={a?.voice_pace || ""} onChange={(voice_pace) => saveActor({ voice_pace })} className="w-full" options={[
+                    { value: "", label: "Pace: decide for me" }, { value: "slow", label: "Slow" }, { value: "normal", label: "Normal" }, { value: "fast", label: "Fast" }]} />
+                </div>
+                <div className="mt-1.5"><Editable value={a?.voice_accent || ""} onSave={(voice_accent) => saveActor({ voice_accent })} placeholder="Accent, e.g. Indian English (optional)" /></div>
+                {a?.voice_name && <div className="mt-1.5 text-[11px] text-muted">Voice chosen: <b>{a.voice_name}</b></div>}
+                {a?.voice_note && <div className="mt-1 rounded-md bg-warn/10 px-2 py-1 text-[11px] text-warn">{a.voice_note}</div>}
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <Button help="preview-voice" size="sm" variant="ghost" loading={P.busy.includes("Voice preview")}
+                    onClick={async () => { const r: any = await P.act("Voice preview", () => api.voicePreview(P.pid, item.id)); if (r?.url) { setPlaying(r.url); } }}>
+                    <Play className="h-3 w-3" />Preview voice</Button>
+                  {!a?.voice_sample && (
+                    <Button help="voice-next" size="sm" variant="ghost" loading={P.busy.includes("Another voice")}
+                      onClick={() => P.act("Another voice", () => api.voiceNext(P.pid, item.id), "Switched to the next voice")}>Choose another voice</Button>
+                  )}
+                </div>
                 {playing && <audio src={playing} autoPlay controls className="mt-1 h-8 w-full" />}
               </div>
             </div>

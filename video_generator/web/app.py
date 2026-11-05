@@ -370,30 +370,59 @@ async def consent(pid: str, cid: str, body: dict = Body(...)):
 
 @app.post("/api/projects/{pid}/context/{cid}/voice-preview")
 async def voice_preview(pid: str, cid: str):
-    """Speak a short sample in this actor's voice (cloned if consented, else matched)."""
+    """Speak a short sample in this actor's voice (cloned if consented, else the voice chosen for their profile)."""
+    from .. import casting
     from ..context import item_by_id
-    from ..plugins.base import VoiceSpec
     p = svc.load(pid)
     item = item_by_id(p, cid)
     entry = svc.reg.choose("voice", mode=p.settings.quality_mode)
     plugin = svc.reg.plugin(entry.plugin)
-    a = item.actor
     try:
-        if a and a.voice_sample and getattr(plugin, "can_clone", False) and item.consent.confirmed and a.voice_provider != entry.plugin:
-            await engine._actor_voice(pid, cid, entry)
+        a = item.actor
+        if a and not (a.voice_id and a.voice_provider == entry.plugin) and not entry.is_free:
+            await engine._actor_voice(pid, cid, entry)          # clone (with consent) or choose from the profile
             p = svc.load(pid)
-            a = item_by_id(p, cid).actor
+            item = item_by_id(p, cid)
+            a = item.actor
+        prof = casting.profile_for(item, p)
         vid = a.voice_id if a and a.voice_provider == entry.plugin else None
-        if not vid and a:
-            vid = await plugin.match(a.voice_description or a.description)
         out = ProjectStore.path_for(pid) / "cast" / cid / "preview.wav"
         out.parent.mkdir(parents=True, exist_ok=True)
         text = f"Hello, I am {item.title}. This is how I will sound in your video."
-        await plugin.synthesize(text, VoiceSpec(voice_id=vid, description=(a.voice_description if a else "")), out, entry.model)
+        await plugin.synthesize(text, casting.spec_from(prof, vid), out, entry.model)
+        fitted, _, _ = await asyncio.to_thread(casting.fit_voice, out, prof, None)
+        if fitted != out:
+            shutil.move(str(fitted), str(out))
     except Exception as exc:
         raise HTTPException(400, f"voice preview failed: {exc}")
     import time as _t
-    return {"url": f"/files/{pid}/cast/{cid}/preview.wav?t={int(_t.time())}", "voice": entry.id}
+    return {"url": f"/files/{pid}/cast/{cid}/preview.wav?t={int(_t.time())}", "voice": entry.id,
+            "name": (item_by_id(svc.load(pid), cid).actor.voice_name if item.actor else "")}
+
+
+@app.post("/api/projects/{pid}/context/{cid}/voice-next")
+async def voice_next(pid: str, cid: str):
+    """Try the next best voice for this actor. The voice you pick stays, even if you later edit the description."""
+    from ..context import item_by_id
+    p = svc.load(pid)
+    entry = svc.reg.choose("voice", mode=p.settings.quality_mode)
+    item = item_by_id(p, cid)
+    if not item.actor:
+        raise HTTPException(400, "Only actors have voices.")
+    if not item.analysis.get("voice_alternatives"):
+        await engine._actor_voice(pid, cid, entry)
+        item = item_by_id(svc.load(pid), cid)
+    alts = [x for x in (item.analysis.get("voice_alternatives") or []) if x.get("voice_id")]
+    if len(alts) < 2:
+        raise HTTPException(400, "No other voice is available for this speaker. Add or allow more voices at the voice service.")
+    ids = [x["voice_id"] for x in alts]
+    nxt = alts[(ids.index(item.actor.voice_id) + 1) % len(alts)] if item.actor.voice_id in ids else alts[0]
+    await engine._store_voice(pid, cid, entry.plugin, nxt["voice_id"], nxt.get("name", ""), nxt.get("note", ""), alts, None)
+
+    def mark(pr):
+        item_by_id(pr, cid).analysis["voice_user_picked"] = True
+    await engine.mutate(pid, mark)
+    return view(pid)
 
 
 # ===================================================================== dependencies

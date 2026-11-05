@@ -11,6 +11,18 @@ import re
 from ..base import ImageGenerator, ImageRequest, PluginError, Usage
 
 SIZES = {"16:9": "1536x1024", "9:16": "1024x1536", "1:1": "1024x1024"}
+
+
+def size_for(aspect: str) -> str:
+    """The nearest size OpenAI makes for any aspect: landscape, portrait or square. The engine then crops to the exact shape."""
+    if aspect in SIZES:
+        return SIZES[aspect]
+    try:
+        a, b = (float(x) for x in aspect.split(":"))
+        r = a / b
+    except (ValueError, ZeroDivisionError):
+        return "1536x1024"
+    return "1536x1024" if r >= 1.2 else "1024x1536" if r <= 0.83 else "1024x1024"
 DEFAULT_MODEL = "gpt-image-1"
 _WORKS: dict[str, str] = {}          # the model we asked for -> the model that really works for this key
 
@@ -65,7 +77,7 @@ class OpenAIImage(ImageGenerator):
     async def generate(self, req: ImageRequest):
         import openai
         client = openai.AsyncOpenAI()
-        size = SIZES.get(req.aspect, "1536x1024")
+        size = size_for(req.aspect)
         prompt = req.prompt + (f"\nAvoid: {req.negative}" if req.negative else "")
         asked = req.model or DEFAULT_MODEL
         model = _WORKS.get(asked, asked)

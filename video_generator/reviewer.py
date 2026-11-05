@@ -103,7 +103,9 @@ class Reviewer:
             said = " ".join(l.text for l in s.dialogue)[:120] + (" " + s.narration[:120] if s and s.narration else "") if s else ""
             summaries.append(f"{nums.get(leaf.id, '')} {leaf.title} ({leaf.duration.likely_s:.0f}s): {what} | says: {said}")
         frames = media.sample_frames(video, ProjectStore.path_for(pid) / "clips" / nid / "review_node", every=6, max_frames=12)
-        draft = await self.svc.brain.review_node(p, n, "\n".join(summaries), media.probe_duration(video), frames)
+        boundaries, b_images = self._boundaries(p, n, nums, ProjectStore.path_for(pid) / "clips" / nid / "review_node")
+        draft = await self.svc.brain.review_node(p, n, "\n".join(summaries), media.probe_duration(video), frames,
+                                                 boundaries=boundaries, boundary_images=b_images)
         usage = self.svc.brain.last_usage
         review = Review(target=nid, verdict=draft.verdict, scores=draft.scores.model_dump(),
                         issues=[ReviewIssue(check=i.check, text=i.text, at_s=i.at_s, severity=i.severity) for i in draft.issues],
@@ -118,6 +120,38 @@ class Reviewer:
             p.run.spent_usd = round(p.run.spent_usd + review.cost_usd, 4)
             self.svc.save(p, snapshot=False)
         return review
+
+    def _boundaries(self, p, n, nums: dict, work: Path) -> tuple[str, list[Path]]:
+        """For clips that the plan says continue each other (same shot, or same scene): the last frame of one and the
+        first frame of the next, so the Review Agent can see a jump in pose, place or look. A deliberate cut (no link)
+        is not checked."""
+        from . import deps as deps_mod
+        from .models import DependencyType
+        leaves_ = [x for x, _ in walk(n) if x.is_leaf]
+        ids = {x.id: x for x in leaves_}
+        lines: list[str] = []
+        images: list[Path] = []
+        work.mkdir(parents=True, exist_ok=True)
+        for b in leaves_:
+            for dep in deps_mod.upstream(p, b.id):
+                a = ids.get(dep.from_id)
+                if not a or dep.type not in (DependencyType.continues_from, DependencyType.same_location) or not a.output or not b.output:
+                    continue
+                src_a, src_b = ProjectStore.path_for(p.id) / a.output, ProjectStore.path_for(p.id) / b.output
+                if not (src_a.exists() and src_b.exists()):
+                    continue
+                fa, fb = work / f"join_{a.id}_end.png", work / f"join_{b.id}_start.png"
+                try:
+                    media.last_frame(src_a, fa)
+                    media.extract_frame(src_b, fb, at=0.0)
+                except Exception:
+                    continue
+                i = len(images) + 1
+                kind = "continues the same shot" if dep.type == DependencyType.continues_from else "is in the same scene"
+                lines.append(f"clip {nums.get(b.id, '')} {kind} as clip {nums.get(a.id, '')}: boundary image {i} is the LAST frame of clip "
+                             f"{nums.get(a.id, '')}, image {i + 1} is the FIRST frame of clip {nums.get(b.id, '')}")
+                images += [fa, fb]
+        return "\n".join(lines), images
 
     def _lock(self, pid: str):
         engine = getattr(self.svc, "engine", None)

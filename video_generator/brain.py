@@ -30,6 +30,12 @@ class ActorDraft(BaseModel):
     clothing: str = ""
     behaviour: str = ""
     voice_description: str = ""
+    # voice profile for every speaker (people of any age, animals, mascots, robots, the narrator)
+    voice_gender: str = ""            # male | female | neutral
+    voice_age: str = ""               # child | teen | young | adult | older
+    voice_pitch: str = ""             # low | medium | high
+    voice_pace: str = ""              # slow | normal | fast
+    voice_accent: str = ""
 
 
 class ClipDraft(BaseModel):
@@ -56,6 +62,7 @@ class ProjectDraft(BaseModel):
     style: StyleDraft = Field(default_factory=StyleDraft)
     actors: list[ActorDraft] = Field(default_factory=list)
     parts: list[PartDraft] = Field(default_factory=list)
+    music_advice: str = ""            # "none", "subtle" or "full", then the mood/genre and where it should enter and leave
 
 
 class ChildDraft(BaseModel):
@@ -92,6 +99,8 @@ class ClipScriptDraft(BaseModel):
     narration: str = ""
     on_camera_speech: bool = False
     sound_notes: str = ""
+    start_state: str = ""
+    end_state: str = ""
     negative: str = ""
     continues_from_previous: bool = False
     same_location_as_previous: bool = False
@@ -240,6 +249,8 @@ class Brain:
             if a.type == ContextType.actor and a.actor:
                 lines.append(f"- {a.title} (id {a.id}, {a.actor.kind}): {a.actor.description}; clothing: {a.actor.clothing}; "
                              f"behaviour: {a.actor.behaviour}; voice: {a.actor.voice_description}"
+                             + (f" [{', '.join(x for x in (a.actor.voice_gender, a.actor.voice_age, a.actor.voice_pitch + ' pitch' if a.actor.voice_pitch else '', a.actor.voice_pace + ' pace' if a.actor.voice_pace else '', a.actor.voice_accent) if x)}]"
+                                if (a.actor.voice_gender or a.actor.voice_age or a.actor.voice_pitch or a.actor.voice_pace or a.actor.voice_accent) else "")
                              + ("; has photos" if a.files else "") + ("; has voice sample" if a.actor.voice_sample else ""))
         return "\n".join(lines) or "(no actors yet)"
 
@@ -269,14 +280,17 @@ class Brain:
         prompt = render("clip_script", outline=outline(project), number=nums.get(node.id, ""), title=node.title,
                         goal=node.goal, parents=parents or "(top level)", seconds=f"{secs:g}", max_beats=max(1, round(secs / 2.5)),
                         context=self._context_block(project, node.id), actors=self._actor_list(project, node.id),
-                        previous=(f"{prev.title}: {prev.script.visual if prev.script else prev.goal}" if prev else "(first clip)"),
+                        previous=(f"{prev.title}: {prev.script.visual if prev.script else prev.goal}"
+                                  + (f" | IT ENDS: {prev.script.end_state}" if prev and prev.script and prev.script.end_state else "")
+                                  if prev else "(first clip)"),
                         current=current, feedback=feedback or "(none)", shot_types=", ".join(SHOT_TYPES),
                         style=json.dumps(_style(project, node)))
         return await self.ask("write_clip_script", prompt, ClipScriptDraft,
                               {"goal": node.goal, "title": node.title, "seconds": secs,
                                "actors": [a.model_dump() for a in project.context if a.type == ContextType.actor],
                                "feedback": feedback, "current": node.script.model_dump() if node.script else None,
-                               "has_previous": prev is not None})
+                               "has_previous": prev is not None,
+                               "previous_end_state": (prev.script.end_state if prev and prev.script else "")})
 
     async def revise_goal(self, project: Project, node: Node, instruction: str) -> GoalRevision:
         prompt = render("revise_goal", outline=outline(project), title=node.title, goal=node.goal,
@@ -337,14 +351,15 @@ class Brain:
                               images=[p for _, p in frames], video=video)
 
     async def review_node(self, project: Project, node: Node, summaries: str, actual_seconds: float,
-                          frames: list[tuple[float, Path]]) -> ReviewDraft:
+                          frames: list[tuple[float, Path]], boundaries: str = "", boundary_images: Optional[list[Path]] = None) -> ReviewDraft:
         prompt = render("node_review", title=node.title or "Whole video", goal=node.goal or project.goal,
                         summaries=summaries, target=node.target_seconds or node.duration.likely_s,
-                        actual=actual_seconds, context=self._context_block(project, node.id))
+                        actual=actual_seconds, context=self._context_block(project, node.id),
+                        boundaries=boundaries or "(none: these clips are separate scenes)")
         return await self.ask("review", prompt, ReviewDraft,
                               {"node_review": True, "target": node.target_seconds or node.duration.likely_s,
-                               "actual": actual_seconds, "summaries": summaries},
-                              images=[p for _, p in frames])
+                               "actual": actual_seconds, "summaries": summaries, "boundaries": boundaries},
+                              images=[p for _, p in frames] + list(boundary_images or []))
 
 
 def _frame_description(frames: list[tuple[float, Path]], pair_times: list[float]) -> str:
@@ -400,4 +415,4 @@ def draft_to_script(project: Project, d: ClipScriptDraft) -> ClipScript:
                         for a in d.actors_in_shot],
         dialogue=[DialogueLine(speaker=resolve(l.speaker_name), text=l.text, emotion=l.emotion) for l in d.dialogue],
         narration=d.narration, on_camera_speech=d.on_camera_speech and bool(d.dialogue),
-        sound_notes=d.sound_notes, negative=d.negative)
+        sound_notes=d.sound_notes, start_state=d.start_state, end_state=d.end_state, negative=d.negative)

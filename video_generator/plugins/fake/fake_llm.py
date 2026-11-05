@@ -16,6 +16,33 @@ from ..base import LLM, Usage
 ANIMALS = ["lion", "deer", "tiger", "elephant", "dog", "cat", "horse", "bird", "eagle", "wolf", "bear", "fox", "monkey", "shark", "whale"]
 PEOPLE = ["presenter", "man", "woman", "person", "people", "customer", "host", "girl", "boy", "chef", "doctor", "teacher", "founder", "me", "i "]
 PRODUCT = ["product", "bag", "bottle", "phone", "app", "shoe", "watch", "car", "brand", "advert", "advertise", "launch"]
+BIG_ANIMALS = ["lion", "tiger", "elephant", "bear", "wolf", "horse", "whale", "shark"]
+SMALL_ANIMALS = ["bird", "cat", "monkey", "fox", "eagle"]
+OUTDOOR = ["savannah", "field", "street", "beach", "forest", "garden", "outdoor", "park", "mountain", "desert", "river", "jungle", "sunset"]
+
+
+def _profile_for(text: str, animal: str = "") -> dict:
+    """An offline voice profile from the words (the real AI brain decides this from the whole story)."""
+    from ... import casting
+    if not animal:        # words like "male lion" or "deep voice" in the goal describe the animal, not a presenter
+        has_animal = any(a in text for a in ANIMALS)
+        text = re.sub(r"\b(male|female)\s+(?:%s)\b" % "|".join(ANIMALS), "", text)
+        if has_animal:
+            text = re.sub(r"\b(deep|heavy|bass|slow|growly)\b", "", text)
+    g = casting.guess_gender(text)
+    pitch = "low" if animal in BIG_ANIMALS else "high" if animal in SMALL_ANIMALS else ("low" if re.search(r"\b(deep|heavy|bass)\b", text) else "")
+    return {"voice_gender": g or "neutral", "voice_age": casting.guess_age(text) or "adult", "voice_pitch": pitch or "medium",
+            "voice_pace": "slow" if animal in BIG_ANIMALS else "normal"}
+
+
+def _sound_for(goal: str, shot: str, has_animal: bool) -> str:
+    g = goal.lower()
+    outdoors = any(w in g for w in OUTDOOR) or shot in ("wildlife", "landscape")
+    if outdoors:
+        return "light wind through grass, distant birds" + (", soft footsteps" if has_animal or "walk" in g else "")
+    if shot == "product":
+        return "quiet room tone, subtle handling sounds"
+    return "quiet room tone"
 
 
 def _sentences(goal: str, words: int) -> str:
@@ -84,12 +111,17 @@ class FakeLLM(LLM):
             found = [a for a in ANIMALS if a in g]
             for a in found[:3]:
                 actors.append({"name": a.title(), "kind": "animal", "description": f"a powerful, realistic {a}",
-                               "behaviour": "natural animal behaviour", "voice_description": ""})
+                               "behaviour": "natural animal behaviour",
+                               "voice_description": ("a deep, heavy, slow voice" if a in BIG_ANIMALS else "a light, quick voice"),
+                               **_profile_for(g, a)})
             if any(p in g for p in PEOPLE) or (any(w in g for w in PRODUCT) and not found):
                 actors.append({"name": "Presenter", "kind": "ai_person",
                                "description": "friendly adult presenter, natural skin texture, warm smile",
                                "clothing": "smart casual navy shirt", "behaviour": "confident, open hand gestures",
-                               "voice_description": "warm, clear, medium pace"})
+                               "voice_description": "warm, clear, medium pace", **_profile_for(g)})
+            if re.search(r"narrat|voice.?over|explain", g) and not any(a["name"] == "Narrator" for a in actors):
+                actors.append({"name": "Narrator", "kind": "ai_person", "description": "the voice-over narrator (never seen)",
+                               "voice_description": "warm, clear, natural narrator", **_profile_for(g)})
         topic = topic_of(goal)
         n_parts = 3 if secs >= 30 else 2
         names = [("Opening", "Hook: set the scene — "), ("Main", "Main moment — "),
@@ -109,7 +141,10 @@ class FakeLLM(LLM):
         title = topic if len(topic) <= 50 else topic[:50].rsplit(" ", 1)[0] + "…"
         return {"title": (title or "New video").strip()[:1].upper() + (title or "New video").strip()[1:],
                 "style": {"look": "cinematic, photoreal, natural light", "colour": "rich natural colour", "mood": mood},
-                "actors": actors, "parts": parts}
+                "actors": actors, "parts": parts,
+                "music_advice": ("subtle: upbeat modern, in at the start, out under the final line" if any(w in g for w in PRODUCT)
+                                 else "none: natural sound carries the scene" if any(a in g for a in ANIMALS)
+                                 else f"subtle: {mood}, quiet under speech")}
 
     def _explain(self, m: dict) -> dict:
         q = (m.get("question") or "").lower()
@@ -171,7 +206,10 @@ class FakeLLM(LLM):
                 "camera": "slow push-in, eye level" if st != "wildlife" else "tracking shot, long lens",
                 "actors_in_shot": [{"actor_name": a["title"]} for a in named], "dialogue": dialogue,
                 "narration": narration, "on_camera_speech": on_camera,
-                "sound_notes": "natural ambience", "negative": "extra fingers, warped faces, text artifacts, flicker",
+                "sound_notes": _sound_for(goal, st, any((a.get("actor") or {}).get("kind") == "animal" for a in named) or any(a in g for a in ANIMALS)),
+                "start_state": (m.get("previous_end_state") or "") if (m.get("has_previous") and m.get("previous_end_state")) else f"Opening: {goal[:80]}",
+                "end_state": f"After '{goal[:60]}': the subject still in frame, same place and light, facing the camera",
+                "negative": "extra fingers, warped faces, text artifacts, flicker",
                 "continues_from_previous": any(w in g for w in ("continues", "then", "same moment")) and m.get("has_previous", False),
                 "same_location_as_previous": False,
                 "change_summary": "applied feedback to the visual description" if feedback and feedback != "(none)" else ""}

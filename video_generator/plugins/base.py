@@ -152,11 +152,34 @@ class VoiceSpec:
     language: str = "en"
     emotion: str = ""
     speed: float = 1.0
+    # the voice profile (decided by the planner, editable by the user); "" = not decided
+    gender: str = ""            # male | female | neutral
+    age: str = ""               # child | teen | young | adult | older
+    pitch: str = ""             # low | medium | high
+    pace: str = ""              # slow | normal | fast
+    accent: str = ""
+
+
+@dataclass
+class VoiceChoice:
+    """One voice a vendor can offer for a profile."""
+    voice_id: str
+    name: str = ""
+    provider: str = ""
+    score: float = 0.0
+    gender: str = ""
+    note: str = ""              # e.g. "stock voice (the voice list could not be read)"
 
 
 class VoiceSynth(Plugin):
     job = "voice"
     can_clone = False
+
+    async def candidates(self, spec: "VoiceSpec", taken: tuple = ()) -> list["VoiceChoice"]:
+        """Voices that fit `spec`, best first. `taken` = voice ids already used by other speakers (used last).
+        Default: the vendor's old text match, if it has one."""
+        vid = await self.match(spec.description, spec.language)
+        return [VoiceChoice(vid, "", self.name)] if vid else []
 
     async def synthesize(self, text: str, voice: VoiceSpec, out: Path, model: str = "") -> tuple[Path, Usage]:
         raise NotImplementedError
@@ -184,6 +207,17 @@ class MusicGenerator(Plugin):
 
     async def generate(self, prompt: str, seconds: float, out: Path, model: str = "",
                        reference: Optional[Path] = None) -> tuple[Path, Usage]:
+        raise NotImplementedError
+
+
+class SoundEffect(Plugin):
+    """Natural sound for a clip: ambience of the place and effects tied to the action (not music, not speech)."""
+    job = "sfx"
+
+    async def generate(self, prompt: str, seconds: float, out: Path, model: str = "",
+                       video: Optional[Path] = None, params: Optional[dict] = None) -> tuple[Path, Usage]:
+        """Write an audio file of about `seconds` to `out`. `video` is the finished (silent) clip: a model that
+        can listen to the pictures uses it so the sound fits what happens."""
         raise NotImplementedError
 
 

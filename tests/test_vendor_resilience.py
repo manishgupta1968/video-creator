@@ -157,6 +157,8 @@ def test_doctor_reports_good_and_bad_keys_in_plain_words(monkeypatch):
             return httpx.Response(200, json={"data": [{"id": "gpt-5"}, {"id": "gpt-image-2"}]})
         if r.url.path == "/v1/user":
             return httpx.Response(200, json={"subscription": {"tier": "free", "character_count": 1000, "character_limit": 10000}})
+        if r.url.path == "/v1/voices":
+            return httpx.Response(200, json={"voices": [{"voice_id": "a", "labels": {"gender": "male"}}, {"voice_id": "b", "labels": {"gender": "female"}}]})
         if r.url.path == "/v1/models":
             return httpx.Response(200, json=[{"model_id": "eleven_v3"}, {"model_id": "eleven_flash_v2_5"}])
         return httpx.Response(403, text='{"detail": "Exhausted balance. User is locked."}')
@@ -164,6 +166,7 @@ def test_doctor_reports_good_and_bad_keys_in_plain_words(monkeypatch):
     assert checks["OpenAI pictures"].status == doctor.OK and "gpt-image-2" in checks["OpenAI pictures"].message
     assert "9,000 characters left" in checks["ElevenLabs key"].message
     assert checks["ElevenLabs voice copy"].status == doctor.WARN and checks["ElevenLabs voice model"].status == doctor.OK
+    assert checks["ElevenLabs voices"].status == doctor.OK and "1 male, 1 female" in checks["ElevenLabs voices"].message
     assert checks["fal.ai key"].status == doctor.BAD and "billing" in checks["fal.ai key"].message
     assert all(m == "GET" for m, _, _ in calls)                                  # only reading: nothing is created or charged
 
@@ -175,12 +178,13 @@ def test_doctor_rejected_keys_and_restricted_elevenlabs_key(monkeypatch):
     def handler(r: httpx.Request):
         if r.url.host == "api.openai.com":
             return httpx.Response(401, json={"error": {"message": "Incorrect API key"}})
-        if r.url.path == "/v1/user":
+        if r.url.path in ("/v1/user", "/v1/voices"):
             return httpx.Response(401, json={"detail": {"status": "missing_permissions"}})
         return httpx.Response(200, json=[{"model_id": "eleven_v3"}])
     checks = by_name(asyncio.run(doctor.run_checks(client=mock(handler))))
     assert checks["OpenAI"].status == doctor.BAD and "api-keys" in checks["OpenAI"].message
     assert checks["ElevenLabs key"].status == doctor.OK and "limited permissions" in checks["ElevenLabs key"].message
+    assert checks["ElevenLabs voices"].status == doctor.WARN and "Voices: Read" in checks["ElevenLabs voices"].message
 
 
 def test_doctor_command_prints_a_summary(monkeypatch):

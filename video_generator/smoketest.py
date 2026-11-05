@@ -8,6 +8,7 @@ Steps (each one is independent: a failure is reported and the next step still ru
   2 voice      cents  one short sentence
   3 picture    cents  one picture of a lion
   4 video      <$1    a few seconds of video from that picture (the model your quality mode would pick)
+  4b sound     cents  natural sound made to fit that video (what a clip gets when its model makes no sound)
   5 talking    <$1    the lion says the sentence (Kling Avatar)
   6 join       free   the video and the talking clip are joined into smoke-test.mp4
 """
@@ -19,8 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import doctor, media
-from .plugins.base import AvatarRequest, ImageRequest, VideoRequest, VoiceSpec
+from . import casting, doctor, media
+from .plugins.base import AvatarRequest, ImageRequest, PluginError, VideoRequest, VoiceChoice, VoiceSpec
 
 SENTENCE = "Hello, how are you?"
 PICTURE_PROMPT = ("Photoreal portrait of an adult male African lion with a full golden mane, facing the camera, mouth closed, "
@@ -101,6 +102,9 @@ def plan_steps(reg, mode: str, all_video: bool = False) -> list[Planned]:
     for e in vids:
         secs = e.billed_seconds(float((e.params.get("durations") or [4])[0]))
         out.append(Planned("Video" if len(vids) == 1 else f"Video {e.id}", e.id, secs * e.unit_price, f"{secs:.0f} s of video from the picture"))
+    sx = pick("sfx")
+    if sx and vids:
+        out.append(Planned("Sound", sx.id, 4 * sx.unit_price, "natural sound (wind, birds) made for the test video"))
     a = pick("avatar", need={"non_human": True})
     if a:
         out.append(Planned("Talking lion", a.id, AUDIO_SECONDS_GUESS * a.unit_price, f"about {AUDIO_SECONDS_GUESS:.0f} s of speech"))
@@ -180,16 +184,37 @@ async def run(svc, max_usd: float = 1.0, ask: Optional[Callable[[str], bool]] = 
                 try:
                     out = tmp / "voice.wav"
 
+                    chosen: dict = {}
+
                     async def call_voice(e):
                         plugin = reg.plugin(e.plugin)
-                        vid = await plugin.match(VOICE_WORDS)
-                        _, u = await plugin.synthesize(SENTENCE, VoiceSpec(voice_id=vid, description=VOICE_WORDS), out, e.model)
-                        return u
+                        profile = casting.Profile(gender="male", age="adult", pitch="low", pace="slow", description=VOICE_WORDS)
+                        cands, note = await casting.choose_voice(plugin, profile)
+                        chosen["note"] = note
+                        last: Exception = PluginError("no voice found")
+                        for c in (cands or [VoiceChoice("", "", e.plugin)])[:5]:        # a refused voice id costs nothing: try the next
+                            try:
+                                _, u = await plugin.synthesize(SENTENCE, casting.spec_from(profile, c.voice_id or None), out, e.model)
+                                chosen.update(name=c.name, gender=c.gender)
+                                return u
+                            except PluginError as exc:
+                                last = exc
+                        raise last
                     entry, _ = await eng._with_fallback(pid, entry, reg.candidates("voice", mode=mode), call_voice, "voice", "smoke voice",
                                                         cost_of=lambda e: len(SENTENCE) / 1000 * e.unit_price,
                                                         expected_of=lambda e: 5, any_error=True)
                     voice_wav = out
-                    rep.results.append(done("Voice", entry, before, media.probe_duration(out)))
+                    hz = media.voice_pitch(out)
+                    bits = [f"voice {chosen.get('name') or 'unnamed'}" + (f" ({chosen['gender']})" if chosen.get("gender") else ""),
+                            f"pitch {hz:.0f} Hz" if hz else "pitch not measurable (very short)"]
+                    shift, fix_note = casting.pitch_fix(hz, casting.Profile(gender="male", pitch="low"))
+                    detail = ", ".join(bits) + ("; " + fix_note if fix_note else "; fits a low male voice" if hz else "")
+                    if chosen.get("note"):
+                        detail += f". Note: {chosen['note'][:160]}"
+                    r = done("Voice", entry, before, media.probe_duration(out), detail)
+                    if (shift or chosen.get("note")) and r.status == "ok":
+                        r.status = "warn"                      # worked, but the voice may not fit: say so
+                    rep.results.append(r)
                 except Exception as exc:
                     rep.results.append(fail("Voice", exc, entry.id))
         else:
@@ -238,6 +263,31 @@ async def run(svc, max_usd: float = 1.0, ask: Optional[Callable[[str], bool]] = 
                 rep.results.append(fail(st.step, exc, entry.id))
         if not [s for s in steps if s.step.startswith("Video")]:
             rep.results.append(Result("Video", "skip", detail="no paid video model is usable (add FAL_KEY)"))
+
+        # 4b natural sound for the test video (what a real clip gets when its model makes no sound)
+        if "Sound" in planned and video_clip is not None:
+            st = planned["Sound"]
+            if (r := room("Sound", st.est)):
+                rep.results.append(r)
+            else:
+                before = spent()
+                try:
+                    from .models import ClipScript, Node, NodeKind
+                    out = tmp / "sound.wav"
+                    node = Node(kind=NodeKind.clip, title="smoke", script=ClipScript(sound_notes="light wind through grass, distant birds", visual="a lion"))
+                    got = await eng._ambience(pid, "smoke", svc.load(pid), node, video_clip, 4.0, out, "smoke")
+                    rows = [x for x in ProjectStore.ledger(pid) if x.get("kind") == "sfx"]
+                    if got and rows:
+                        rep.results.append(done("Sound", reg.catalog.get(rows[-1]["catalog_id"]), before, media.probe_duration(out)))
+                    elif got:
+                        rep.results.append(Result("Sound", "warn", "local_ambience", "the sound models did not work and the free local sound was used instead; "
+                                                  "see the messages above", 0.0, media.probe_duration(out)))
+                    else:
+                        rep.results.append(Result("Sound", "bad", st.model, "no sound could be made"))
+                except Exception as exc:
+                    rep.results.append(fail("Sound", exc, st.model))
+        elif "Sound" not in planned:
+            rep.results.append(Result("Sound", "skip", detail="no paid sound model is usable (add FAL_KEY); the free local sound would be used"))
 
         # 5 talking lion
         talking: Optional[Path] = None

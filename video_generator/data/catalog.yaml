@@ -328,6 +328,42 @@ lipsync:
     pricing_url: ""
     last_checked: "2026-11-04"
 
+sfx:
+  - id: mmaudio
+    plugin: fal_mmaudio
+    model: fal-ai/mmaudio-v2
+    vendor: fal
+    capabilities: {from_video: true, max_seconds: 30}
+    quality: 4
+    price: {unit: second, usd: 0.001}
+    time: {queue_s: 15, per_output_s: 2}
+    params: {max_seconds: 30}
+    licence: commercial (fal terms)
+    pricing_url: https://fal.ai/models/fal-ai/mmaudio-v2
+    last_checked: "2026-11-05"
+  - id: eleven_sfx
+    plugin: elevenlabs_sfx
+    model: sound-generation
+    vendor: elevenlabs
+    capabilities: {from_video: false, max_seconds: 22}
+    quality: 4
+    price: {unit: second, usd: 0.005}
+    time: {queue_s: 2, per_output_s: 1}
+    licence: commercial (ElevenLabs terms)
+    pricing_url: https://elevenlabs.io/pricing/api
+    last_checked: "2026-11-05"
+  - id: local_ambience
+    plugin: local_ambience
+    model: ffmpeg-noise
+    vendor: local
+    capabilities: {from_video: false, max_seconds: 600}
+    quality: 1
+    price: {unit: second, usd: 0}
+    time: {queue_s: 0, per_output_s: 0.05}
+    licence: free (local)
+    pricing_url: ""
+    last_checked: "2026-11-05"
+
 music:
   - id: eleven_music
     plugin: elevenlabs_music

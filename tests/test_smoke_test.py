@@ -23,7 +23,8 @@ def vendors(svc, monkeypatch, wan_refuses=False, picture_fails=False):
 
     async def synth(text, voice, out, model=""):
         calls.append(("voice", model))
-        media.ff("-f", "lavfi", "-i", "sine=frequency=220", "-t", "1.6", str(out))
+        hz = 115 if (voice.voice_id or "").startswith("m") else 225
+        media.ff("-f", "lavfi", "-i", f"sine=frequency={hz}", "-t", "1.6", str(out))
         return out, Usage()
 
     async def match(description, language="en"):
@@ -49,8 +50,19 @@ def vendors(svc, monkeypatch, wan_refuses=False, picture_fails=False):
                  "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(req.out))
         return req.out, Usage()
     eleven = reg.plugin("elevenlabs")
+
+    async def list_voices():
+        return [{"voice_id": "m1", "name": "Marcus", "labels": {"gender": "male", "age": "middle_aged", "description": "deep"}},
+                {"voice_id": "f1", "name": "Anna", "labels": {"gender": "female", "age": "young", "description": "bright"}}]
+
+    async def sfx(prompt, seconds, out, model="", video=None, params=None):
+        calls.append(("sfx", model))
+        media.ff("-f", "lavfi", "-i", f"anoisesrc=color=pink:r=44100:d={seconds:.2f},volume=0.3", "-ac", "2", str(out))
+        return out, Usage()
+    monkeypatch.setattr(eleven, "list_voices", list_voices)
     monkeypatch.setattr(eleven, "synthesize", synth)
     monkeypatch.setattr(eleven, "match", match)
+    monkeypatch.setattr(reg.plugin("fal_mmaudio"), "generate", sfx)
     for name in ("gpt_image", "fal_image"):
         monkeypatch.setattr(reg.plugin(name), "generate", picture)
     monkeypatch.setattr(reg.plugin("fal"), "generate", video)
@@ -77,8 +89,9 @@ def test_every_step_runs_and_a_test_video_is_saved(svc, monkeypatch, tmp_path):
     calls = vendors(svc, monkeypatch)
     rep, said = run(svc, tmp_path, max_usd=2.0)
     st = status(rep)
-    assert [st[k].status for k in ("Keys", "Voice", "Picture", "Video", "Talking lion", "Join")] == ["ok"] * 6, rep.text()
-    assert {c[0] for c in calls} == {"voice", "picture", "video", "avatar"}
+    assert [st[k].status for k in ("Keys", "Voice", "Picture", "Video", "Sound", "Talking lion", "Join")] == ["ok"] * 7, rep.text()
+    assert {c[0] for c in calls} == {"voice", "picture", "video", "avatar", "sfx"}
+    assert "voice Marcus (male)" in st["Voice"].detail and "pitch 11" in st["Voice"].detail      # the report names the voice and its pitch
     assert (tmp_path / "smoke-test.mp4").exists() and (tmp_path / "smoke-test-report.txt").exists()
     assert 0.3 < rep.spent < 1.5 and st["Video"].cost > 0.2                 # Wan bills 5 s even for a short test
     assert "All steps worked" in rep.text() and any("Estimated total" in s for s in said)

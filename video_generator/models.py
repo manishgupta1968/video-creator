@@ -105,6 +105,14 @@ class ActorDetails(BaseModel):
     clothing: str = ""             # default outfit
     behaviour: str = ""            # mannerisms, body language, speaking style
     voice_description: str = ""    # e.g. "deep, warm, Indian English, slow"
+    # voice profile: the planner fills it, the user can edit it; "" = not decided (guessed from the description)
+    voice_gender: str = ""         # male | female | neutral
+    voice_age: str = ""            # child | teen | young | adult | older
+    voice_pitch: str = ""          # low | medium | high
+    voice_pace: str = ""           # slow | normal | fast
+    voice_accent: str = ""         # e.g. "Indian English"; defaults to the project language
+    voice_name: str = ""           # the vendor's name for the chosen voice (shown to the user)
+    voice_note: str = ""           # why this voice was chosen / a warning when the match is weak
     voice_sample: Optional[str] = None
     voice_provider: Optional[str] = None
     voice_id: Optional[str] = None
@@ -157,7 +165,9 @@ class ClipScript(BaseModel):
     dialogue: list[DialogueLine] = Field(default_factory=list)
     narration: str = ""
     on_camera_speech: bool = False
-    sound_notes: str = ""
+    sound_notes: str = ""               # sound design: ambience, effects tied to the action, or "silence"
+    start_state: str = ""               # how the clip begins: pose, place, time of day, framing, clothing, light
+    end_state: str = ""                 # how it ends (the next clip that continues starts from this)
     negative: str = ""
     target_seconds: Optional[float] = None
 
@@ -308,6 +318,8 @@ class Settings(BaseModel):
     auto_pick: bool = False
     review_enabled: bool = True
     music: bool = True
+    ambience: bool = True         # natural sound (wind, room tone, footsteps...) for clips that have none of their own
+    fill: Literal["blur", "black", "crop"] = "blur"   # what to put around a picture that is not the video's shape
     auto_photo: bool = True       # find a real photo by itself when none is supplied (animals, objects, places)
     quality_mode: Literal["best", "balanced", "budget", "free"] = "balanced"
 
@@ -341,6 +353,7 @@ class Project(BaseModel):
     dependencies: list[Dependency] = Field(default_factory=list)
     reviews: list[Review] = Field(default_factory=list)
     run: RunState = Field(default_factory=RunState)
+    music_advice: str = ""        # the planner's suggestion: none | subtle | full, mood, genre
     final_output: Optional[str] = None
     final_hash: str = ""
     final_review_id: Optional[str] = None

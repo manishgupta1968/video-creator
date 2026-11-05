@@ -12,7 +12,7 @@ export interface ActorInShot { actor_id: string; clothing: string; behaviour: st
 export interface Line { speaker: string; text: string; emotion: string }
 export interface Script {
   shot_type: string; visual: string; action_beats: string[]; camera: string; actors_in_shot: ActorInShot[];
-  dialogue: Line[]; narration: string; on_camera_speech: boolean; sound_notes: string; negative: string; target_seconds: number | null;
+  dialogue: Line[]; narration: string; on_camera_speech: boolean; sound_notes: string; start_state: string; end_state: string; negative: string; target_seconds: number | null;
 }
 export interface Take { id: string; version: number; index: number; video: string | null; keyframe: string | null; model: string; cost_usd: number; seconds: number; quality: Record<string, number>; review_id: string | null }
 export interface Version { version: number; script: Script; feedback: string; created_at: string }
@@ -24,7 +24,7 @@ export interface Node {
   takes: Take[]; chosen_take: string | null; voice_audio: string | null; voice_seconds: number | null; output: string | null;
   warnings: string[]; review_enabled: boolean;
 }
-export interface Actor { kind: string; description: string; clothing: string; behaviour: string; voice_description: string; voice_sample: string | null; voice_provider: string | null; voice_id: string | null; speaking_wpm: number | null; props: string; reference_sheet: string[]; avatar_id: string | null }
+export interface Actor { kind: string; description: string; clothing: string; behaviour: string; voice_description: string; voice_gender: string; voice_age: string; voice_pitch: string; voice_pace: string; voice_accent: string; voice_name: string; voice_note: string; voice_sample: string | null; voice_provider: string | null; voice_id: string | null; speaking_wpm: number | null; props: string; reference_sheet: string[]; avatar_id: string | null }
 export interface Ctx {
   id: string; type: CtxType; title: string; text: string; files: string[]; role: CtxRole; scope: string; actor: Actor | null;
   consent: { confirmed: boolean; statement: string; confirmed_by: string; confirmed_at: string; files: string[] }; analysis: Record<string, any>;
@@ -35,12 +35,12 @@ export interface Review {
   issues: { check: string; text: string; at_s: number | null; frame: string | null; severity: string }[];
   suggestions: { id: string; text: string; accepted: boolean }[]; summary: string; reviewer_model: string; cost_usd: number;
 }
-export interface Settings { auto_photo: boolean; target_seconds: number; aspect: string; resolution: string; fps: number; format: "mp4" | "mov"; budget_usd: number; takes_people: number; takes_other: number; language: string; default_wpm: number; subtitles: boolean; auto_pick: boolean; review_enabled: boolean; music: boolean; quality_mode: string }
+export interface Settings { auto_photo: boolean; target_seconds: number; aspect: string; resolution: string; fps: number; format: "mp4" | "mov"; budget_usd: number; takes_people: number; takes_other: number; language: string; default_wpm: number; subtitles: boolean; auto_pick: boolean; review_enabled: boolean; music: boolean; ambience: boolean; fill: "blur" | "black" | "crop"; quality_mode: string }
 export interface Project {
   id: string; name: string; goal: string; settings: Settings; style: { look: string; colour: string; mood: string; notes: string };
   root: Node; context: Ctx[]; dependencies: Dep[]; reviews: Review[];
   run: { mode: string; status: string; targets: string[]; message: string; started_at: string; spent_usd: number };
-  final_output: string | null; final_review_id: string | null; updated_at: string;
+  music_advice: string; final_output: string | null; final_review_id: string | null; updated_at: string;
 }
 export interface Summary {
   seconds: number; seconds_min: number; seconds_max: number; target_seconds: number; cost: number; cost_min: number; cost_max: number; cost_total: number;
@@ -129,7 +129,8 @@ export const api = {
   stockSearch: (q: string, source: string) => req<{ sources: string[]; results: StockPhoto[] }>("GET", `/api/stock/search?q=${encodeURIComponent(q)}&source=${source}`),
   autoPhoto: (pid: string, cid: string) => req<any>("POST", `${P(pid)}/context/${cid}/auto-photo`),
   stockAdd: (pid: string, cid: string, photo: StockPhoto) => req<View>("POST", `${P(pid)}/context/${cid}/stock`, photo),
-  voicePreview: (pid: string, cid: string) => req<{ url: string }>("POST", `${P(pid)}/context/${cid}/voice-preview`),
+  voicePreview: (pid: string, cid: string) => req<{ url: string; name?: string }>("POST", `${P(pid)}/context/${cid}/voice-preview`),
+  voiceNext: (pid: string, cid: string) => req<View>("POST", `${P(pid)}/context/${cid}/voice-next`),
 
   addDep: (pid: string, from_id: string, to_id: string, type: string) => req<View>("POST", `${P(pid)}/deps`, { from_id, to_id, type }),
   patchDep: (pid: string, did: string, type: string) => req<View>("PATCH", `${P(pid)}/deps/${did}`, { type }),

@@ -21,7 +21,7 @@ class FliteVoice(VoiceSynth):
         return (True, "ok") if media.flite_available() else (False, "your ffmpeg has no flite filter")
 
     async def synthesize(self, text: str, voice: VoiceSpec, out: Path, model: str = ""):
-        v = "slt" if any(w in voice.description.lower() for w in ("female", "woman", "girl", "she")) else "kal"
+        v = "slt" if (voice.gender == "female" or (not voice.gender and any(w in voice.description.lower() for w in ("female", "woman", "girl", "she")))) else "kal"
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
             f.write(text.replace("\n", " "))
             tf = f.name

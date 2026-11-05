@@ -158,6 +158,33 @@ class ClipPlan:
     ref_images: int
     lipsync_needed: bool
     warnings: list[str]
+    sfx: Optional[CatalogEntry] = None     # natural-sound maker for this clip (None = the clip needs none)
+
+
+def wants_ambience(project: Project, node: Node, plan: "ClipPlan") -> bool:
+    """Does this AI clip need natural sound made for it? Yes when it would otherwise be silent (a video model with
+    no sound of its own, or a talking-picture clip that has only the voice) and the plan does not ask for silence."""
+    if not project.settings.ambience or node.kind != NodeKind.clip or not node.script:
+        return False
+    notes = (node.script.sound_notes or "").strip().lower()
+    if notes in ("silence", "none", "no sound") or notes.startswith("silence"):
+        return False
+    if not plan.video or plan.video.is_free:
+        return False                                    # free preview cards are placeholders
+    if plan.route == "avatar":
+        return True
+    if plan.route == "video":
+        return not plan.video.capabilities.get("native_audio")
+    return False
+
+
+def _sfx_for(reg: Registry, mode: str, project: Project, node: Node, plan: "ClipPlan") -> Optional[CatalogEntry]:
+    if not wants_ambience(project, node, plan):
+        return None
+    try:
+        return reg.choose("sfx", mode=mode)
+    except LookupError:
+        return None
 
 
 def clip_actors(project: Project, node: Node):
@@ -224,7 +251,9 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     if avatar_entry:
         if avatar_entry.is_free and not node.takes_override:
             takes = 1          # free previews are identical; one take is enough
-        return ClipPlan("avatar", avatar_entry, image, voice, None, takes, False, ref_images, False, warnings)
+        plan_a = ClipPlan("avatar", avatar_entry, image, voice, None, takes, False, ref_images, False, warnings)
+        plan_a.sfx = _sfx_for(reg, mode, project, node, plan_a)
+        return plan_a
 
     need: dict = {}
     if needs_start:
@@ -241,7 +270,9 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
         warnings.append(f"{video.id} cannot start from the previous clip's last frame")
     lip = bool(s and s.on_camera_speech)
     lipsync = reg.choose("lipsync", mode=mode) if lip else None
-    return ClipPlan("video", video, image, voice, lipsync, takes, needs_start, ref_images, lip, warnings)
+    plan_v = ClipPlan("video", video, image, voice, lipsync, takes, needs_start, ref_images, lip, warnings)
+    plan_v.sfx = _sfx_for(reg, mode, project, node, plan_v)
+    return plan_v
 
 
 # --------------------------------------------------------------------- cost & time
@@ -318,6 +349,11 @@ def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Option
             l = plan.lipsync
             add(f"Lip-sync ({l.id})", f"1 chosen take x {secs:.0f} s x ${l.unit_price}/s", secs * l.unit_price)
             step_times.append(l.time.queue_s + l.time.per_output_s * secs)
+
+    if plan.sfx and secs > 0:
+        sx = plan.sfx
+        add(f"Natural sound ({sx.id})", f"{plan.takes} take(s) x {secs:.0f} s x ${sx.unit_price}/s", plan.takes * secs * sx.unit_price)
+        step_times.append(sx.time.queue_s + sx.time.per_output_s * secs)
 
     if project.settings.review_enabled and node.review_enabled and plan.route in ("video", "avatar"):
         e = _llm_entry(reg, "review")
