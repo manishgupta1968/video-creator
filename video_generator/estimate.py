@@ -27,7 +27,7 @@ LINE_PAUSE = 0.6
 EDGE_PAD = 0.5
 SECONDS_PER_SLIDE = 5.0
 SCRIPT_TOKENS = (6000, 2500)       # in, out per clip script
-REVIEW_TOKENS = (14000, 1500)      # per take review (frames + context)
+REVIEW_TOKENS = (26000, 1800)      # per take review (frames + context)
 PLAN_TOKENS = (8000, 6000)
 
 
@@ -338,6 +338,7 @@ class ProjectEstimate:
     time_s: float
     spent: float
     warnings: list[str]
+    cost_total: float = 0.0
 
 
 def refresh(project: Project, reg: Registry) -> ProjectEstimate:
@@ -437,12 +438,15 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
             hint = f" Largest part: {biggest.title or biggest.goal[:30]} (~{biggest.duration.likely_s:.0f} s)." if biggest else ""
             warnings.append(f"Video is ~{_fmt(total)} vs target {_fmt(target)} ({diff:+.0%}).{hint}")
     spent = project.run.spent_usd
-    if project.root.cost.likely_usd + spent > project.settings.budget_usd:
-        warnings.append(f"Estimated cost ${project.root.cost.likely_usd:.2f} (+${spent:.2f} spent) is over the budget ${project.settings.budget_usd:.2f}")
+    todo = [l for l in leaves(project) if l.status.value != "done"]        # clips already made are in "spent", not "still to spend"
+    remaining = round(sum(l.cost.likely_usd for l in todo), 2)
+    rem_min = round(sum(l.cost.min_usd for l in todo), 2)
+    rem_max = round(sum(l.cost.max_usd for l in todo), 2)
+    if remaining + spent > project.settings.budget_usd:
+        warnings.append(f"Still to spend about ${remaining:.2f} on top of ${spent:.2f} already spent is over the budget ${project.settings.budget_usd:.2f}")
     return ProjectEstimate(seconds=total, seconds_min=project.root.duration.min_s, seconds_max=project.root.duration.max_s,
-                           cost=project.root.cost.likely_usd, cost_min=project.root.cost.min_usd,
-                           cost_max=project.root.cost.max_usd, time_s=project.root.time.likely_s, spent=spent,
-                           warnings=warnings)
+                           cost=remaining, cost_min=rem_min, cost_max=rem_max, time_s=project.root.time.likely_s, spent=spent,
+                           warnings=warnings, cost_total=project.root.cost.likely_usd)
 
 
 def estimate_targets(project: Project, reg: Registry, targets: list[str]) -> dict:

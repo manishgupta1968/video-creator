@@ -9,7 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..base import PluginError
 
-MAX_IMAGES = 12
+MAX_IMAGES = 18
 
 
 def schema_instruction(schema: Type[BaseModel]) -> str:

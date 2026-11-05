@@ -117,7 +117,7 @@ export function VoiceRecorder({ onUse, onCancel }: { onUse: (blob: Blob, filenam
         <div className="space-y-3">
           <div className="flex items-center gap-3">
             {phase === "idle" ? (
-              <Button variant="primary" size="lg" onClick={start} className="bg-bad hover:brightness-110"><Mic className="h-4 w-4" />Start recording</Button>
+              <Button help="start-recording" variant="primary" size="lg" onClick={start} className="bg-bad hover:brightness-110"><Mic className="h-4 w-4" />Start recording</Button>
             ) : (
               <Button size="lg" onClick={stop} variant="primary" className="bg-bad"><Square className="h-4 w-4" />Stop</Button>
             )}
@@ -148,7 +148,7 @@ export function VoiceRecorder({ onUse, onCancel }: { onUse: (blob: Blob, filenam
             <span>This is my own voice (or I have the speaker's permission to copy it). A copy of a voice must never be made without permission.</span>
           </label>
           <div className="flex gap-2">
-            <Button variant="primary" onClick={use} loading={saving} disabled={!consent}><Check className="h-3.5 w-3.5" />Use this recording</Button>
+            <Button help="use-recording" helpExtra={!consent ? "Tick the box above first." : undefined} variant="primary" onClick={use} loading={saving} disabled={!consent}><Check className="h-3.5 w-3.5" />Use this recording</Button>
             <Button onClick={again}><RotateCcw className="h-3.5 w-3.5" />Record again</Button>
             {onCancel && <Button variant="ghost" onClick={onCancel}>Cancel</Button>}
           </div>

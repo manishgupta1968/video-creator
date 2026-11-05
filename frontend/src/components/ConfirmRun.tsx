@@ -42,7 +42,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
         description={free ? "This uses only free tools." : "Check the cost and time before anything is paid for."}
         footer={<>
           <Button variant="ghost" onClick={() => setReq(null)}>Cancel</Button>
-          <Button variant="primary" onClick={go} loading={loading} disabled={!est}><Play className="h-3.5 w-3.5" />{free ? "Make it" : `Spend ≈ ${fmtUsd(est?.cost_usd)}`}</Button>
+          <Button help="confirm-spend" variant="primary" onClick={go} loading={loading} disabled={!est}><Play className="h-3.5 w-3.5" />{free ? "Make it" : `Spend ≈ ${fmtUsd(est?.cost_usd)}`}</Button>
         </>}>
         {!est ? <div className="skeleton h-24 rounded-lg" /> : (
           <div className="space-y-4">
@@ -69,7 +69,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
               <Meter value={est.spent_usd + est.cost_usd} max={est.budget_usd} />
               {est.over_budget && <div className="mt-2 flex items-center gap-1.5 text-xs text-bad"><AlertTriangle className="h-3.5 w-3.5" />Over budget — the run will pause before the clip that crosses it.</div>}
             </div>
-            <Switch checked={autoPick} onChange={setAutoPick} label="Auto-pick the best take (so the run can finish without me)" />
+            <Switch help="auto-pick" checked={autoPick} onChange={setAutoPick} label="Auto-pick the best take (so the run can finish without me)" />
             <p className="text-[11px] text-muted">Clips that don't depend on each other are made at the same time. You can pause or stop at any time; finished clips are kept.</p>
           </div>
         )}

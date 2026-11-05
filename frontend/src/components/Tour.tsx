@@ -6,11 +6,15 @@ const STEPS = [
   { title: "Edit in place", text: "In the middle, click any text to change it — it saves by itself. Or type in “Ask AI” to change it in plain words." },
   { title: "Context", text: "On the right, add photos, voices, logos and notes — shared by all clips, or just for one. Each length, cost and time updates live." },
   { title: "Make it", text: "At the bottom: Generate next, Continue to end, or Generate entire video. You always see the cost first, and you pick the best take." },
+  { title: "Help is always here", text: "Hover any button to see what it does and what you get. Press ? for step-by-step guides, and to ask questions about your project." },
 ];
+
+export const replayTour = () => window.dispatchEvent(new Event("vg-tour"));
 
 export default function Tour() {
   const [i, setI] = useState<number | null>(null);
   useEffect(() => { try { if (!localStorage.getItem("vg-tour")) setI(0); } catch { /* ignore */ } }, []);
+  useEffect(() => { const f = () => setI(0); window.addEventListener("vg-tour", f); return () => window.removeEventListener("vg-tour", f); }, []);
   if (i === null) return null;
   const done = () => { try { localStorage.setItem("vg-tour", "1"); } catch { /* ignore */ } setI(null); };
   const s = STEPS[i];

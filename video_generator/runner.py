@@ -426,6 +426,13 @@ class Engine:
         actors = [e.item for e in effective_context(p, nid) if e.item.type == ContextType.actor and e.item.id in used]
         if actors:
             self.step(pid, nid, "Preparing actors (picture and voice)", n.time.likely_s)
+        # no photo supplied for an animal/object? search for a real one first (free), before generating anything
+        wanting = [a.id for a in actors if self.svc.wants_auto_photo(a)] if p.settings.auto_photo else []
+        if wanting:
+            self.step(pid, nid, "Searching for a real photo", 20)
+            await self.svc.auto_photos(pid, only=wanting)
+            p = self.svc.load(pid)
+            actors = [item_by_id(p, a.id) for a in actors]
         for a in actors:
             if a.actor and not a.actor.reference_sheet:
                 await self._reference_sheet(pid, a.id, plan.image)
@@ -842,8 +849,9 @@ class Engine:
         def score(t: Take) -> float:
             s = 0.0
             r = reviews.get(t.review_id or "")
-            if r and r.scores:
-                s += sum(r.scores.values()) / len(r.scores)
+            checked = [v for v in (r.scores.values() if r else []) if v > 0]      # 0 = not checked
+            if checked:
+                s += sum(checked) / len(checked) + 0.5 * min(r.scores.get("motion", 0) or 3, r.scores.get("realism", 0) or 3)
             s -= t.quality.get("flicker", 0) * 10
             s += t.quality.get("face_similarity", 0) * 2
             return s
@@ -1038,6 +1046,14 @@ class Engine:
         self.emit(pid, {"type": "final", "path": self.rel(pid, final)})
         p = self.svc.load(pid)
         if p.settings.review_enabled:
+            for n, _ in walk(p.root):
+                if n.is_leaf or n.id == p.root.id or sum(1 for _c in walk(n) if _c[0].is_leaf) < 2 or not n.output:
+                    continue                                       # one clip alone was already reviewed take by take
+                self.step(pid, "final", f"Review Agent is checking part {numbering(p).get(n.id, '')}: {n.title}", 30)
+                try:
+                    await self.reviewer.review_node(pid, n.id, self.abs(pid, n.output))
+                except Exception:
+                    traceback.print_exc()
             self.step(pid, "final", "Review Agent is checking the whole video", 40)
             try:
                 await self.reviewer.review_node(pid, p.root.id, final)
@@ -1092,6 +1108,7 @@ def _actor_ids_in(n: Node) -> set[str]:
 def _row(kind: str, what: str, entry, cost: float, usage: Usage, t0: float, expected_s: float) -> dict:
     actual = usage.cost_usd if usage.cost_usd else cost
     return {"kind": kind, "what": what, "plugin": entry.plugin, "catalog_id": entry.id, "model": entry.model,
+            "rate": f"at ${entry.unit_price}/{entry.price.unit.replace('_', ' ')}",
             "estimated_usd": round(cost, 4), "actual_usd": round(actual, 4),
             "wall_s": round(time.monotonic() - t0, 1), "expected_s": round(expected_s, 1)}
 

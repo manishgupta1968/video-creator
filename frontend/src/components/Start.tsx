@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Clapperboard, FileText, Film, Image as ImageIcon, Mic, Paperclip, Settings2, Sparkles, Trash2, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { ArrowRight, Clapperboard, FileText, Film, HelpCircle, Image as ImageIcon, Mic, Paperclip, Settings2, Sparkles, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useToast } from "../lib";
-import { Badge, Button, Card, cn, DropZone, Select, Tip } from "../ui";
+import { Badge, Button, Card, cn, DropZone, HelpTip, Select, Tip } from "../ui";
+import HelpDrawer from "./HelpDrawer";
 import SettingsDialog from "./Settings";
 
 const LENGTHS = [{ s: 15, l: "15 s" }, { s: 30, l: "30 s" }, { s: 60, l: "1 min" }, { s: 120, l: "2 min" }, { s: 300, l: "5 min" }];
@@ -29,6 +30,15 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
   const [files, setFiles] = useState<File[]>([]);
   const [creating, setCreating] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (e.key === "?" && !(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))) { e.preventDefault(); setHelpOpen(true); }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
   const ref = useRef<HTMLTextAreaElement>(null);
   const toast = useToast();
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
@@ -72,7 +82,8 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
         <div className="flex items-center gap-2">
           {health.data && <Badge tone={health.data.brain === "fake_llm" ? "warn" : "ok"} title="The AI that plans and reviews">
             AI brain: {health.data.brain === "fake_llm" ? "offline (free)" : health.data.brain}</Badge>}
-          <Button variant="ghost" onClick={() => setSettings(true)}><Settings2 className="h-4 w-4" />Settings</Button>
+          <Button variant="ghost" help="help" onClick={() => setHelpOpen(true)}><HelpCircle className="h-4 w-4" />Help</Button>
+          <Button variant="ghost" help="settings" onClick={() => setSettings(true)}><Settings2 className="h-4 w-4" />Settings</Button>
         </div>
       </header>
 
@@ -83,7 +94,7 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
         <Card className="mt-8 p-1.5">
           <DropZone onFiles={(f) => setFiles((x) => [...x, ...f])} className="border-0 p-0 text-left hover:bg-transparent cursor-default" label="">
             <div onClick={(e) => e.stopPropagation()}>
-              <textarea ref={ref} autoFocus value={goal} onChange={(e) => onGoal(e.target.value)} rows={3}
+              <textarea ref={ref} autoFocus data-help="goal-box" aria-describedby="goal-hint" value={goal} onChange={(e) => onGoal(e.target.value)} rows={3}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); create(); } }}
                 placeholder="e.g. A 30-second advert for our new travel bag, presented by me…"
                 className="w-full resize-none rounded-xl bg-transparent px-4 pt-3.5 text-[15px] text-ink placeholder:text-muted/60 focus:outline-none" />
@@ -98,34 +109,34 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
                 </div>
               )}
               <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2">
-                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-sunken hover:text-ink">
-                  <Paperclip className="h-3.5 w-3.5" /> Add photos, slides, clips, voice
-                  <input type="file" multiple hidden onChange={(e) => setFiles((x) => [...x, ...Array.from(e.target.files || [])])} />
-                </label>
+                <HelpTip id="attach-files">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-sunken hover:text-ink">
+                    <Paperclip className="h-3.5 w-3.5" /> Add photos, slides, clips, voice
+                    <input type="file" multiple hidden onChange={(e) => setFiles((x) => [...x, ...Array.from(e.target.files || [])])} />
+                  </label>
+                </HelpTip>
                 <div className="mx-1 h-4 w-px bg-line" />
-                <div className="flex items-center gap-0.5" role="radiogroup" aria-label="Length">
+                <HelpTip id="length-picker"><div className="flex items-center gap-0.5" role="radiogroup" aria-label="Length">
                   {!LENGTHS.some((l) => l.s === seconds) && <span className="rounded-md bg-brand/10 px-2 py-1 text-xs font-medium text-brand">{seconds >= 60 ? `${+(seconds / 60).toFixed(1)} min` : `${seconds} s`}</span>}
                   {LENGTHS.map((l) => (
                     <button key={l.s} role="radio" aria-checked={seconds === l.s} onClick={() => setSeconds(l.s)}
                       className={cn("rounded-md px-2 py-1 text-xs", seconds === l.s ? "bg-brand/10 font-medium text-brand" : "text-muted hover:bg-sunken")}>{l.l}</button>
                   ))}
-                </div>
-                <Select value={aspect} onChange={setAspect} title="Shape" options={[
+                </div></HelpTip>
+                <Select value={aspect} onChange={setAspect} title="Shape" help="shape-picker" options={[
                   { value: "16:9", label: "16:9 wide" }, { value: "9:16", label: "9:16 vertical" }, { value: "1:1", label: "1:1 square" }]} />
-                <Tip content="Best: highest quality. Balanced: quality per dollar. Budget: cheapest. Free: local tools only (draft preview).">
-                  <span><Select value={mode} onChange={setMode} title="Quality" options={[
-                    { value: "best", label: "Best quality" }, { value: "balanced", label: "Balanced" },
-                    { value: "budget", label: "Budget" }, { value: "free", label: "Free preview" }]} /></span>
-                </Tip>
+                <Select value={mode} onChange={setMode} title="Quality" help="quality-picker" options={[
+                  { value: "best", label: "Best quality" }, { value: "balanced", label: "Balanced" },
+                  { value: "budget", label: "Budget" }, { value: "free", label: "Free preview" }]} />
                 <div className="flex-1" />
-                <Button variant="primary" size="lg" onClick={create} loading={creating} className="h-9">
+                <Button variant="primary" size="lg" help="create-draft" onClick={create} loading={creating} className="h-9">
                   <Sparkles className="h-4 w-4" />Create draft<ArrowRight className="h-4 w-4" />
                 </Button>
               </div>
             </div>
           </DropZone>
         </Card>
-        <p className="mt-2 text-center text-[11px] text-muted">Press Enter to create · drop files anywhere on the box · nothing is paid for until you approve</p>
+        <p id="goal-hint" className="mt-2 text-center text-[11px] text-muted">Press Enter to create · drop files anywhere on the box · nothing is paid for until you approve</p>
 
         {!goal && (
           <div className="mt-6 flex flex-wrap justify-center gap-2">
@@ -160,6 +171,7 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
         )}
       </main>
       <SettingsDialog open={settings} onOpenChange={setSettings} />
+      <HelpDrawer open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );
 }

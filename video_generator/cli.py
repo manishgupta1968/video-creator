@@ -496,6 +496,27 @@ def compare(clip: str, models: str = typer.Option(..., help="comma-separated cat
 
 
 @app.command()
+def budget(project: Optional[str] = typer.Option(None, "-p")):
+    """Where the money went: every paid call, grouped, with the arithmetic."""
+    svc = _svc()
+    r = svc.budget_report(_pid(project))
+    con.print(f"Budget ${r['budget']:.2f} · spent ${r['spent']:.2f} · still to spend ≈ ${r['remaining_estimate']:.2f} · left ≈ ${r['left_in_budget']:.2f}")
+    for line in r["explain"]:
+        con.print(f"  • {line}")
+    for g in r["groups"]:
+        con.print(f"[bold]{g['label']}[/]: ${g['actual']:.4f} in {g['calls']} call(s)")
+        for row in g["rows"]:
+            con.print(f"    {row['what']}  {row['vendor']} {row['model']}  {row['how']}  = ${row['actual']:.4f}")
+
+
+@app.command()
+def explain(question: str, project: Optional[str] = typer.Option(None, "-p")):
+    """Ask a question about your project in plain words (cost, time, length, why a model was chosen …)."""
+    svc = _svc()
+    con.print(asyncio.run(svc.explain(_pid(project), question)))
+
+
+@app.command()
 def pause(project: Optional[str] = typer.Option(None, "-p")):
     svc = _svc()
     pid = _pid(project)

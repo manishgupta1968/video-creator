@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 import subprocess
 import textwrap
@@ -471,6 +472,90 @@ def write_srt(entries: list[tuple[float, float, str]], out: Path) -> Path:
     for i, (a, b, text) in enumerate(entries, start=1):
         lines.append(f"{i}\n{srt_time(a)} --> {srt_time(b)}\n{text.strip()}\n")
     out.write_text("\n".join(lines))
+    return out
+
+
+def motion_stats(video: Path) -> dict:
+    """How much actually moves. motion = mean frame-to-frame luma change (a real scene is ~1-3; a still
+    image is 0; a slow zoom on a photo is below ~1). static_ratio = share of frames that are identical."""
+    try:
+        out = subprocess.run([FFPROBE, "-v", "error", "-f", "lavfi", "-i",
+                              f"movie={Path(video).as_posix()},signalstats", "-show_entries",
+                              "frame_tags=lavfi.signalstats.YDIF", "-of", "csv=p=0"],
+                             capture_output=True, text=True, timeout=300).stdout
+        vals = [float(x) for x in out.split() if x.replace(".", "", 1).isdigit()]
+        if not vals:
+            return {}
+        mean = sum(vals) / len(vals)
+        return {"motion": round(mean, 3), "static_ratio": round(sum(1 for v in vals if v < 0.05) / len(vals), 3),
+                "flicker": round(sum(1 for v in vals if v > mean * 3 + 2) / len(vals), 4)}
+    except Exception:
+        return {}
+
+
+def image_sharpness(path: Path) -> float:
+    """Edge energy of a picture (higher = sharper). Only meaningful when compared with another picture of the same scene."""
+    try:
+        im = Image.open(path).convert("L")
+        im.thumbnail((640, 640))
+        return round(ImageStat.Stat(im.filter(ImageFilter.FIND_EDGES)).var[0], 2)
+    except Exception:
+        return 0.0
+
+
+def sharpness_ratio(video: Path, reference: Optional[Path], tmp_dir: Path) -> dict:
+    """Sharpness of the video's frames, and relative to the picture the clip started from."""
+    frames = sample_frames(video, tmp_dir, every=1.5, max_frames=5)
+    vals = [image_sharpness(p) for _, p in frames]
+    vals = [v for v in vals if v > 0]
+    if not vals:
+        return {}
+    out = {"sharpness": round(sum(vals) / len(vals), 1)}
+    if reference and Path(reference).exists():
+        ref = image_sharpness(reference)
+        if ref > 0:
+            out["sharpness_vs_start"] = round(out["sharpness"] / ref, 2)
+    return out
+
+
+def audio_stats(video: Path) -> dict:
+    """Loudness (LUFS), peak, and how much of the clip is silent."""
+    if not has_audio(video):
+        return {"has_audio": 0}
+    out: dict = {"has_audio": 1}
+    try:
+        err = subprocess.run([FFMPEG, "-hide_banner", "-nostats", "-i", str(video), "-vn", "-af",
+                              "ebur128=peak=true,silencedetect=n=-45dB:d=0.4", "-f", "null", "-"],
+                             capture_output=True, text=True, timeout=300).stderr
+        lufs = re.findall(r"I:\s+(-?[\d.]+) LUFS", err)
+        peak = re.findall(r"Peak:\s+(-?[\d.]+) dBFS", err)
+        if lufs:
+            out["lufs"] = float(lufs[-1])
+        if peak:
+            out["peak_db"] = float(peak[-1])
+        dur = probe_duration(video) or 1
+        sil = sum(float(x) for x in re.findall(r"silence_duration:\s+([\d.]+)", err))
+        out["silence_ratio"] = round(min(sil / dur, 1.0), 3)
+    except Exception:
+        pass
+    return out
+
+
+def sample_pairs(video: Path, out_dir: Path, n: int = 3, gap: float = 0.25) -> list[tuple[float, Path]]:
+    """Adjacent frame pairs (t, t+gap) at spread-out moments: exposes warping, morphing and identity changes."""
+    dur = probe_duration(video)
+    if dur < 1.0:
+        return []
+    out = []
+    for k in range(n):
+        t = min(max(dur * (k + 1) / (n + 1), 0.0), dur - gap - 0.05)
+        for j, tt in enumerate((t, t + gap)):
+            p = out_dir / f"pair_{k}_{j}.jpg"
+            try:
+                extract_frame(video, p, tt)
+                out.append((round(tt, 2), p))
+            except MediaError:
+                continue
     return out
 
 

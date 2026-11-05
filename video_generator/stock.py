@@ -149,5 +149,41 @@ async def download(url: str, dest_dir: Path, name: str, client: Optional[httpx.A
             await client.aclose()
 
 
+BAD_WORDS = ("map", "diagram", "skeleton", "skull", "drawing", "illustration", "logo", "flag", "coat of arms", "statue",
+             "painting", "stamp", "sketch", "cartoon", "toy", "taxidermy", "fossil", "mosaic", "sculpture", "poster", "cub")
+GOOD_LICENCE = ("cc0", "public domain", "pd", "cc by", "cc-by", "pexels")
+
+
+def licence_ok(lic: str) -> bool:
+    """We animate and may sell the result: no NonCommercial (NC) or NoDerivatives (ND) licences."""
+    l = (lic or "").lower()
+    if re.search(r"\bnc\b|\bnd\b|non-?commercial|no-?derivs?", l):
+        return False
+    return any(g in l for g in GOOD_LICENCE)
+
+
+def rank(photos: list[StockPhoto], query: str) -> list[StockPhoto]:
+    words = [w for w in re.findall(r"[a-z]{3,}", query.lower()) if w not in ("male", "female", "the", "and")]
+    scored = []
+    for p in photos:
+        if not licence_ok(p.license):
+            continue
+        t = p.title.lower()
+        score = 0.0
+        score += 2 * sum(1 for w in words if w in t)
+        if any(re.search(rf"\b{re.escape(b)}", t) for b in BAD_WORDS):
+            continue                      # maps, skeletons, drawings, statues…: not a photo of the real subject
+        if p.width >= 1280:
+            score += 1
+        ratio = (p.width / p.height) if p.height else 0
+        if 1.2 <= ratio <= 1.9:
+            score += 1
+        if p.source == "pexels":
+            score += 0.5            # curated, consistent quality
+        scored.append((score, p))
+    scored.sort(key=lambda x: -x[0])
+    return [p for s, p in scored if s > -1]
+
+
 def to_dict(p: StockPhoto) -> dict:
     return asdict(p)

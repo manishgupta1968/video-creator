@@ -3,6 +3,9 @@ import { AlertTriangle, CheckCircle2, Circle, CircleDashed, Clock, Hourglass, Lo
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { api, Node, Project, Status, View } from "./api";
 
+/** lets any component open the command bar (optionally with text typed in) */
+export const commandBus = { open: (_text?: string) => {} };
+
 /** lets any component open the final-video player without prop drilling */
 export const finalPlayer = { open: () => {} };
 

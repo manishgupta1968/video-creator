@@ -7,6 +7,8 @@ import { clsx, type ClassValue } from "clsx";
 import { Loader2, X } from "lucide-react";
 import React, { forwardRef, useEffect, useRef, useState } from "react";
 import { twMerge } from "tailwind-merge";
+import { HelpTip } from "./help";
+export { HelpTip, SpotlightHost, spotlight } from "./help";
 
 export const cn = (...c: ClassValue[]) => twMerge(clsx(c));
 
@@ -14,10 +16,12 @@ type BtnProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "secondary" | "ghost" | "danger" | "outline";
   size?: "sm" | "md" | "lg" | "icon";
   loading?: boolean;
+  help?: string;          // key in helpContent.ts: shows "what it does / what you get" on hover and focus
+  helpExtra?: string;     // extra note that depends on the situation
 };
 export const Button = forwardRef<HTMLButtonElement, BtnProps>(function Button(
-  { variant = "secondary", size = "md", loading, className, children, disabled, ...rest }, ref) {
-  return (
+  { variant = "secondary", size = "md", loading, className, children, disabled, help, helpExtra, ...rest }, ref) {
+  const btn = (
     <button ref={ref} disabled={disabled || loading}
       className={cn(
         "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-all select-none whitespace-nowrap",
@@ -35,6 +39,10 @@ export const Button = forwardRef<HTMLButtonElement, BtnProps>(function Button(
       {children}
     </button>
   );
+  if (!help) return btn;
+  // a disabled button cannot show a tooltip itself, so the wrapper does
+  if (disabled || loading) return <HelpTip id={help} extra={helpExtra}><span className="inline-flex" tabIndex={0}>{btn}</span></HelpTip>;
+  return <HelpTip id={help} extra={helpExtra}>{btn}</HelpTip>;
 });
 
 export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(function Input({ className, ...p }, ref) {
@@ -45,15 +53,16 @@ export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttrib
   return <textarea ref={ref} className={cn("w-full rounded-lg border border-line bg-panel px-2.5 py-2 text-[13px] placeholder:text-muted/70 focus:border-brand focus:outline-none resize-none", className)} {...p} />;
 });
 
-export function Select({ value, onChange, options, className, title }: {
-  value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; className?: string; title?: string;
+export function Select({ value, onChange, options, className, title, help }: {
+  value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; className?: string; title?: string; help?: string;
 }) {
-  return (
-    <select title={title} value={value} onChange={(e) => onChange(e.target.value)}
+  const sel = (
+    <select title={help ? undefined : title} aria-label={title} value={value} onChange={(e) => onChange(e.target.value)}
       className={cn("h-7 rounded-md border border-line bg-panel px-1.5 text-xs text-ink focus:border-brand focus:outline-none cursor-pointer", className)}>
       {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
   );
+  return help ? <HelpTip id={help}><span className={cn("inline-flex", className?.includes("w-full") && "w-full")}>{sel}</span></HelpTip> : sel;
 }
 
 export function Badge({ children, tone = "neutral", className, title }: { children: React.ReactNode; tone?: "neutral" | "ok" | "warn" | "bad" | "info" | "brand"; className?: string; title?: string }) {
@@ -85,16 +94,17 @@ export function Tip({ content, children, side = "top" }: { content: React.ReactN
 }
 export const TipProvider = TooltipP.Provider;
 
-export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
-  return (
+export function Switch({ checked, onChange, label, help, srLabel }: { checked: boolean; onChange: (v: boolean) => void; label?: string; help?: string; srLabel?: string }) {
+  const sw = (
     <label className="inline-flex items-center gap-2 cursor-pointer select-none text-xs">
       <SwitchP.Root checked={checked} onCheckedChange={onChange}
-        className="relative h-4 w-7 rounded-full bg-line data-[state=checked]:bg-brand transition-colors" aria-label={label}>
+        className="relative h-4 w-7 rounded-full bg-line data-[state=checked]:bg-brand transition-colors" aria-label={label || srLabel}>
         <SwitchP.Thumb className="block h-3 w-3 translate-x-0.5 rounded-full bg-white shadow transition-transform data-[state=checked]:translate-x-3.5" />
       </SwitchP.Root>
       {label && <span>{label}</span>}
     </label>
   );
+  return help ? <HelpTip id={help}>{sw}</HelpTip> : sw;
 }
 
 export function Dialog({ open, onOpenChange, title, description, children, wide, footer }: {
@@ -167,12 +177,12 @@ export function Editable({ value, onSave, placeholder, multiline, className, inp
 }
 
 /** Drop files anywhere in an area. */
-export function DropZone({ onFiles, children, className, accept, label = "Drop files here or click to choose", compact }: {
-  onFiles: (f: File[]) => void; children?: React.ReactNode; className?: string; accept?: string; label?: string; compact?: boolean;
+export function DropZone({ onFiles, children, className, accept, label = "Drop files here or click to choose", compact, help }: {
+  onFiles: (f: File[]) => void; children?: React.ReactNode; className?: string; accept?: string; label?: string; compact?: boolean; help?: string;
 }) {
   const [over, setOver] = useState(false);
   const input = useRef<HTMLInputElement>(null);
-  return (
+  const zone = (
     <div onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
       onDrop={(e) => { e.preventDefault(); setOver(false); const f = Array.from(e.dataTransfer.files); if (f.length) onFiles(f); }}
       onClick={() => input.current?.click()} role="button" tabIndex={0}
@@ -183,6 +193,7 @@ export function DropZone({ onFiles, children, className, accept, label = "Drop f
       {children || label}
     </div>
   );
+  return help ? <HelpTip id={help}>{zone}</HelpTip> : zone;
 }
 
 export function Meter({ value, max, tone }: { value: number; max: number; tone?: "ok" | "warn" | "bad" }) {

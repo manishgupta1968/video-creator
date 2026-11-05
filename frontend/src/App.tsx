@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Start from "./components/Start";
 import Workspace from "./components/Workspace";
+import { SpotlightHost } from "./ui";
 
 function useHashRoute(): [string, (h: string) => void] {
   const [hash, setHash] = useState(location.hash);
@@ -26,6 +27,10 @@ export default function App() {
   const [hash, go] = useHashRoute();
   useTheme();
   const m = hash.match(/^#\/p\/(.+)$/);
-  if (m) return <Workspace pid={decodeURIComponent(m[1])} onHome={() => go("")} />;
-  return <Start onOpen={(id) => go(`#/p/${encodeURIComponent(id)}`)} />;
+  return (
+    <>
+      {m ? <Workspace pid={decodeURIComponent(m[1])} onHome={() => go("")} /> : <Start onOpen={(id) => go(`#/p/${encodeURIComponent(id)}`)} />}
+      <SpotlightHost />
+    </>
+  );
 }

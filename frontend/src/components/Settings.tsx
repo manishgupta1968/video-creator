@@ -119,11 +119,11 @@ function Keys({ d }: { d: any }) {
               <KeyRound className="h-3.5 w-3.5 text-muted" />
               <code className="w-44 shrink-0 text-[11px]">{k.name}</code>
               <Input type="password" placeholder={k.set ? "•••••••• (set)" : "paste key"} value={vals[k.name] || ""} onChange={(e) => setVals({ ...vals, [k.name]: e.target.value })} className="h-7" />
-              <Button size="sm" onClick={() => save(k.name)} disabled={!vals[k.name]}>Save</Button>
+              <Button help="save-key" size="sm" onClick={() => save(k.name)} disabled={!vals[k.name]}>Save</Button>
               {k.set && <Button size="sm" variant="ghost" onClick={() => { setVals({ ...vals, [k.name]: "" }); api.setKey(k.name, "").then((r) => qc.setQueryData(["settings"], r)); }}>Remove</Button>}
             </div>
           ))}
-          {v.configured && pluginFor[v.id] && <Button size="sm" variant="ghost" className="mt-1.5" onClick={() => test(pluginFor[v.id])}>Test connection</Button>}
+          {v.configured && pluginFor[v.id] && <Button help="test-connection" size="sm" variant="ghost" className="mt-1.5" onClick={() => test(pluginFor[v.id])}>Test connection</Button>}
         </div>
       ))}
     </div>

@@ -23,10 +23,10 @@ export default function StoryTree() {
           </div>
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto scroll-thin px-1.5 py-2" role="tree" aria-label="Goal tree">
+      <div data-help="story-tree" className="min-h-0 flex-1 overflow-auto scroll-thin px-1.5 py-2" role="tree" aria-label="Goal tree">
         {p.root.children.map((c) => <Row key={c.id} node={c} depth={0} drag={drag} setDrag={setDrag} parentId={p.root.id} />)}
         <div className="px-2 pt-2">
-          <Button variant="ghost" size="sm" className="w-full justify-start"
+          <Button help="add-part" variant="ghost" size="sm" className="w-full justify-start"
             onClick={async () => {
               const r = await P.act("Add part", () => api.addNode(P.pid, { parent_id: p.root.id, kind: "goal", title: "New part", goal: "" }));
               if (r) P.select((r as any).new_id);
@@ -34,7 +34,7 @@ export default function StoryTree() {
         </div>
       </div>
       <div className="border-t border-line p-2">
-        <DropZone compact label="" onFiles={(files) => P.act("Add files", () => api.upload(P.pid, files, { as_node: true }), "Added to the story")}>
+        <DropZone help="drop-media" compact label="" onFiles={(files) => P.act("Add files", () => api.upload(P.pid, files, { as_node: true }), "Added to the story")}>
           <span className="inline-flex items-center gap-1.5"><Paperclip className="h-3.5 w-3.5" />Drop slides or your own video to add them</span>
         </DropZone>
       </div>
@@ -139,7 +139,7 @@ function RowMenu({ node, parentId }: { node: Node; parentId: string }) {
   return (
     <Menu.Root>
       <Menu.Trigger asChild>
-        <button aria-label="More" onClick={(e) => e.stopPropagation()} className="grid h-5 w-5 place-items-center rounded text-muted opacity-0 hover:bg-line/60 group-hover:opacity-100 focus:opacity-100">
+        <button data-help="row-menu" aria-label="More options for this item" onClick={(e) => e.stopPropagation()} className="grid h-5 w-5 place-items-center rounded text-muted opacity-0 hover:bg-line/60 group-hover:opacity-100 focus:opacity-100">
           <MoreHorizontal className="h-3.5 w-3.5" />
         </button>
       </Menu.Trigger>

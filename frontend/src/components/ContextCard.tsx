@@ -41,12 +41,13 @@ export function ContextCard({ item, origin, inheritedOff, onToggle, compact }: {
               <Badge>{CTX_TYPES.find((t) => t.value === item.type)?.label}</Badge>
               <Badge tone="brand">{CTX_ROLES.find((r) => r.value === item.role)?.label}</Badge>
               {label && <Badge tone={inherited ? "neutral" : "info"}>{label}</Badge>}
+              {item.analysis?.auto_photo && <Badge tone="info">photo found for you</Badge>}
             </div>
           )}
         </div>
         {inherited && onToggle && (
           <Tip content={inheritedOff ? "Switched off for this one — click to use it again" : "Inherited — switch off for this one"}>
-            <span><Switch checked={!inheritedOff} onChange={(v) => onToggle(!v)} label="" /></span>
+            <span><Switch help="inherit-toggle" checked={!inheritedOff} onChange={(v) => onToggle(!v)} srLabel="Use this item here" /></span>
           </Tip>
         )}
       </div>
@@ -97,8 +98,25 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
             <DropZone compact className="h-20 w-28 grid place-items-center" label="+ Add files"
               onFiles={(files) => P.act("Upload", () => api.upload(P.pid, files, { ctx_id: item.id }), "Added")} />
           </div>
-          <div className="mt-2 flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => setFinding(true)}><Search className="h-3.5 w-3.5" />Find a photo</Button>
+          {item.analysis?.auto_photo && (
+            <div className="mt-2 rounded-lg bg-info/10 px-3 py-2 text-info">
+              <div className="font-medium">The tool found this photo for you, because you did not add one.</div>
+              <div className="mt-0.5 text-[11px]">Searched for “{item.analysis.auto_photo.query}”. Photo: {item.analysis.auto_photo.photo.title} by {item.analysis.auto_photo.photo.author} ({item.analysis.auto_photo.photo.license}). The credit is saved next to your video.</div>
+              <div className="mt-1.5 flex gap-2">
+                <Button help="choose-another-photo" size="sm" variant="outline" onClick={() => setFinding(true)}>Choose another photo</Button>
+                <Button help="remove-auto-photo" size="sm" variant="ghost" onClick={() => save({ files: [] })}>Remove it</Button>
+              </div>
+            </div>
+          )}
+          {!item.analysis?.auto_photo && item.analysis?.auto_photo_error && item.files.length === 0 && (
+            <div className="mt-2 rounded-lg bg-warn/10 px-3 py-2 text-warn">No photo was found automatically ({item.analysis.auto_photo_error}). Upload one, or pick one with Find a photo. Otherwise a picture is made with an AI image model.</div>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button help="find-photo" size="sm" variant="outline" onClick={() => setFinding(true)}><Search className="h-3.5 w-3.5" />Find a photo</Button>
+            {!isPerson && item.files.length === 0 && (
+              <Button help="auto-photo" size="sm" variant="ghost" loading={P.busy.includes("Finding a photo")}
+                onClick={() => P.act("Finding a photo", () => api.autoPhoto(P.pid, item.id), "Looking for a photo…")}>Find one for me</Button>
+            )}
             {isPerson && <span className="text-[11px] text-muted">Photos of people must be uploaded (your own, or with permission).</span>}
           </div>
         </div>
@@ -145,7 +163,7 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
                   </div>
                 ) : (
                   <div className="space-y-1.5">
-                    <Button size="sm" variant="primary" onClick={() => setRecording(true)}><Mic className="h-3.5 w-3.5" />Record my voice</Button>
+                    <Button help="record-voice" size="sm" variant="primary" onClick={() => setRecording(true)}><Mic className="h-3.5 w-3.5" />Record my voice</Button>
                     <DropZone compact label="…or drop a voice file (30 s – 2 min)" accept="audio/*"
                       onFiles={(files) => P.act("Upload", () => api.upload(P.pid, files, { ctx_id: item.id }), "Voice sample added")} />
                   </div>
@@ -154,7 +172,7 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
               <div>
                 <div className="field-label mb-1">Or describe the voice</div>
                 <Editable value={a?.voice_description || ""} onSave={(voice_description) => saveActor({ voice_description })} placeholder="e.g. deep, warm, Indian English, slow" />
-                <Button size="sm" variant="ghost" className="mt-1" loading={P.busy.includes("Voice preview")}
+                <Button help="preview-voice" size="sm" variant="ghost" className="mt-1" loading={P.busy.includes("Voice preview")}
                   onClick={async () => { const r: any = await P.act("Voice preview", () => api.voicePreview(P.pid, item.id)); if (r?.url) { setPlaying(r.url); } }}>
                   <Play className="h-3 w-3" />Preview voice</Button>
                 {playing && <audio src={playing} autoPlay controls className="mt-1 h-8 w-full" />}
@@ -173,8 +191,8 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 text-warn"><ShieldAlert className="h-4 w-4" />Before this face or voice is used, confirm one:</div>
                     <div className="flex gap-2">
-                      <Button size="sm" onClick={() => P.act("Consent", () => api.consent(P.pid, item.id, "self"), "Consent recorded")}>This is me</Button>
-                      <Button size="sm" onClick={() => P.act("Consent", () => api.consent(P.pid, item.id, "permission"), "Consent recorded")}>I have this person's permission</Button>
+                      <Button help="consent-self" size="sm" onClick={() => P.act("Consent", () => api.consent(P.pid, item.id, "self"), "Consent recorded")}>This is me</Button>
+                      <Button help="consent-permission" size="sm" onClick={() => P.act("Consent", () => api.consent(P.pid, item.id, "permission"), "Consent recorded")}>I have this person's permission</Button>
                     </div>
                     <div className="text-[11px] text-muted">Realistic videos of public figures without consent are not allowed.</div>
                   </div>

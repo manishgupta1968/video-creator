@@ -5,7 +5,7 @@ import { fmtRange, fmtSec, fmtTime, fmtUsd, leaves, SHOT_TYPES, STATUS, useP, us
 import { Badge, Button, Card, cn, Dialog, Editable, Empty, Select, Switch, Textarea, Tip } from "../ui";
 import { useRun } from "./ConfirmRun";
 import { FinalVideoDialog, PreviewBadge } from "./Banners";
-import { finalPlayer } from "../lib";
+import { commandBus, finalPlayer } from "../lib";
 
 export default function Editor({ node }: { node: Node }) {
   const P = useP();
@@ -49,7 +49,7 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
         </div>
       </Card>
       {isRoot && sum.final_ready && (
-        <Card className="overflow-hidden">
+        <Card data-help="final-card" className="overflow-hidden">
           <div className="flex items-center gap-3 border-b border-line px-4 py-2.5">
             <div className="text-sm font-semibold">Final video</div>
             {sum.final_stale ? <Badge tone="warn">Out of date — something changed since it was made</Badge> : <Badge tone="ok">Up to date</Badge>}
@@ -61,14 +61,15 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
           <div className="px-4 py-2 text-[11px] text-muted">The clips were joined with transitions, music and subtitles. When you change a clip, use “Update final video” in the bottom bar.</div>
         </Card>
       )}
+      <NodeReview node={node} />
       <AskAI node={node} placeholder={isRoot ? "e.g. make the whole video more emotional" : "e.g. make this part shorter and punchier"} />
       <div className="flex flex-wrap gap-2">
-        <Button variant="primary" loading={breaking} onClick={() => P.act("Breaking down", () => api.decompose(P.pid, node.id), "Broken down into clips")}>
+        <Button help="break-down" variant="primary" loading={breaking} onClick={() => P.act("Breaking down", () => api.decompose(P.pid, node.id), "Broken down into clips")}>
           <Sparkles className="h-3.5 w-3.5" />Break down with AI
         </Button>
-        {unscripted > 0 && <Button onClick={() => P.act("Writing scripts", () => api.writeScripts(P.pid, node.id), "Scripts written")} loading={P.busy.includes("Writing scripts")}>
+        {unscripted > 0 && <Button help="write-scripts" onClick={() => P.act("Writing scripts", () => api.writeScripts(P.pid, node.id), "Scripts written")} loading={P.busy.includes("Writing scripts")}>
           <Wand2 className="h-3.5 w-3.5" />Write {unscripted} missing script(s)</Button>}
-        {clipsBelow.length > 0 && <Button onClick={() => run({ mode: "clip", targets: clipsBelow.filter((c) => c.status !== "done").map((c) => c.id), title: `Make the clips in ${isRoot ? "the video" : `part ${P.numbers[node.id]}`}` })}>
+        {clipsBelow.length > 0 && <Button help="generate-part" onClick={() => run({ mode: "clip", targets: clipsBelow.filter((c) => c.status !== "done").map((c) => c.id), title: `Make the clips in ${isRoot ? "the video" : `part ${P.numbers[node.id]}`}` })}>
           <Play className="h-3.5 w-3.5" />Generate this part</Button>}
       </div>
       <div>
@@ -95,6 +96,58 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
   );
 }
 
+/** The Review Agent's opinion of a joined part (or the whole video). It only suggests. */
+function NodeReview({ node }: { node: Node }) {
+  const P = useP();
+  const p = P.view!.project;
+  const isRoot = node.id === p.root.id;
+  const review = p.reviews.find((r) => r.target === node.id);
+  if (!review) return null;
+  const stale = isRoot && P.view!.summary.final_stale;
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <Sparkles className="h-4 w-4 text-brand" />
+        <span className="text-sm font-semibold">Review Agent — {isRoot ? "the whole video" : "this part"}</span>
+        {verdictBadge(review)}
+        {stale && <Badge tone="warn">older than your latest changes</Badge>}
+        <span className="ml-auto text-[11px] text-muted">{review.reviewer_model} · {fmtUsd(review.cost_usd)} · suggestions only; you decide</span>
+      </div>
+      {review.summary && <p className="text-xs">{review.summary}</p>}
+      <div className="mt-2 grid grid-cols-4 gap-x-4 gap-y-1.5">
+        {Object.entries(review.scores).map(([k, v]) => (
+          <div key={k} className="text-[11px]">
+            <div className="flex justify-between"><span className="capitalize text-muted">{k}</span><span className="font-medium">{v}/5</span></div>
+            <div className="mt-0.5 h-1 rounded-full bg-line"><div className={cn("h-full rounded-full", v >= 4 ? "bg-ok" : v >= 3 ? "bg-warn" : "bg-bad")} style={{ width: `${v * 20}%` }} /></div>
+          </div>
+        ))}
+      </div>
+      {review.issues.length > 0 && (
+        <ul className="mt-3 space-y-1">
+          {review.issues.map((iss, i) => (
+            <li key={i} className="flex items-start gap-2 text-xs">
+              <span className={cn("mt-1 h-1.5 w-1.5 shrink-0 rounded-full", iss.severity === "major" ? "bg-bad" : "bg-warn")} />
+              <span><span className="font-medium capitalize">{iss.check}:</span> {iss.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {review.suggestions.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          <div className="field-label">Suggestions</div>
+          {review.suggestions.map((sg) => (
+            <div key={sg.id} className="flex items-start gap-2 rounded-lg bg-sunken/60 px-2.5 py-1.5 text-xs">
+              <span className="flex-1">{sg.text}</span>
+              <Button help="apply-with-ai" size="sm" variant="outline" onClick={() => commandBus.open(sg.text)}>Apply with Ask AI</Button>
+            </div>
+          ))}
+          <div className="text-[11px] text-muted">“Apply with Ask AI” shows you exactly what would change before anything is edited.</div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function LengthEditor({ node, onSave, isRoot }: { node: Node; onSave: (v: number | null) => void; isRoot?: boolean }) {
   const P = useP();
   const target = isRoot ? P.view!.project.settings.target_seconds : node.target_seconds;
@@ -103,7 +156,7 @@ function LengthEditor({ node, onSave, isRoot }: { node: Node; onSave: (v: number
       <span className="inline-flex items-center gap-1.5">
         <span className="font-medium">~{fmtSec(node.duration.likely_s)}</span>
         <span className="text-muted">target</span>
-        <input aria-label="Target seconds" type="number" min={1} defaultValue={target ?? ""} placeholder="auto" key={String(target)}
+        <input data-help="target-seconds" aria-label="Target seconds" type="number" min={1} defaultValue={target ?? ""} placeholder="auto" key={String(target)}
           onBlur={(e) => { const v = e.target.value ? Number(e.target.value) : null; if (v !== target) onSave(v); }}
           className="h-6 w-16 rounded-md border border-line bg-panel px-1.5 text-xs" />
         <span className="text-muted">s</span>
@@ -122,7 +175,7 @@ function AskAI({ node, placeholder }: { node: Node; placeholder: string }) {
     if (r) setText("");
   };
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-1.5 focus-within:border-brand">
+    <div data-help="ask-ai-box" className="flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-1.5 focus-within:border-brand">
       <Sparkles className="h-4 w-4 shrink-0 text-brand" />
       <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()}
         placeholder={`Ask AI to change this — ${placeholder}`} aria-label="Ask AI"
@@ -193,11 +246,11 @@ function ClipEditor({ node }: { node: Node }) {
           <Tip content={node.time.explain}><span className="cursor-help text-muted">~{fmtTime(node.time.likely_s)} to make</span></Tip>
           <div className="flex-1" />
           {node.kind === "clip" && (
-            <Select value={node.provider_override || ""} onChange={(v) => saveNode({ provider_override: v || null })} title="Model"
+            <Select help="model-select" value={node.provider_override || ""} onChange={(v) => saveNode({ provider_override: v || null })} title="Model"
               options={[{ value: "", label: `Model: auto (${node.cost.model || "best fit"})` },
                 ...videoModels.map((e: any) => ({ value: e.id, label: `${e.id} · $${e.price.usd}/s` }))]} />
           )}
-          <Button variant="primary" size="sm" disabled={generating}
+          <Button help="clip-generate" variant="primary" size="sm" disabled={generating}
             onClick={() => run({ mode: "clip", targets: [node.id], title: `Make clip ${P.numbers[node.id]}` })}>
             <Play className="h-3.5 w-3.5" />{node.status === "done" || node.takes.length ? "Re-make" : "Generate this clip"}
           </Button>
@@ -231,10 +284,10 @@ function ClipEditor({ node }: { node: Node }) {
           <div className="grid gap-3 p-4 sm:grid-cols-2">
             <div>
               <div className="field-label mb-1">Shot type</div>
-              <Select value={s.shot_type} onChange={(shot_type) => saveScript({ shot_type })} options={SHOT_TYPES} />
+              <Select help="shot-type" title="Shot type" value={s.shot_type} onChange={(shot_type) => saveScript({ shot_type })} options={SHOT_TYPES} />
             </div>
             <div className="flex items-end gap-4">
-              <Switch checked={s.on_camera_speech} onChange={(on_camera_speech) => saveScript({ on_camera_speech })} label="Someone speaks on camera (lip-sync)" />
+              <Switch help="on-camera-speech" checked={s.on_camera_speech} onChange={(on_camera_speech) => saveScript({ on_camera_speech })} label="Someone speaks on camera (lip-sync)" />
             </div>
           </div>
           <div className="p-4">
@@ -374,7 +427,7 @@ function Takes({ node, takes }: { node: Node; takes: Take[] }) {
         <div className="text-sm font-semibold">Takes</div>
         {needPick && <Badge tone="warn">Pick the best take</Badge>}
         <div className="flex-1" />
-        <Button size="sm" variant="ghost" onClick={() => setCompare(true)}>Compare models…</Button>
+        <Button help="compare-models" size="sm" variant="ghost" onClick={() => setCompare(true)}>Compare models…</Button>
       </div>
       <div className={cn("grid gap-3", takes.length === 1 ? "grid-cols-1" : takes.length === 2 ? "grid-cols-2" : "grid-cols-3")}>
         {takes.map((t, i) => {
@@ -393,7 +446,7 @@ function Takes({ node, takes }: { node: Node; takes: Take[] }) {
               </div>
               <div className="px-1 pb-0.5 pt-1.5">
                 {chosen ? <Badge tone="ok"><Check className="h-3 w-3" />Chosen</Badge>
-                  : <Button size="sm" variant={needPick ? "primary" : "outline"} className="w-full" onClick={(e) => { e.stopPropagation(); P.act("Picking", () => api.pick(P.pid, node.id, t.id), "Take chosen"); }}>Pick this take</Button>}
+                  : <Button help="pick-take" size="sm" variant={needPick ? "primary" : "outline"} className="w-full" onClick={(e) => { e.stopPropagation(); P.act("Picking", () => api.pick(P.pid, node.id, t.id), "Take chosen"); }}>Pick this take</Button>}
               </div>
             </div>
           );
@@ -446,10 +499,10 @@ function Takes({ node, takes }: { node: Node; takes: Take[] }) {
         )}
         <div className="mt-3">
           <div className="field-label mb-1">Your feedback (wins over the agent's)</div>
-          <Textarea rows={2} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="e.g. make the strap break in slow motion" />
+          <Textarea data-help="feedback-box" rows={2} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="e.g. make the strap break in slow motion" />
         </div>
         <div className="mt-2 flex justify-end">
-          <Button variant="primary" size="sm" onClick={openPreview} loading={P.busy.includes("Preparing re-make")} disabled={!feedback.trim() && accepted.length === 0}>
+          <Button help="remake-feedback" variant="primary" size="sm" onClick={openPreview} loading={P.busy.includes("Preparing re-make")} disabled={!feedback.trim() && accepted.length === 0}>
             <RefreshCw className="h-3.5 w-3.5" />Re-make with feedback…</Button>
         </div>
       </div>

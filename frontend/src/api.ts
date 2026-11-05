@@ -35,7 +35,7 @@ export interface Review {
   issues: { check: string; text: string; at_s: number | null; frame: string | null; severity: string }[];
   suggestions: { id: string; text: string; accepted: boolean }[]; summary: string; reviewer_model: string; cost_usd: number;
 }
-export interface Settings { target_seconds: number; aspect: string; resolution: string; fps: number; format: "mp4" | "mov"; budget_usd: number; takes_people: number; takes_other: number; language: string; default_wpm: number; subtitles: boolean; auto_pick: boolean; review_enabled: boolean; music: boolean; quality_mode: string }
+export interface Settings { auto_photo: boolean; target_seconds: number; aspect: string; resolution: string; fps: number; format: "mp4" | "mov"; budget_usd: number; takes_people: number; takes_other: number; language: string; default_wpm: number; subtitles: boolean; auto_pick: boolean; review_enabled: boolean; music: boolean; quality_mode: string }
 export interface Project {
   id: string; name: string; goal: string; settings: Settings; style: { look: string; colour: string; mood: string; notes: string };
   root: Node; context: Ctx[]; dependencies: Dep[]; reviews: Review[];
@@ -43,7 +43,7 @@ export interface Project {
   final_output: string | null; final_review_id: string | null; updated_at: string;
 }
 export interface Summary {
-  seconds: number; seconds_min: number; seconds_max: number; target_seconds: number; cost: number; cost_min: number; cost_max: number;
+  seconds: number; seconds_min: number; seconds_max: number; target_seconds: number; cost: number; cost_min: number; cost_max: number; cost_total: number;
   time_s: number; spent: number; budget: number; warnings: string[]; waiting_picks: number; review_flags: number; clips: number; done: number;
   numbers: Record<string, string>; brain: string;
   preview: { clips: Record<string, string[]>; jobs: Record<string, string>; all_preview: boolean; chosen_free_mode: boolean; voice_sample_unused: string[] };
@@ -53,6 +53,12 @@ export interface Activity { node: string; step: string; elapsed_s: number; step_
 export interface View { project: Project; summary: Summary; engine: { active: boolean; running_clips: string[]; activity: Activity[] } }
 export interface StockPhoto { source: string; title: string; thumb: string; url: string; width: number; height: number; author: string; license: string; source_url: string }
 export interface Estimate { clips: string[]; extra_upstream: string[]; cost_usd: number; time_s: number; spent_usd: number; budget_usd: number; over_budget: boolean }
+export interface BudgetRow { at: string; what: string; vendor: string; model: string; how: string; estimated: number; actual: number }
+export interface BudgetGroup { key: string; label: string; calls: number; estimated: number; actual: number; rows: BudgetRow[] }
+export interface BudgetReport {
+  budget: number; spent: number; ledger_total: number; remaining_estimate: number; left_in_budget: number;
+  groups: BudgetGroup[]; brain: { plugin: string; model: string; price: string }; explain: string[];
+}
 export interface CommandPlan { summary: string; ops: { op: string; target: string; field: string; value: string }[] }
 
 async function req<T>(method: string, url: string, body?: any): Promise<T> {
@@ -83,6 +89,8 @@ export const api = {
   redraft: (pid: string) => req<any>("POST", `${P(pid)}/draft`),
   undo: (pid: string) => req<View>("POST", `${P(pid)}/undo`),
   redo: (pid: string) => req<View>("POST", `${P(pid)}/redo`),
+  budget: (pid: string) => req<BudgetReport>("GET", `${P(pid)}/budget`),
+  explain: (pid: string, question: string, focus?: string) => req<{ answer: string }>("POST", `${P(pid)}/explain`, { question, focus }),
   ledger: (pid: string) => req<any[]>("GET", `${P(pid)}/ledger`),
 
   addNode: (pid: string, body: any) => req<View & { new_id: string }>("POST", `${P(pid)}/nodes`, body),
@@ -119,6 +127,7 @@ export const api = {
     return req<View>("POST", `${P(pid)}/context/${cid}/voice-recording`, fd);
   },
   stockSearch: (q: string, source: string) => req<{ sources: string[]; results: StockPhoto[] }>("GET", `/api/stock/search?q=${encodeURIComponent(q)}&source=${source}`),
+  autoPhoto: (pid: string, cid: string) => req<any>("POST", `${P(pid)}/context/${cid}/auto-photo`),
   stockAdd: (pid: string, cid: string, photo: StockPhoto) => req<View>("POST", `${P(pid)}/context/${cid}/stock`, photo),
   voicePreview: (pid: string, cid: string) => req<{ url: string }>("POST", `${P(pid)}/context/${cid}/voice-preview`),
 

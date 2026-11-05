@@ -332,3 +332,49 @@ def test_time_is_zero_after_everything_is_made(svc):
     p.final_output = "output/final.mp4"
     svc.refresh(p)
     assert p.root.time.likely_s == 0
+
+
+# ------------------------------------------------------------------ explain everything
+def test_budget_report_explains_where_money_went(svc):
+    p = svc.new_project("goal", seconds=10, budget=50)
+    ProjectStore.ledger_add(p.id, {"kind": "llm", "what": "draft plan", "plugin": "openai", "model": "gpt-5", "tokens_in": 12000, "tokens_out": 3000,
+                                   "estimated_usd": 0.045, "actual_usd": 0.045})
+    ProjectStore.ledger_add(p.id, {"kind": "review", "what": "review x", "plugin": "openai", "model": "gpt-5", "tokens_in": 20000, "tokens_out": 1500,
+                                   "estimated_usd": 0.04, "actual_usd": 0.04})
+    ProjectStore.ledger_add(p.id, {"kind": "voice", "what": "voice 1.1", "plugin": "elevenlabs", "units": "92 chars", "rate": "at $0.1/1k chars",
+                                   "estimated_usd": 0.0092, "actual_usd": 0.0092})
+    q = svc.load(p.id)
+    q.run.spent_usd = 0.0942
+    ProjectStore.save(q, snapshot=False)
+    r = svc.budget_report(p.id)
+    assert r["budget"] == 50 and r["spent"] == 0.0942 and abs(r["ledger_total"] - 0.0942) < 1e-6
+    labels = {g["key"]: g for g in r["groups"]}
+    assert labels["llm"]["rows"][0]["how"] == "12,000 tokens in + 3,000 tokens out"
+    assert "92 chars" in labels["voice"]["rows"][0]["how"]
+    assert any("safety limit" in line for line in r["explain"]) and any("Budget guard" in line for line in r["explain"])
+
+
+def test_project_cost_is_what_is_still_to_spend_not_what_was_spent(svc, monkeypatch):
+    for k in ("FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.setenv(k, "x")
+    svc.reload()
+    p, lion, clip = lion_project(svc)
+    before = svc.summary(svc.load(p.id))
+    assert before["cost"] > 0 and abs(before["cost"] - before["cost_total"]) < 0.01
+    q = svc.load(p.id)
+    next(l for l in leaves(q) if l.id == clip.id).status = NodeStatus.done
+    ProjectStore.save(q, snapshot=False)
+    after = svc.summary(svc.load(p.id))
+    assert after["cost"] == 0 and after["cost_total"] > 0          # made clips are in "spent", not "still to spend"
+
+
+def test_facts_and_explain_answer_from_the_projects_own_numbers(svc, monkeypatch):
+    for k in ("FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.setenv(k, "x")
+    svc.reload()
+    p, lion, clip = lion_project(svc)
+    facts = svc.facts(p.id)
+    assert "MONEY: budget $50.00" in facts and "CLIP 1.1" in facts and "kling_avatar" in facts and "price $0.115" in facts
+    assert "Reference picture of Kito" in facts                       # cost lines are quoted so they can be explained
+    answer = asyncio.run(svc.explain(p.id, "why does the clip cost so much?"))
+    assert answer and "CLIP" in answer                                # offline helper quotes the matching facts

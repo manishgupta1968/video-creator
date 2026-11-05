@@ -178,6 +178,17 @@ async def redo(pid: str):
     return view(pid)
 
 
+@app.get("/api/projects/{pid}/budget")
+async def budget(pid: str):
+    return await guard(svc.budget_report)(pid)
+
+
+@app.post("/api/projects/{pid}/explain")
+async def explain(pid: str, body: dict = Body(...)):
+    answer = await guard(svc.explain)(pid, body["question"], body.get("focus"))
+    return {"answer": answer}
+
+
 @app.get("/api/projects/{pid}/ledger")
 async def ledger(pid: str):
     return ProjectStore.ledger(pid)
@@ -278,7 +289,16 @@ async def command_apply(pid: str, body: dict = Body(...)):
 @app.post("/api/projects/{pid}/context")
 async def add_context(pid: str, body: dict = Body(...)):
     _, item = await guard(svc.add_context)(pid, body)
+    if svc.wants_auto_photo(item) and svc.load(pid).settings.auto_photo:
+        bg(svc.auto_photos(pid, only=[item.id]), pid, f"Finding a photo of {item.title}")    # free; only when you gave none
     return {**view(pid), "new_id": item.id}
+
+
+@app.post("/api/projects/{pid}/context/{cid}/auto-photo")
+async def auto_photo(pid: str, cid: str):
+    """The 'find one for me' button. Never replaces a photo you supplied unless you remove it first."""
+    bg(svc.auto_photos(pid, only=[cid], force=True), pid, "Finding a photo")
+    return {"ok": True}
 
 
 @app.post("/api/projects/{pid}/context/upload")

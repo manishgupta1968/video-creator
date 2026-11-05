@@ -16,7 +16,7 @@ export default function StockSearch({ item, open, onOpenChange }: { item: Ctx | 
   const isPerson = item?.type === "actor" && (!item.actor || ["ai_person", "real_person", "digital_twin"].includes(item.actor.kind));
 
   useEffect(() => {
-    if (open && item) { setQ(item.title === "Photo" ? "" : (item.actor?.description || item.title || "").split(/[.,;]/)[0].slice(0, 60)); setResults(null); setError(""); }
+    if (open && item) { setQ(item.analysis?.auto_photo?.query || (item.title === "Photo" ? "" : (item.actor?.description || item.title || "").split(/[.,;]/)[0].slice(0, 60))); setResults(null); setError(""); }
   }, [open, item?.id]); // eslint-disable-line
 
   const search = async () => {
@@ -52,7 +52,7 @@ export default function StockSearch({ item, open, onOpenChange }: { item: Ctx | 
                   <div className="truncate font-medium" title={r.title}>{r.title}</div>
                   <div className="flex flex-wrap items-center gap-1"><Badge tone="info">{r.license}</Badge><span className="truncate text-muted" title={r.author}>{r.author}</span></div>
                   <div className="flex items-center gap-1.5">
-                    <Button size="sm" variant="primary" className="flex-1" loading={adding === r.url}
+                    <Button help="use-photo" size="sm" variant="primary" className="flex-1" loading={adding === r.url}
                       onClick={async () => {
                         setAdding(r.url);
                         const ok = await P.act("Adding photo", () => api.stockAdd(P.pid, item.id, r), "Photo added");

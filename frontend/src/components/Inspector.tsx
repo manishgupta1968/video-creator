@@ -58,7 +58,7 @@ function ContextTab({ node }: { node: Node }) {
           <SectionTitle title={ownLabel} hint="Photos, sounds, notes that apply only here" />
           <div className="space-y-1.5">
             {own.map((e) => <ContextCard key={e.item.id} item={e.item} origin="this" />)}
-            <DropZone compact label="Drop photos, sounds, notes for this one"
+            <DropZone help="ctx-drop" compact label="Drop photos, sounds, notes for this one"
               onFiles={(files) => P.act("Upload", () => api.upload(P.pid, files, { scope }), "Added")} />
           </div>
         </section>
@@ -82,17 +82,17 @@ function ContextTab({ node }: { node: Node }) {
         <Input value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addNote(scope)}
           placeholder={`Add a note ${isRoot ? "for all clips" : node.kind === "goal" ? "for this part" : "for this clip"}… (Enter)`} />
         <div className="flex gap-1.5">
-          <Button size="sm" variant="ghost" onClick={() => P.act("Add actor", () => api.addContext(P.pid, { type: "actor", role: "must_appear", title: "New actor", scope }), "Actor added — click it to describe")}>
+          <Button help="add-actor" size="sm" variant="ghost" onClick={() => P.act("Add actor", () => api.addContext(P.pid, { type: "actor", role: "must_appear", title: "New actor", scope }), "Actor added — click it to describe")}>
             <Plus className="h-3.5 w-3.5" />Actor</Button>
-          <Button size="sm" variant="ghost" onClick={() => P.act("Add", () => api.addContext(P.pid, { type: "location", role: "look_reference", title: "Location", scope }))}><Plus className="h-3.5 w-3.5" />Location</Button>
-          <Button size="sm" variant="ghost" onClick={() => P.act("Add", () => api.addContext(P.pid, { type: "object", role: "must_appear", title: "Object", scope }))}><Plus className="h-3.5 w-3.5" />Object</Button>
+          <Button help="add-location" size="sm" variant="ghost" onClick={() => P.act("Add", () => api.addContext(P.pid, { type: "location", role: "look_reference", title: "Location", scope }))}><Plus className="h-3.5 w-3.5" />Location</Button>
+          <Button help="add-object" size="sm" variant="ghost" onClick={() => P.act("Add", () => api.addContext(P.pid, { type: "object", role: "must_appear", title: "Object", scope }))}><Plus className="h-3.5 w-3.5" />Object</Button>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          <Button size="sm" variant="outline" onClick={async () => {
+          <Button help="my-voice" size="sm" variant="outline" onClick={async () => {
             const r: any = await P.act("Add voice", () => api.addContext(P.pid, { type: "actor", role: "voice", title: "Me (narrator)", scope: "project", actor: { kind: "real_person", description: "my own voice" } }));
             if (r?.new_id) setRecordFor(r.new_id);
           }}><Mic className="h-3.5 w-3.5" />My voice</Button>
-          <Button size="sm" variant="outline" onClick={async () => {
+          <Button help="find-photo" size="sm" variant="outline" onClick={async () => {
             const r: any = await P.act("Add photo", () => api.addContext(P.pid, { type: "object", role: "must_appear", title: "Photo", scope }));
             if (r?.new_id) setFindFor(r.new_id);
           }}><Search className="h-3.5 w-3.5" />Find a photo</Button>
@@ -139,7 +139,7 @@ function CostTab({ node }: { node: Node }) {
       )}
       {node.cost.actual_usd != null && <div className="flex justify-between rounded-lg bg-sunken px-3 py-2"><span>Actual so far</span><span className="font-medium">{fmtUsd(node.cost.actual_usd)}</span></div>}
       {isClip && (
-        <div className="space-y-2 rounded-xl border border-line p-3">
+        <div data-help="what-if" className="space-y-2 rounded-xl border border-line p-3">
           <div className="text-xs font-semibold">What if…</div>
           <div className="flex items-center justify-between gap-2"><span className="text-muted">Model</span>
             <Select value={node.provider_override || ""} onChange={(v) => P.act("Save", () => api.patchNode(P.pid, node.id, { provider_override: v || null }))}
@@ -170,7 +170,7 @@ function CostTab({ node }: { node: Node }) {
           <div className="flex items-center justify-between gap-2"><span className="text-muted">Budget ($)</span>
             <input type="number" defaultValue={p.settings.budget_usd} key={p.settings.budget_usd} className="h-7 w-24 rounded-md border border-line bg-panel px-2 text-right"
               onBlur={(e) => P.act("Save", () => api.patch(P.pid, { settings: { budget_usd: Number(e.target.value) } }))} /></div>
-          {[["Background music", "music"], ["Review Agent", "review_enabled"], ["Auto-pick best take", "auto_pick"]].map(([label, key]) => (
+          {[["Background music", "music"], ["Review Agent", "review_enabled"], ["Auto-pick best take", "auto_pick"], ["Find photos by itself", "auto_photo"]].map(([label, key]) => (
             <div key={key} className="flex items-center justify-between gap-2"><span className="text-muted">{label}</span>
               <Select value={(p.settings as any)[key] ? "on" : "off"} options={[{ value: "on", label: "On" }, { value: "off", label: "Off" }]}
                 onChange={(v) => P.act("Save", () => api.patch(P.pid, { settings: { [key]: v === "on" } }))} /></div>
@@ -237,9 +237,9 @@ function LinksTab({ node }: { node: Node }) {
         <div className="text-xs font-semibold">Add a link</div>
         <Select value={from} onChange={setFrom} className="w-full" options={[{ value: "", label: "This clip depends on…" }, ...clips.map((c) => ({ value: c.id, label: title(c.id) }))]} />
         <Select value={type} onChange={setType} className="w-full" options={DEP_TYPES} />
-        <Button size="sm" disabled={!from} onClick={() => P.act("Link", () => api.addDep(P.pid, from, node.id, type), "Link added").then(() => setFrom(""))}><Link2 className="h-3.5 w-3.5" />Add link</Button>
+        <Button help="add-link" size="sm" disabled={!from} onClick={() => P.act("Link", () => api.addDep(P.pid, from, node.id, type), "Link added").then(() => setFrom(""))}><Link2 className="h-3.5 w-3.5" />Add link</Button>
       </section>
-      <Button size="sm" variant="ghost" loading={P.busy.includes("Finding links")} onClick={() => P.act("Finding links", () => api.suggestDeps(P.pid), "Links updated")}>
+      <Button help="find-links" size="sm" variant="ghost" loading={P.busy.includes("Finding links")} onClick={() => P.act("Finding links", () => api.suggestDeps(P.pid), "Links updated")}>
         <Sparkles className="h-3.5 w-3.5" />Find links with AI</Button>
     </div>
   );
@@ -257,7 +257,7 @@ function VersionsTab({ node }: { node: Node }) {
           <div className="flex items-center justify-between"><span className="font-medium">v{v.version}</span><span className="text-[11px] text-muted">{new Date(v.created_at).toLocaleString()}</span></div>
           {v.feedback && <div className="mt-1 text-[11px] text-muted line-clamp-3">Feedback: {v.feedback}</div>}
           <div className="mt-1 line-clamp-2">{v.script.visual}</div>
-          <Button size="sm" variant="outline" className="mt-2" onClick={() => P.act("Going back", () => api.revert(P.pid, node.id, v.version), `Back to v${v.version}`)}>Go back to this version</Button>
+          <Button help="revert-version" size="sm" variant="outline" className="mt-2" onClick={() => P.act("Going back", () => api.revert(P.pid, node.id, v.version), `Back to v${v.version}`)}>Go back to this version</Button>
         </div>
       ))}
     </div>

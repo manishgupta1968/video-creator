@@ -111,6 +111,25 @@ class FakeLLM(LLM):
                 "style": {"look": "cinematic, photoreal, natural light", "colour": "rich natural colour", "mood": mood},
                 "actors": actors, "parts": parts}
 
+    def _explain(self, m: dict) -> dict:
+        q = (m.get("question") or "").lower()
+        words = {w for w in re.findall(r"[a-z]{4,}", q) if w not in ("what", "does", "this", "that", "mean", "with", "from", "have", "tool", "about", "explain", "please")}
+        lines = [l for l in (m.get("facts") or "").splitlines() if l.strip()]
+        hits = [l for l in lines if any(w in l.lower() for w in words)][:12] or lines[:10]
+        return {"answer": "I am the offline helper, so I can only show the matching facts about your project (connect an AI brain in Settings for a written explanation):\n" + "\n".join(hits)}
+
+    def _photo_query(self, m: dict) -> dict:
+        text = f"{m.get('title', '')} {m.get('description', '')}".lower()
+        for a in ANIMALS:
+            if a in text:
+                extra = "male " if any(w in text for w in ("male", "mane", "stag")) and a in ("lion", "deer") else ""
+                return {"query": f"{extra}{a}".strip()}
+        words = [w for w in re.findall(r"[a-z]{4,}", text) if w not in ("realistic", "powerful", "adult", "with", "that", "this")]
+        return {"query": " ".join(words[:2]) or (m.get("title") or "photo")}
+
+    def _pick_photo(self, m: dict) -> dict:
+        return {"choice": 1, "reason": "offline brain: first ranked result"}
+
     def _decompose(self, m: dict) -> dict:
         goal, secs = m.get("goal", ""), float(m.get("seconds") or 18)
         n = max(2, min(4, round(secs / 7)))
@@ -196,7 +215,8 @@ class FakeLLM(LLM):
 
     def _review(self, m: dict) -> dict:
         issues, suggestions = [], []
-        scores = {"goal": 4, "script": 4, "actors": 4, "behaviour": 4, "realism": 3, "continuity": 4, "timing": 4, "lipsync": 5}
+        scores = {"goal": 4, "script": 4, "actors": 4, "behaviour": 4, "realism": 0, "motion": 0, "consistency": 0,
+                  "fidelity": 0, "audio": 0, "continuity": 4, "timing": 4, "lipsync": 5}   # 0 = the offline brain cannot see or hear
         if m.get("node_review"):
             target, actual = float(m.get("target") or 0), float(m.get("actual") or 0)
             if target and abs(actual - target) / target > 0.15:
@@ -217,8 +237,8 @@ class FakeLLM(LLM):
                 suggestions.append(f'make sure the line "{line[:40]}…" is spoken clearly')
         meas = m.get("measurements") or {}
         if meas.get("flicker", 0) > 0.05:
-            scores["realism"] = 2
-            issues.append({"check": "realism", "text": "visible flicker between frames", "severity": "minor"})
+            scores["consistency"] = 2
+            issues.append({"check": "consistency", "text": "visible flicker between frames", "severity": "minor"})
             suggestions.append("add 'stable lighting, no flicker' and try another take")
         fs = meas.get("face_similarity")
         if fs is not None and fs < 0.5:
@@ -233,4 +253,4 @@ class FakeLLM(LLM):
         bad = any(v <= 2 for k, v in scores.items() if k in ("goal", "script"))
         verdict = "does_not_meet_goal" if bad else ("minor_issues" if issues else "meets_goal")
         return {"verdict": verdict, "scores": scores, "issues": issues, "suggestions": suggestions,
-                "summary": "Offline check (speech, timing, flicker, face match). Connect an AI brain to also judge what is on screen."}
+                "summary": "Offline check: speech, timing and the measured numbers only. Connect an AI brain (Anthropic, OpenAI or Gemini) so the Review Agent can also look at realism, motion and quality."}

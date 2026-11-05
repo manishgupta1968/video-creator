@@ -116,6 +116,19 @@ class DepList(BaseModel):
     dependencies: list[DepDraft] = Field(default_factory=list)
 
 
+class PhotoQuery(BaseModel):
+    query: str
+
+
+class PhotoChoice(BaseModel):
+    choice: int = 1        # 1-based; 0 = none acceptable
+    reason: str = ""
+
+
+class Explained(BaseModel):
+    answer: str
+
+
 class Op(BaseModel):
     op: Literal["set_title", "set_goal", "set_seconds", "set_script", "add_child", "remove",
                 "set_actor", "set_style", "generate", "regenerate_scripts"]
@@ -137,11 +150,16 @@ class IssueDraft(BaseModel):
 
 
 class Scores(BaseModel):
+    """1-5 each. 0 means "cannot be checked from the evidence given" (never guess a high score)."""
     goal: int = 3
     script: int = 3
     actors: int = 3
     behaviour: int = 3
-    realism: int = 3
+    realism: int = 3          # photoreal stills: skin, eyes, hands, fur/hair, no AI artifacts
+    motion: int = 0           # real, natural, physically plausible movement (not a slideshow / zoom)
+    consistency: int = 0      # same identity, clothing, lighting, background across frames (no morphing)
+    fidelity: int = 0         # sharp, no blur / banding / compression blocks
+    audio: int = 0            # voice natural, clear, right level, matches the mouth
     continuity: int = 3
     timing: int = 3
     lipsync: int = 3
@@ -279,6 +297,19 @@ class Brain:
                                           "visual": (n.script.visual if n.script else n.goal)}
                                          for n, _ in walk(project.root) if n.is_leaf]})
 
+    async def photo_query(self, title: str, description: str) -> PhotoQuery:
+        prompt = render("photo_query", title=title, description=description or title)
+        return await self.ask("photo_query", prompt, PhotoQuery, {"title": title, "description": description})
+
+    async def pick_photo(self, project: Project, description: str, titles: list[str], images: list[Path]) -> PhotoChoice:
+        prompt = render("pick_photo", description=description, style=json.dumps({k: v for k, v in project.style.model_dump().items() if v}),
+                        candidates="\n".join(f"{i}: {t}" for i, t in enumerate(titles, start=1)))
+        return await self.ask("pick_photo", prompt, PhotoChoice, {"titles": titles}, images=images)
+
+    async def explain(self, question: str, facts: str) -> Explained:
+        prompt = render("explain", question=question, facts=facts)
+        return await self.ask("explain", prompt, Explained, {"question": question, "facts": facts})
+
     async def command(self, project: Project, instruction: str, focus: Optional[Node] = None) -> CommandPlan:
         nums = numbering(project)
         prompt = render("command", outline=outline(project), actors=self._actor_list(project),
@@ -289,7 +320,7 @@ class Brain:
 
     async def review_take(self, project: Project, node: Node, frames: list[tuple[float, Path]],
                           transcript: str, measurements: dict, take_seconds: float,
-                          video: Optional[Path] = None, history: str = "") -> ReviewDraft:
+                          video: Optional[Path] = None, history: str = "", pair_times: Optional[list[float]] = None) -> ReviewDraft:
         nums = numbering(project)
         script = node.script.model_dump_json(indent=1) if node.script else "{}"
         prompt = render("review", number=nums.get(node.id, ""), title=node.title, goal=node.goal,
@@ -297,7 +328,7 @@ class Brain:
                         script=script, context=self._context_block(project, node.id),
                         transcript=transcript or "(no speech detected)", measurements=json.dumps(measurements),
                         target=node.duration.likely_s, actual=take_seconds,
-                        frame_times=", ".join(f"{t:.1f}s" for t, _ in frames), history=history or "(first review)")
+                        frame_times=_frame_description(frames, pair_times or []), history=history or "(first review)")
         return await self.ask("review", prompt, ReviewDraft,
                               {"script": node.script.model_dump() if node.script else {}, "transcript": transcript,
                                "measurements": measurements, "target": node.duration.likely_s,
@@ -313,6 +344,16 @@ class Brain:
                               {"node_review": True, "target": node.target_seconds or node.duration.likely_s,
                                "actual": actual_seconds, "summaries": summaries},
                               images=[p for _, p in frames])
+
+
+def _frame_description(frames: list[tuple[float, Path]], pair_times: list[float]) -> str:
+    singles = frames[: len(frames) - len(pair_times)] if pair_times else frames
+    pairs = frames[len(frames) - len(pair_times):] if pair_times else []
+    text = "single frames at " + ", ".join(f"{t:.1f}s" for t, _ in singles)
+    if pairs:
+        text += ("; then ADJACENT PAIRS (images come two by two, 0.25 s apart; compare the two images of each pair with each other) at "
+                 + ", ".join(f"{pairs[i][0]:.1f}s→{pairs[i + 1][0]:.1f}s" for i in range(0, len(pairs) - 1, 2)))
+    return text
 
 
 # =========================================================== conversions

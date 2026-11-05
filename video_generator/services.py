@@ -55,7 +55,7 @@ class Service:
         e = self.refresh(project)
         waiting = sum(1 for l in leaves(project) if l.status == NodeStatus.needs_pick)
         review_flags = sum(1 for r in project.reviews if r.verdict == "does_not_meet_goal")
-        return {"seconds": e.seconds, "seconds_min": e.seconds_min, "seconds_max": e.seconds_max,
+        return {"cost_total": e.cost_total, "seconds": e.seconds, "seconds_min": e.seconds_min, "seconds_max": e.seconds_max,
                 "target_seconds": project.settings.target_seconds, "cost": e.cost, "cost_min": e.cost_min,
                 "cost_max": e.cost_max, "time_s": e.time_s, "spent": e.spent, "budget": project.settings.budget_usd,
                 "warnings": e.warnings, "waiting_picks": waiting, "review_flags": review_flags,
@@ -150,6 +150,10 @@ class Service:
         self._fit_to_target(p)
         self._attach_media_context(p)
         self.save(p)
+        try:
+            await self.auto_photos(pid)          # free: real photos for animals/objects the user did not supply
+        except Exception:
+            pass
         if write_scripts:
             p = await self.write_all_scripts(pid)
         return p
@@ -464,6 +468,8 @@ class Service:
                     item.actor.kind = "real_person"
             else:
                 item.files.append(rel)
+                if item.actor and dest.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                    item.actor.reference_sheet = []          # a new photo replaces the old reference picture
                 if ctype == ContextType.actor and item.actor and item.actor.kind == "ai_person":
                     item.actor.kind = "real_person"
         else:
@@ -483,6 +489,113 @@ class Service:
             self.save(p)
         return item
 
+    # ---------------------------------------------------------------- automatic photo search
+    GENERIC_TITLES = {"photo", "object", "location", "untitled", "new actor"}
+
+    def wants_auto_photo(self, item: ContextItem) -> bool:
+        """Search only when the user has NOT supplied a photo, and only for generic subjects:
+        animals, objects and places. Never people, never the user's own product or brand."""
+        a = item.analysis
+        if item.files or a.get("auto_photo") or a.get("auto_photo_off") or a.get("auto_photo_tried"):
+            return False
+        if item.type == ContextType.actor:
+            return bool(item.actor and item.actor.kind == "animal")
+        if item.type in (ContextType.object, ContextType.location):
+            return item.role in (ContextRole.must_appear, ContextRole.look_reference) and item.title.strip().lower() not in self.GENERIC_TITLES
+        return False
+
+    async def auto_photos(self, pid: str, only: Optional[list[str]] = None, force: bool = False) -> int:
+        """Find a real photo for every item that needs one. Returns how many were found.
+        Errors never stop the caller (offline, nothing found): the tool then generates a picture instead."""
+        p = self.load(pid)
+        if not p.settings.auto_photo and not force:
+            return 0
+        ids = [c.id for c in p.context if (not only or c.id in only) and (force or self.wants_auto_photo(c))]
+        found = 0
+        for cid in ids:
+            try:
+                if await self._auto_photo_one(pid, cid, force):
+                    found += 1
+            except Exception as exc:                                    # never block the plan
+                q = self.load(pid)
+                item = item_by_id(q, cid)
+                item.analysis["auto_photo_tried"] = True
+                item.analysis["auto_photo_error"] = str(exc)[:200]
+                ProjectStore.save(q, snapshot=False)
+        return found
+
+    async def _auto_photo_one(self, pid: str, cid: str, force: bool) -> bool:
+        p = self.load(pid)
+        item = item_by_id(p, cid)
+        if item.files and not force:
+            return False                                                  # the user supplied one: never replace it
+        subject = (item.actor.description if item.actor else "") or item.text or item.title
+        try:
+            query = (await self.brain.photo_query(item.title, subject)).query.strip() or item.title
+        except Exception:
+            query = item.title
+        self._ledger_llm(p, f"photo search words for {item.title}")
+        cands: list = []
+        unreachable = False
+        for source in stock.sources_available():
+            try:
+                cands += await stock.search(query, source, limit=12)
+            except stock.StockError:
+                continue
+            except Exception:                                   # no internet, DNS, timeout …
+                unreachable = True
+        ranked = stock.rank(cands, query)[:6]
+        q = self.load(pid)
+        item = item_by_id(q, cid)
+        item.analysis["auto_photo_tried"] = True
+        if not ranked:
+            item.analysis["auto_photo_error"] = ("the photo sites could not be reached; check your internet connection" if unreachable and not cands
+                                                 else f"no suitable photo found for “{query}”")
+            ProjectStore.save(q, snapshot=False)
+            return False
+        choice = ranked[0]
+        if len(ranked) > 1 and self.reg.llm_plugin_name("default") != "fake_llm":
+            choice = await self._pick_by_eye(q, subject, ranked) or choice     # a vision-capable brain looks at them
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            path = await stock.download(choice.url, tmp, choice.title)
+            q = self.load(pid)
+            item = item_by_id(q, cid)
+            if item.files and not force:
+                return False                                              # the user added one while we searched
+            self.add_context_file(q, path, ctx_id=cid, save=False)
+            item = item_by_id(q, cid)
+            meta = {k: str(getattr(choice, k))[:300] for k in ("title", "author", "license", "source_url", "source")}
+            item.analysis.setdefault("credits", []).append(meta)
+            item.analysis["auto_photo"] = {"query": query, "photo": meta, "candidates": [stock.to_dict(c) for c in ranked]}
+            item.analysis["auto_photo_tried"] = True
+            item.analysis.pop("auto_photo_error", None)
+            item.analysis.pop("auto_photo_off", None)
+            self.save(q)
+            return True
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    async def _pick_by_eye(self, project: Project, subject: str, ranked: list):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            thumbs, kept = [], []
+            for i, c in enumerate(ranked[:5]):
+                try:
+                    thumbs.append(await stock.download(c.thumb or c.url, tmp, f"cand{i}"))
+                    kept.append(c)
+                except stock.StockError:
+                    continue
+            if len(kept) < 2:
+                return None
+            res = await self.brain.pick_photo(project, subject, [c.title for c in kept], thumbs)
+            self._ledger_llm(project, "choose the best photo")
+            return kept[res.choice - 1] if 1 <= res.choice <= len(kept) else None
+        except Exception:
+            return None
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     async def add_stock_photo(self, pid: str, cid: str, url: str, meta: dict) -> Project:
         """Download a chosen stock photo into an animal/object/place/style item (never a person)."""
         p = self.load(pid)
@@ -497,6 +610,7 @@ class Service:
             item = item_by_id(p, cid)
             item.analysis.setdefault("credits", []).append({k: str(meta.get(k, ""))[:300] for k in
                                                            ("title", "author", "license", "source_url", "source")})
+            item.analysis["auto_photo_tried"] = True
             self.save(p)
         except stock.StockError as exc:
             raise ValueError(str(exc))
@@ -590,8 +704,17 @@ class Service:
         for k, v in patch.items():
             if k == "actor" and isinstance(v, dict):
                 data["actor"] = {**(data.get("actor") or {}), **v}
+            elif k == "analysis" and isinstance(v, dict):
+                data["analysis"] = {**data.get("analysis", {}), **v}
             elif k in data:
                 data[k] = v
+        if "files" in patch and len(patch["files"]) < len(item.files):
+            if data.get("actor"):
+                data["actor"]["reference_sheet"] = []        # picture changed: make a new reference
+            if item.analysis.get("auto_photo"):
+                # the user removed the photo the tool found: do not search again for this item
+                data["analysis"] = {k: v for k, v in data["analysis"].items() if k not in ("auto_photo", "credits")}
+                data["analysis"]["auto_photo_off"] = True
         new = ContextItem.model_validate(data)
         if new.actor and item.actor and new.actor.voice_description != item.actor.voice_description:
             new.actor.voice_id = None
@@ -716,6 +839,122 @@ class Service:
         n.status = NodeStatus.needs_pick if old_takes else NodeStatus.ready
         deps_mod.mark_downstream_stale(p, node_id)
         return self.save(p)
+
+    # ================================================================ explain everything
+    KIND_LABEL = {
+        "llm": "AI brain (planning, scripts, photo search words)", "review": "Review Agent (checking clips)",
+        "image": "Pictures", "video": "Video", "avatar": "Talking animation", "lipsync": "Lip-sync",
+        "voice": "Voices", "voice_clone": "Voice copies", "music": "Music",
+    }
+
+    def budget_report(self, pid: str) -> dict:
+        """Where the money went: every paid call, grouped, with the arithmetic behind each number."""
+        p = self.load(pid)
+        self.refresh(p)
+        rows = ProjectStore.ledger(pid)
+        groups: dict[str, dict] = {}
+        for r in rows:
+            kind = r.get("kind", "other")
+            g = groups.setdefault(kind, {"key": kind, "label": self.KIND_LABEL.get(kind, kind), "calls": 0, "estimated": 0.0, "actual": 0.0, "rows": []})
+            g["calls"] += 1
+            g["estimated"] += float(r.get("estimated_usd", 0) or 0)
+            g["actual"] += float(r.get("actual_usd", 0) or 0)
+            how = ""
+            if r.get("tokens_in") is not None:
+                how = f"{r.get('tokens_in', 0):,} tokens in + {r.get('tokens_out', 0):,} tokens out"
+            elif r.get("units"):
+                how = str(r["units"]) + (f" {r['rate']}" if r.get("rate") else "")
+            elif r.get("rate"):
+                how = str(r["rate"])
+            g["rows"].append({"at": r.get("at", ""), "what": r.get("what", ""), "vendor": r.get("plugin", ""), "model": r.get("model", ""),
+                              "how": how, "estimated": round(float(r.get("estimated_usd", 0) or 0), 4),
+                              "actual": round(float(r.get("actual_usd", 0) or 0), 4)})
+        for g in groups.values():
+            g["estimated"], g["actual"] = round(g["estimated"], 4), round(g["actual"], 4)
+        spent = round(p.run.spent_usd, 4)
+        total = round(sum(g["actual"] for g in groups.values()), 4)
+        todo = [l for l in leaves(p) if l.status != NodeStatus.done]
+        remaining = round(sum(l.cost.likely_usd for l in todo), 2)
+        budget = p.settings.budget_usd
+        brain = self.reg.llm_plugin_name("default")
+        brain_model = self.config.llm.models.get(brain, "")
+        brain_entry = next((e for e in self.catalog.for_job("llm") if e.plugin == brain), None)
+        return {
+            "budget": budget, "spent": spent, "ledger_total": total, "remaining_estimate": remaining,
+            "left_in_budget": round(budget - spent - remaining, 2),
+            "groups": sorted(groups.values(), key=lambda g: -g["actual"]),
+            "brain": {"plugin": brain, "model": brain_model,
+                      "price": (f"${brain_entry.price.usd_in}/${brain_entry.price.usd_out} per 1M tokens (in/out)" if brain_entry else "")},
+            "explain": [
+                f"Budget ${budget:.2f} is a safety limit you set. The default comes from Settings → Budget & quality; for this video you can change it in Cost & time → Whole video → Budget.",
+                f"Spent ${spent:.2f} is the total of every paid call this tool made for this project (list below). Clips that are already made are counted here, not in “still to spend”.",
+                f"Still to spend ≈ ${remaining:.2f} is the estimate for the clips not made yet (price × units × takes, from the model catalogue).",
+                "AI brain and Review Agent calls are counted from the tokens the AI vendor reports, times the vendor's price per token.",
+                "Other vendors (video, pictures, voices, music) rarely report the exact bill per call, so the tool counts catalogue price × amount (seconds, images, characters). Your vendor's own dashboard is the final truth.",
+                "Budget guard: before each clip the tool checks spent + that clip's estimate. If it would pass the budget, the run pauses and asks you.",
+            ],
+        }
+
+    def facts(self, pid: str, focus_id: Optional[str] = None) -> str:
+        """Everything the help assistant may use to answer a question (plain facts, no opinions)."""
+        p = self.load(pid)
+        summ = self.summary(p)
+        nums = numbering(p)
+        rep = self.budget_report(pid)
+        L = [
+            f"Project: {p.name}. Goal: {p.goal}",
+            f"Target length {p.settings.target_seconds:.0f}s; estimated length {summ['seconds']:.0f}s; shape {p.settings.aspect}; resolution {p.settings.resolution}; format {p.settings.format}.",
+            f"Quality mode: {p.settings.quality_mode} (best = highest quality, balanced = quality per dollar, budget = cheapest, free = free previews only).",
+            f"Takes per clip with people: {p.settings.takes_people}; other clips: {p.settings.takes_other}. Review Agent {'on' if p.settings.review_enabled else 'off'}; music {'on' if p.settings.music else 'off'}; auto-pick {'on' if p.settings.auto_pick else 'off'}.",
+            f"AI brain in use: {rep['brain']['plugin']} ({rep['brain']['model']}) {rep['brain']['price']}.",
+            f"MONEY: budget ${rep['budget']:.2f}; spent so far ${rep['spent']:.2f}; still to spend about ${rep['remaining_estimate']:.2f}; total estimate for all clips ${summ['cost_total']:.2f}.",
+        ]
+        L += [f"MONEY explanation: {x}" for x in rep["explain"]]
+        for g in rep["groups"]:
+            L.append(f"SPENT on {g['label']}: ${g['actual']:.4f} in {g['calls']} call(s). " + "; ".join(
+                f"{r['what']} ({r['vendor']} {r['model']}) {r['how']} = ${r['actual']:.4f}" for r in g["rows"][:6]))
+        L.append(f"TIME: about {summ['time_s'] / 60:.0f} minutes to make what is left (clips that do not depend on each other are made at the same time).")
+        pv = summ["preview"]
+        if pv["clips"]:
+            L.append(f"PREVIEW MODE: {len(pv['clips'])} clip(s) will only be free placeholder cards. Missing: " + "; ".join(pv["jobs"].values()))
+        for w in summ["warnings"]:
+            L.append(f"WARNING: {w}")
+        for leaf in leaves(p):
+            if focus_id and leaf.id != focus_id and len(L) > 90:
+                continue
+            plan = est.plan_clip(p, leaf, self.reg)
+            why = ""
+            if plan.video:
+                shot = leaf.script.shot_type.value if leaf.script else "other"
+                why = (f"model {plan.video.id} via {plan.video.plugin}; its score for '{shot}' shots is {plan.video.strength(shot)}/5; "
+                       f"price ${plan.video.unit_price}/{plan.video.price.unit}; route {plan.route}")
+            lines = "; ".join(f"{c.item}: {c.calc} = ${c.cost:.3f}" for c in leaf.cost.lines)
+            deps = "; ".join(f"{d.type.value} from {nums.get(d.from_id)}" for d in p.dependencies if d.to_id == leaf.id)
+            L.append(f"CLIP {nums.get(leaf.id)} '{leaf.title}': status {leaf.status.value}; length ~{leaf.duration.likely_s:.0f}s ({leaf.duration.explain}); "
+                     f"cost ≈ ${leaf.cost.likely_usd:.2f} [{lines}]; time {leaf.time.explain}; {why}; links: {deps or 'none'}; warnings: {'; '.join(leaf.warnings) or 'none'}")
+        for r in p.reviews[-8:]:
+            L.append(f"REVIEW of {r.target}: {r.verdict}; scores {r.scores}; issues: " + "; ".join(f"{i.check}: {i.text}" for i in r.issues[:4]))
+        L.append(f"FINAL VIDEO: {'ready' if summ['final_ready'] else 'not made yet'}{' (out of date)' if summ['final_stale'] else ''}.")
+        configured = [v["name"] for v in self.vendors_status() if v["configured"]]
+        L.append("CONNECTED SERVICES: " + (", ".join(configured) or "none (free local tools only)"))
+        return "\n".join(L)[:16000]
+
+    def vendors_status(self) -> list[dict]:
+        import os
+        from .catalog import load_vendors
+        out = []
+        for v in load_vendors():
+            keys = v.get("env", [])
+            out.append({**v, "configured": bool(keys) and all(os.environ.get(k) for k in keys)})
+        return out
+
+    async def explain(self, pid: str, question: str, focus_id: Optional[str] = None) -> str:
+        facts = self.facts(pid, focus_id)
+        res = await self.brain.explain(question, facts)
+        p = self.load(pid)
+        self._ledger_llm(p, "answer a question")
+        ProjectStore.save(p, snapshot=False)
+        return res.answer
 
     # ================================================================ misc
     def _ledger_llm(self, p: Project, what: str) -> None:

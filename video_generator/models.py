@@ -217,6 +217,7 @@ class Review(BaseModel):
     summary: str = ""
     reviewer_model: str = ""
     cost_usd: float = 0
+    measurements: dict[str, float] = Field(default_factory=dict)
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -307,6 +308,7 @@ class Settings(BaseModel):
     auto_pick: bool = False
     review_enabled: bool = True
     music: bool = True
+    auto_photo: bool = True       # find a real photo by itself when none is supplied (animals, objects, places)
     quality_mode: Literal["best", "balanced", "budget", "free"] = "balanced"
 
 
