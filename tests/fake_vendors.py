@@ -55,6 +55,7 @@ class Vendors:
         self.voices = voices or VOICES
         self.pitch = voice_pitch or {}
         self.refuse: set[str] = set()          # voice ids the vendor refuses ("voice not found")
+        self.video_seconds: float = 4.0         # how long the pretend video model's clips are (real models make fixed lengths)
         reg = svc.reg
         eleven = reg.plugin("elevenlabs")
         vendors = self
@@ -100,20 +101,22 @@ class Vendors:
             vendors.calls["video"].append(req)
             w, h = Image.open(req.start_frame).size if req.start_frame else (1280, 720)
             w, h = w - w % 2, h - h % 2
+            secs = f"{vendors.video_seconds:g}"
             if req.audio:      # a model with sound of its own (like Kling or Veo) returns a clip with its own sound
-                media.ff("-loop", "1", "-i", str(req.start_frame), "-f", "lavfi", "-i", "anoisesrc=color=pink:r=44100:d=4,volume=0.3", "-t", "4",
-                         "-vf", f"scale={min(w, 640)}:-2,fps=24", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(req.out))
+                media.ff("-loop", "1", "-i", str(req.start_frame), "-f", "lavfi", "-i", f"anoisesrc=color=pink:r=44100:d={secs},volume=0.3", "-t", secs,
+                         "-vf", f"scale={min(w, 640)}:-2,fps=24,noise=alls=14:allf=t", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(req.out))
             else:
-                media.ff("-loop", "1", "-i", str(req.start_frame), "-t", "4", "-vf", f"scale={min(w, 640)}:-2,fps=24", "-c:v", "libx264",
+                media.ff("-loop", "1", "-i", str(req.start_frame), "-t", secs, "-vf", f"scale={min(w, 640)}:-2,fps=24,noise=alls=14:allf=t", "-c:v", "libx264",
                          "-pix_fmt", "yuv420p", "-an", str(req.out))
             return req.out, Usage()
         reg.plugin("fal").generate = video
 
         async def avatar(req):
             vendors.calls["avatar"].append(req)
-            media.ff("-loop", "1", "-i", str(req.photo), "-i", str(req.audio), "-t", "3", "-vf", "scale=640:-2,fps=24", "-c:v", "libx264",
+            n = max(media.probe_duration(req.audio), 1.0)      # a talking-picture model makes a clip exactly as long as its audio
+            media.ff("-loop", "1", "-i", str(req.photo), "-i", str(req.audio), "-t", f"{n:.2f}", "-vf", "scale=640:-2,fps=24,noise=alls=14:allf=t", "-c:v", "libx264",
                      "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(req.out))
-            return req.out, Usage(seconds=3)
+            return req.out, Usage(seconds=n)
         reg.plugin("fal_avatar").generate = avatar
 
         async def sfx(prompt, seconds, out, model="", video=None, params=None):

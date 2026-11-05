@@ -446,20 +446,41 @@ def test_actual_stage_keeps_the_target_after_the_voice_is_made(svc):
     assert E.estimate_duration(p, leaf).likely_s > 6.0
 
 
-def test_lion_project_is_about_12_seconds_and_inside_the_budget(svc, monkeypatch):
+def test_requested_length_wins_on_a_route_that_can_make_any_listed_length_and_stays_inside_the_budget(svc, monkeypatch):
     for k in ("FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
         monkeypatch.setenv(k, "x")
     svc.reload()
     for mode in ("balanced", "budget"):
-        p = lion_12s(svc, mode=mode)                 # the settings the user used: 1 take, music off, $3 budget
+        p = lion_12s(svc, mode=mode, speech="")      # no speech: the video route, whose clips take the requested length
+        for leaf in leaves(p):
+            leaf.script.on_camera_speech = False
+            leaf.script.shot_type = ShotType.wildlife
         p.settings.budget_usd = 3.0
         p.settings.takes_people = 1
+        p.settings.takes_other = 1
         p.settings.music = False
         svc.save(p)
         s = svc.summary(svc.load(p.id))
         assert s["seconds"] == 12.0
-        assert 1.0 < s["cost"] < 2.0, (mode, s["cost"])            # about $1.5, not $3.44
+        assert 0.8 < s["cost"] < 2.6, (mode, s["cost"])
         assert not any("budget" in w.lower() for w in s["warnings"]), s["warnings"]
+
+
+def test_a_route_whose_clip_is_as_long_as_the_speech_cannot_meet_a_longer_target(svc, monkeypatch):
+    """The talking-picture route makes a clip exactly as long as the audio (the catalogue says so), so the estimate
+    follows the speech instead of promising the planned target."""
+    for k in ("FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.setenv(k, "x")
+    svc.reload()
+    p = lion_12s(svc)                                  # three 4 s clips, each a short spoken line to camera
+    p.settings.takes_people = 1
+    p.settings.music = False
+    svc.save(p)
+    q = svc.load(p.id)
+    svc.refresh(q)
+    for leaf in leaves(q):
+        assert leaf.duration.likely_s < 4.0 and "as long as the speech" in leaf.duration.explain
+    assert svc.summary(svc.load(p.id))["seconds"] < 12.0
 
 
 def test_clip_script_prompt_carries_the_length_and_step_limit(svc, monkeypatch):

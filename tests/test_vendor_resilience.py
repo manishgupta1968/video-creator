@@ -7,6 +7,7 @@ import openai
 import pytest
 
 from video_generator import doctor
+from video_generator import media
 from video_generator.plugins.base import ImageRequest, PluginError, Usage
 from video_generator.plugins.image import openai_image as oi
 from video_generator.project import ProjectStore
@@ -152,7 +153,7 @@ def test_doctor_reports_good_and_bad_keys_in_plain_words(monkeypatch):
     calls = []
 
     def handler(r: httpx.Request):
-        calls.append((r.method, r.url.host, r.url.path))
+        calls.append((r.method, r.url.host, r.url.path, r.content))
         if r.url.host == "api.openai.com":
             return httpx.Response(200, json={"data": [{"id": "gpt-5"}, {"id": "gpt-image-2"}]})
         if r.url.path == "/v1/user":
@@ -168,7 +169,8 @@ def test_doctor_reports_good_and_bad_keys_in_plain_words(monkeypatch):
     assert checks["ElevenLabs voice copy"].status == doctor.WARN and checks["ElevenLabs voice model"].status == doctor.OK
     assert checks["ElevenLabs voices"].status == doctor.OK and "1 male, 1 female" in checks["ElevenLabs voices"].message
     assert checks["fal.ai key"].status == doctor.BAD and "billing" in checks["fal.ai key"].message
-    assert all(m == "GET" for m, _, _ in calls)                                  # only reading: nothing is created or charged
+    # only reading, plus empty permission probes ({}), which cannot make or charge anything
+    assert all(m == "GET" or (m == "POST" and host == "api.elevenlabs.io" and body == b"{}") for m, host, _, body in calls)
 
 
 def test_doctor_rejected_keys_and_restricted_elevenlabs_key(monkeypatch):
@@ -192,3 +194,67 @@ def test_doctor_command_prints_a_summary(monkeypatch):
     from video_generator.cli import app
     out = CliRunner().invoke(app, ["doctor"])
     assert out.exit_code == 0 and "No problems found" in out.output
+
+
+# ------------------------------------------------------------------ a key without a permission: plain words, next model, no crash
+MUSIC_PERMISSION = ('{"detail":{"type":"authentication_error","code":"unauthorized","message":"The API key you used is missing the permission '
+                    'music_generation to execute this operation.","status":"missing_permissions"}}')
+
+
+def test_permission_errors_are_explained_in_plain_words():
+    from video_generator.plugins.base import PermissionProblem, permission_in, raise_for
+    assert permission_in(401, MUSIC_PERMISSION) == "music_generation" and permission_in(401, "Incorrect API key") is None
+    assert permission_in(500, MUSIC_PERMISSION) is None
+    with pytest.raises(PermissionProblem) as ei:
+        raise_for(httpx.Response(401, text=MUSIC_PERMISSION), "ElevenLabs Music")
+    msg = str(ei.value)
+    assert "missing the permission 'music_generation'" in msg and "API-key settings" in msg and "Nothing was charged" in msg
+    assert ei.value.retry_other_model is True and ei.value.permission == "music_generation"
+
+
+@pytest.mark.skipif(__import__("shutil").which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_music_without_permission_falls_back_then_is_skipped_with_a_visible_note(svc, monkeypatch, tmp_path):
+    from video_generator.plugins.base import PermissionProblem
+    from .fake_vendors import Vendors
+    from .test_scenarios import build, clip, run_all
+    v = Vendors(svc, monkeypatch)
+
+    async def refused(prompt, seconds, out, model="", reference=None):
+        raise PermissionProblem("ElevenLabs Music: your ElevenLabs key is missing the permission 'music_generation'.", "music_generation")
+    monkeypatch.setattr(svc.reg.plugin("elevenlabs_music"), "generate", refused)
+    seen = []
+
+    async def fal_music(prompt, seconds, out, model="", reference=None):
+        seen.append(model)
+        media.ff("-f", "lavfi", "-i", f"sine=frequency=330:d={max(seconds, 1):.1f}", "-ac", "2", str(out))
+        return out, Usage(seconds=seconds)
+    monkeypatch.setattr(svc.reg.plugin("fal_music"), "generate", fal_music)
+    p, ids = build(svc, "Hills", [], [clip("landscape", "Hills", sound="wind")], music=True)
+    run_all(svc, p.id)
+    q = svc.load(p.id)
+    assert q.final_output and seen == ["fal-ai/minimax-music/v2"] and q.final_notes == []           # the next music model took over
+    # every music model refused: the video is still made, and the user is told why
+    monkeypatch.setattr(svc.reg.plugin("fal_music"), "generate", refused)
+    from video_generator.runner import Engine
+    asyncio.run(Engine(svc)._assemble(p.id))
+    q = svc.load(p.id)
+    assert q.final_output and any("music_generation" in n for n in q.final_notes)
+    assert any("music_generation" in i["text"] for i in svc.summary(q)["guide"]["issues"])         # and the guide shows it
+
+
+def test_doctor_names_a_missing_elevenlabs_permission(monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "el-test")
+
+    def handler(r: httpx.Request):
+        if r.method == "POST" and r.url.path == "/v1/music":
+            return httpx.Response(401, text=MUSIC_PERMISSION)
+        if r.method == "POST":
+            return httpx.Response(422, json={"detail": "invalid body"})
+        if r.url.path == "/v1/user":
+            return httpx.Response(200, json={"subscription": {"tier": "creator", "character_count": 1, "character_limit": 100}})
+        if r.url.path == "/v1/voices":
+            return httpx.Response(200, json={"voices": []})
+        return httpx.Response(200, json=[{"model_id": "eleven_v3"}])
+    checks = {c.name: c for c in asyncio.run(doctor.run_checks(client=mock(handler)))}
+    assert checks["ElevenLabs permission: music"].status == doctor.WARN and "music_generation" in checks["ElevenLabs permission: music"].message
+    assert checks["ElevenLabs permission: sound effects"].status == doctor.OK

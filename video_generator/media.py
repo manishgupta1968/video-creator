@@ -549,32 +549,91 @@ def still_to_clip(image: Path, out: Path, seconds: float, size: tuple[int, int],
 
 def replace_audio(video: Path, voice: Optional[Path], out: Path, keep_original: float = 0.35,
                   extra: Optional[list[tuple[Path, float]]] = None) -> Path:
-    """Mix: clip's own sound (lowered) + voice + extra sound effects."""
+    """Mix: clip's own sound (lowered) + voice + extra sound effects. The sound always lasts as long as the picture:
+    every track is padded with silence and the result is cut to the video's length, so a short first track (a voice,
+    a talking animation's audio) can never end the sound early."""
     inputs = ["-i", str(video)]
     mixes = []
     idx = 1
     if has_audio(video) and keep_original > 0:
-        mixes.append(f"[0:a]volume={keep_original}[o]")
+        mixes.append(f"[0:a]aresample=44100,volume={keep_original},apad[o]")
         labels = ["[o]"]
     else:
         labels = []
     if voice:
         inputs += ["-i", str(voice)]
-        mixes.append(f"[{idx}:a]aresample=44100,volume=1.0[v]")
+        mixes.append(f"[{idx}:a]aresample=44100,volume=1.0,apad[v]")
         labels.append("[v]")
         idx += 1
     for path, vol in extra or []:
         inputs += ["-i", str(path)]
-        mixes.append(f"[{idx}:a]aresample=44100,volume={vol}[x{idx}]")
+        mixes.append(f"[{idx}:a]aresample=44100,volume={vol},apad[x{idx}]")
         labels.append(f"[x{idx}]")
         idx += 1
     if not labels:
         shutil.copy(video, out)
         return out
-    mixes.append("".join(labels) + f"amix=inputs={len(labels)}:duration=first:normalize=0[mix]")
+    length = probe_duration(video)
+    mixes.append("".join(labels) + f"amix=inputs={len(labels)}:duration=longest:normalize=0[mix]")
     ff(*inputs, "-filter_complex", ";".join(mixes), "-map", "0:v", "-map", "[mix]", "-c:v", "copy",
-       "-c:a", "aac", "-ar", "44100", "-ac", "2", str(out))
+       "-c:a", "aac", "-ar", "44100", "-ac", "2", *(["-t", f"{length:.3f}"] if length else []), str(out))
     return out
+
+
+def finish_clip(src: Path, out: Path, sharpen: float = 0.8, grain: float = 4.0) -> Path:
+    """A mild finishing pass for a clip that is softer than its neighbour: unsharp mask and matching film grain.
+    Sound is copied unchanged. Strengths come from the policy (0 turns a part off)."""
+    filters = []
+    if sharpen > 0:
+        filters.append(f"unsharp=5:5:{sharpen:.2f}:5:5:0.0")
+    if grain > 0:
+        filters.append(f"noise=alls={grain:.1f}:allf=t")
+    if not filters:
+        shutil.copy(src, out)
+        return out
+    ff("-i", str(src), "-vf", ",".join(filters), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+       "-c:a", "copy", str(out))
+    return out
+
+
+def set_loudness(path: Path, target_lufs: float, tolerance: float = 1.5) -> Optional[float]:
+    """Bring an audio file to a target loudness (LUFS, EBU R128). Returns the loudness it ended at, or None when the
+    file is (nearly) silent and cannot be measured. A level within `tolerance` LU of the target is left alone."""
+    cur = audio_stats(path).get("lufs")
+    if cur is None or cur < -70:
+        return None
+    gain = target_lufs - cur
+    if abs(gain) <= tolerance:
+        return cur
+    gain = max(-30.0, min(30.0, gain))
+    tmp = path.with_name(path.stem + "_lv" + path.suffix)
+    ff("-i", str(path), "-af", f"volume={gain:.2f}dB,alimiter=limit=0.95", str(tmp))
+    tmp.replace(path)
+    return cur + gain
+
+
+def freeze_stats(video: Path, min_s: float = 0.3) -> dict:
+    """How long the picture is frozen (identical frames): {frozen_s, longest_freeze_s, frozen_ratio, tail_freeze_s}.
+    A frozen tail is the typical sign of a clip that was stretched to a length its model could not make."""
+    try:
+        err = subprocess.run([FFMPEG, "-hide_banner", "-nostats", "-i", str(video), "-vf", f"freezedetect=n=-55dB:d={min_s}", "-an", "-f", "null", "-"],
+                             capture_output=True, text=True, timeout=300).stderr
+    except Exception:
+        return {}
+    total = probe_duration(video)
+    starts = [float(x) for x in re.findall(r"freeze_start:\s*([\d.]+)", err)]
+    ends = [float(x) for x in re.findall(r"freeze_end:\s*([\d.]+)", err)]
+    runs = []
+    for i, st in enumerate(starts):
+        en = ends[i] if i < len(ends) else total
+        runs.append((st, max(en - st, 0.0)))
+    longest = max((d for _, d in runs), default=0.0)
+    tail = 0.0
+    if runs and total and abs((runs[-1][0] + runs[-1][1]) - total) < 0.2:
+        tail = runs[-1][1]
+    frozen = sum(d for _, d in runs)
+    return {"frozen_s": round(frozen, 2), "longest_freeze_s": round(longest, 2), "tail_freeze_s": round(tail, 2),
+            "frozen_ratio": round(frozen / total, 3) if total else 0.0}
 
 
 XFADE = {"crossfade": "fade", "fade_black": "fadeblack", "whip": "slideleft", "dissolve": "dissolve", "wipe": "wipeleft"}

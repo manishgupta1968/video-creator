@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import media
+from . import policy as policy_mod
 from .models import ContextItem, Project
 from .plugins.base import VoiceChoice, VoiceSpec
 
@@ -30,10 +31,6 @@ _AGES = [("child", r"\b(child|kid|toddler|little (boy|girl))\b"), ("teen", r"\b(
          ("older", r"\b(old|older|elderly|aged|senior|grandfather|grandmother|grandpa|grandma|ancient|wise old)\b"),
          ("young", r"\b(young|youthful|student|twenties)\b")]
 
-# Gender-correct pitch the finished voice should have (Hz, median of the speech)
-PITCH_RANGE = {("male", "low"): (85, 125), ("male", "medium"): (95, 150), ("male", "high"): (120, 175),
-               ("female", "low"): (160, 200), ("female", "medium"): (175, 235), ("female", "high"): (210, 290)}
-MAX_SHIFT = 4.0            # semitones: more than this sounds unnatural
 
 
 def guess_gender(*texts: str) -> str:
@@ -103,6 +100,9 @@ async def choose_voice(plugin, profile: Profile, taken: tuple = ()) -> tuple[lis
     else:
         why = ""
     note = ""
+    pol = policy_mod.current()
+    if cands and pol.voice_preview_candidates > 0 and profile.gender in ("male", "female") and not cands[0].note:
+        cands, _heard = await _listen(plugin, cands, profile, pol)
     if not cands:
         note = f"no voice was found for this speaker{(' (' + why + ')') if why else ''}"
     elif profile.gender in ("male", "female") and not any(c.gender in ("", profile.gender) for c in cands[:1]):
@@ -112,27 +112,59 @@ async def choose_voice(plugin, profile: Profile, taken: tuple = ()) -> tuple[lis
     return cands, note
 
 
+async def _listen(plugin, cands: list[VoiceChoice], profile: Profile, pol) -> tuple[list[VoiceChoice], int]:
+    """Listen to the vendor's free sample of the best candidates, measure their pitch, and put the voices that fit
+    the profile's pitch range first. Candidates that cannot be heard keep their label-based order after those that fit."""
+    import asyncio
+    n = pol.voice_preview_candidates
+    head, tail = cands[:n], cands[n:]
+    lo, hi = pol.pitch_range(profile.gender, profile.pitch)
+
+    async def measure(c: VoiceChoice) -> None:
+        try:
+            wav = await plugin.preview(c)
+            c.pitch_hz = await asyncio.to_thread(media.voice_pitch, wav) if wav else None
+        except Exception:
+            c.pitch_hz = None
+    await asyncio.gather(*(measure(c) for c in head))
+    heard = sum(1 for c in head if c.pitch_hz)
+    if not heard or not (lo and hi):
+        return cands, heard
+
+    def misfit(c: VoiceChoice) -> float:
+        if c.pitch_hz is None:
+            return 3.0                                   # not heard: after the ones that clearly fit, before the ones that clearly do not
+        if lo <= c.pitch_hz <= hi:
+            return 0.0
+        edge = lo if c.pitch_hz < lo else hi
+        return abs(12 * math.log2(c.pitch_hz / edge))      # semitones away from the range
+    ranked = sorted(enumerate(head), key=lambda x: (misfit(x[1]), x[0]))
+    return [c for _, c in ranked] + tail, heard
+
+
 def pitch_fix(measured: Optional[float], profile: Profile) -> tuple[float, str]:
     """(semitones to shift, plain-words note) so a finished voice fits the profile; (0, '') when it already does
-    or when nothing is known. The shift is capped at MAX_SHIFT: a bigger change would sound unnatural, so the
+    or when nothing is known. The shift is capped at policy.max_pitch_shift_st: a bigger change would sound unnatural, so the
     note then tells the user to pick another voice."""
     if not measured or profile.gender not in ("male", "female"):
         return 0.0, ""
-    lo, hi = PITCH_RANGE[(profile.gender, profile.pitch or "medium")]
+    pol = policy_mod.current()
+    lo, hi = pol.pitch_range(profile.gender, profile.pitch)
     if lo <= measured <= hi:
         return 0.0, ""
     target = hi if measured > hi else lo
     needed = 12 * math.log2(target / measured)
-    shift = max(-MAX_SHIFT, min(MAX_SHIFT, needed))
+    shift = max(-pol.max_pitch_shift_st, min(pol.max_pitch_shift_st, needed))
     word = "deeper" if shift < 0 else "higher"
     note = f"the voice was made {abs(shift):.0f} semitones {word} to fit a {profile.pitch or ''} {profile.gender} voice".replace("  ", " ")
-    if abs(needed) > MAX_SHIFT + 0.5:
+    if abs(needed) > pol.max_pitch_shift_st + 0.5:
         note += f"; it still sounds {'high' if needed < 0 else 'low'} for a {profile.gender} voice, so please choose another voice"
     return shift, note
 
 
 def tempo_for(profile: Profile) -> float:
-    return {"slow": 0.9, "fast": 1.08}.get(profile.pace, 1.0)
+    pol = policy_mod.current()
+    return {"slow": pol.slow_tempo, "fast": pol.fast_tempo}.get(profile.pace, 1.0)
 
 
 def fit_voice(wav: Path, profile: Profile, known_shift: Optional[float] = None,

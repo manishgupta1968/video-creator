@@ -169,11 +169,18 @@ class VoiceChoice:
     score: float = 0.0
     gender: str = ""
     note: str = ""              # e.g. "stock voice (the voice list could not be read)"
+    preview_url: str = ""       # a free sample clip of this voice, when the vendor offers one
+    pitch_hz: Optional[float] = None   # the pitch measured from that sample
 
 
 class VoiceSynth(Plugin):
     job = "voice"
     can_clone = False
+
+    async def preview(self, choice: "VoiceChoice") -> Optional[Path]:
+        """Download the vendor's free sample clip of this voice as a wav file, or None when there is none. Lets the tool
+        listen to a voice (measure its pitch) before any speech is paid for."""
+        return None
 
     async def candidates(self, spec: "VoiceSpec", taken: tuple = ()) -> list["VoiceChoice"]:
         """Voices that fit `spec`, best first. `taken` = voice ids already used by other speakers (used last).
@@ -279,7 +286,35 @@ async def poll(fetch: Callable[[], Awaitable[dict]], done: Callable[[dict], Opti
         await asyncio.sleep(interval)
 
 
+class PermissionProblem(PluginError):
+    """The vendor accepted the key but the key may not do this (a restricted key). Nothing was charged."""
+
+    def __init__(self, message: str, permission: str = ""):
+        super().__init__(message, retry_other_model=True)
+        self.permission = permission
+
+
+def permission_in(status: int, body: str) -> Optional[str]:
+    """The permission a vendor says the key lacks ('' when it says only that one is missing), or None when this is
+    not a permission problem. Works from the wording vendors use ("missing the permission X", "missing_permissions",
+    "insufficient permissions"), not from any one vendor's format."""
+    text = body or ""
+    low = text.lower()
+    if status not in (401, 403) or not any(w in low for w in ("permission", "missing_permissions", "insufficient scope", "not allowed for this key")):
+        return None
+    import re
+    m = re.search(r"permission[ s]*[`'\"]?([a-z][a-z_]{3,})[`'\"]?\s+to\b", low) or re.search(r"permission[`'\" ]+([a-z][a-z_]{3,})", low)
+    return m.group(1) if m and m.group(1) not in ("to", "missing", "denied") else ""
+
+
 def raise_for(r: httpx.Response, who: str) -> None:
     if r.status_code >= 400:
+        perm = permission_in(r.status_code, r.text)
+        if perm is not None:
+            vendor = who.split()[0]
+            what = f"the permission '{perm}'" if perm else "a permission this needs"
+            raise PermissionProblem(
+                f"{who}: your {vendor} key is missing {what}. In {vendor}'s API-key settings allow it, or make a key without restrictions "
+                f"and save it in Settings. Nothing was charged.", perm)
         raise PluginError(f"{who}: HTTP {r.status_code}: {r.text[:500]}",
                           retry_other_model=r.status_code in (400, 404, 405, 409, 410, 413, 415, 422))

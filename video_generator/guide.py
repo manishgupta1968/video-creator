@@ -140,6 +140,12 @@ def compute(svc, project: Project, summary: dict) -> dict:
     elif stale:
         step("make", "Make the clips", "current", f"{len(stale)} clip(s) are out of date because something they depend on changed. Make them again.",
              _act("run", "Make the rest", mode="continue", title="Make the clips that are out of date", help="continue-end"))
+    elif any(l.needs_split for l in clips):
+        l = next(x for x in clips if x.needs_split)
+        step("make", "Make the clips", "current",
+             f"Clip {_num(numbers, l.id)} needs more than any single route can do, so part of it could not be made well. "
+             "Split it first (it costs a few cents); each part can then be made properly.",
+             _act("split", f"Split clip {_num(numbers, l.id)}", id=l.id, help="split-clip"))
     elif done == 0:
         step("make", "Make the clips", "current", "Make the first clip only and look at it carefully before spending more. Check the cost in the window that opens.",
              _act("run", "Make the first clip", mode="next", title="Generate the next clip", help="generate-next"))
@@ -169,6 +175,8 @@ def compute(svc, project: Project, summary: dict) -> dict:
         step("finish", "Watch it, then download", "todo", "The last step: watch the whole video, then download the file.")
 
     # ---- things that do not block the path
+    for note in project.final_notes[:2]:
+        issues.append({"text": note[:260], "action": _act("settings", "Open Settings", help="settings")})
     flagged = [r for r in project.reviews if r.verdict == "does_not_meet_goal" and r.target]
     for r in flagged[:2]:
         nid = r.target
@@ -176,7 +184,13 @@ def compute(svc, project: Project, summary: dict) -> dict:
         issues.append({"text": f"The Review Agent says {label} does not meet your goal. You decide: read its notes and remake if you agree.",
                        "action": _act("select", "Open " + label, id=nid)})
     for l in ai_clips:
+        if l.needs_split and len(issues) < 4:
+            issues.append({"text": f"Clip {_num(numbers, l.id)} needs more than any single route can do. Split it so each part needs one kind of movement.",
+                           "action": _act("split", f"Split clip {_num(numbers, l.id)}", id=l.id)})
+    for l in ai_clips:
         warn = [w for w in l.warnings if not w.startswith(("failed", "compare failed"))]
+        if l.needs_split:
+            warn = [w for w in warn if w != next((x for x in l.warnings if x.startswith("This clip needs")), "")]
         if warn and len(issues) < 4:
             issues.append({"text": f"Clip {_num(numbers, l.id)}: {warn[0][:150]}", "action": _act("select", f"Open clip {_num(numbers, l.id)}", id=l.id)})
 

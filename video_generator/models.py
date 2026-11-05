@@ -166,6 +166,7 @@ class ClipScript(BaseModel):
     narration: str = ""
     on_camera_speech: bool = False
     sound_notes: str = ""               # sound design: ambience, effects tied to the action, or "silence"
+    motion: str = ""                    # what must move: face (only face and head) | body | scene; "" = not decided
     start_state: str = ""               # how the clip begins: pose, place, time of day, framing, clothing, light
     end_state: str = ""                 # how it ends (the next clip that continues starts from this)
     negative: str = ""
@@ -282,6 +283,7 @@ class Node(BaseModel):
     output: Optional[str] = None                # assembled clip / node video
     input_hash: str = ""
     warnings: list[str] = Field(default_factory=list)
+    needs_split: bool = False       # computed: the clip needs more than any single route can do (see estimate.plan_clip)
     review_enabled: bool = True
 
     @property
@@ -356,4 +358,5 @@ class Project(BaseModel):
     music_advice: str = ""        # the planner's suggestion: none | subtle | full, mood, genre
     final_output: Optional[str] = None
     final_hash: str = ""
+    final_notes: list[str] = Field(default_factory=list)   # what could not be added to the final video, and why (shown to the user)
     final_review_id: Optional[str] = None

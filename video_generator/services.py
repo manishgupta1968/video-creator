@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from . import deps as deps_mod
 from . import guide as guide_mod
+from . import policy as policy_mod
 from . import estimate as est
 from . import media
 from . import stock
@@ -17,8 +18,10 @@ from .catalog import Catalog
 from .config import Config
 from .context import guess_type_and_role, item_by_id
 from .models import (ActorDetails, ClipScript, ClipVersion, Consent, ContextItem, ContextRole, ContextType,
-                     Dependency, DependencyType, Node, NodeKind, NodeStatus, Project, Settings, Style, now_iso)
+                     Dependency, DependencyType, DialogueLine, Node, NodeKind, NodeStatus, Project, Settings, ShotType, Style, now_iso)
 from .project import ProjectStore
+
+SHOT_TYPES_ALL = [t.value for t in ShotType]
 from .registry import Registry
 from .tree import add_child, find, leaves, move, numbering, remove, walk
 
@@ -239,7 +242,7 @@ class Service:
             node.script.target_seconds = node.target_seconds
         limit = node.script.target_seconds or node.target_seconds
         if limit:                                  # the plan you see must match the length: no more steps than fit
-            node.script.action_beats = node.script.action_beats[:max(1, round(limit / est.ACTION_SECONDS))]
+            node.script.action_beats = node.script.action_beats[:max(1, round(limit / policy_mod.current().action_seconds))]
         node.voice_audio = None
         node.voice_seconds = None
         if node.status in (NodeStatus.done, NodeStatus.needs_pick, NodeStatus.failed):
@@ -289,6 +292,59 @@ class Service:
         self._ledger_llm(p, f"break down {node_id}")
         self.save(p)
         return await self.write_all_scripts(pid, under=node_id)
+
+    async def split_clip(self, pid: str, node_id: str) -> Project:
+        """Replace one clip by consecutive clips that each need only what ONE route can do (see routes.describe).
+        The AI writes the parts; the clips before and after keep their links, the parts are linked 'continues from'."""
+        p = self.load(pid)
+        n = find(p, node_id)
+        if n.kind != NodeKind.clip or not n.script:
+            raise ValueError("Only a clip with a script can be split.")
+        split = await self.brain.split_clip(p, n)
+        if len(split.parts) < 2:
+            raise ValueError("The AI found nothing to split in this clip: it already needs only one kind of movement.")
+        p = self.load(pid)
+        n = find(p, node_id)
+        parent = next((x for x, _ in walk(p.root) if any(c.id == node_id for c in x.children)), None)
+        if parent is None:
+            raise ValueError("This clip has no place in the story to split.")
+        old = n.script
+        total = n.target_seconds or old.target_seconds or n.duration.likely_s
+        made: list[Node] = []
+        for part in split.parts[:4]:
+            shot = part.shot_type if part.shot_type in SHOT_TYPES_ALL else old.shot_type.value
+            names = {c.title.lower(): c.id for c in p.context if c.type == ContextType.actor}
+            script = ClipScript(
+                shot_type=ShotType(shot), visual=part.visual or old.visual, action_beats=part.action_beats, camera=old.camera,
+                actors_in_shot=list(old.actors_in_shot),
+                dialogue=[DialogueLine(speaker=names.get(l.speaker_name.lower(), l.speaker_name), text=l.text, emotion=l.emotion) for l in part.dialogue],
+                narration=part.narration, on_camera_speech=bool(part.dialogue) and old.on_camera_speech,
+                sound_notes=part.sound_notes or old.sound_notes, motion=part.motion if part.motion in ("face", "body", "scene") else "",
+                start_state=part.start_state, end_state=part.end_state, negative=old.negative, target_seconds=part.seconds or None)
+            made.append(Node(kind=NodeKind.clip, title=part.title or n.title, goal=part.goal or n.goal, target_seconds=part.seconds or None,
+                             script=script, status=NodeStatus.ready, context_add=list(n.context_add), context_off=list(n.context_off),
+                             context_override=dict(n.context_override), provider_override=n.provider_override, takes_override=n.takes_override,
+                             review_enabled=n.review_enabled))
+        made[0].transition_in = n.transition_in
+        # the parts keep the total length when none of them follows its audio; the estimate shows the truth either way
+        scale = (total / sum(m.target_seconds or 0 for m in made)) if total and sum(m.target_seconds or 0 for m in made) else 1.0
+        if 0.5 < scale < 2.0 and abs(scale - 1) > 0.05 and not any(m.script.motion == "face" for m in made):
+            for m in made:
+                m.target_seconds = round((m.target_seconds or 0) * scale, 1)
+                m.script.target_seconds = m.target_seconds
+        i = next(k for k, c in enumerate(parent.children) if c.id == node_id)
+        parent.children[i:i + 1] = made
+        # links: what led into the clip now leads into the first part; what continued from it continues from the last
+        for d in p.dependencies:
+            if d.to_id == node_id:
+                d.to_id = made[0].id
+            if d.from_id == node_id:
+                d.from_id = made[-1].id
+        for a, b in zip(made, made[1:]):
+            deps_mod.add_dependency(p, Dependency(from_id=a.id, to_id=b.id, type=DependencyType.continues_from, source="ai",
+                                                  note="made by splitting one clip: the next part starts where this one ends"))
+        self._ledger_llm(p, f"split clip {node_id}")
+        return self.save(p)
 
     async def revise(self, pid: str, node_id: str, instruction: str) -> Project:
         p = self.load(pid)

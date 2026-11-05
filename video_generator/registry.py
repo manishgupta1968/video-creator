@@ -81,6 +81,26 @@ def plugin_classes() -> dict[str, type]:
     return classes
 
 
+MOTION_LEVELS = ("face", "body", "scene")      # what a model can animate, from least to most; a higher level covers a lower one
+
+
+def capability_covers(job: str, caps: dict, cap: str, want) -> bool:
+    """Does a catalogue row's capabilities meet one need? Purely data-driven: booleans must be true, numbers must be at
+    least the wanted number, `animates` is ordered (scene covers body covers face), other words must match or be
+    listed. A row that does not declare `animates` is assumed to animate a whole scene (video) or only a face (avatar)."""
+    have = caps.get(cap)
+    if cap == "animates":
+        have = have or ("face" if job == "avatar" else "scene")
+        return MOTION_LEVELS.index(have) >= MOTION_LEVELS.index(want) if have in MOTION_LEVELS and want in MOTION_LEVELS else have == want
+    if isinstance(want, bool):
+        return bool(have) or not want
+    if isinstance(want, (int, float)):
+        return (have or 0) >= want
+    if isinstance(want, str):
+        return have == want or (isinstance(have, (list, tuple, set)) and want in have)
+    return True
+
+
 class Registry:
     def __init__(self, config: Config, catalog: Optional[Catalog] = None):
         self.config = config
@@ -122,14 +142,7 @@ class Registry:
                 continue
             if mode == "free" and not e.is_free:
                 continue
-            ok = True
-            for cap, want in need.items():
-                have = e.capabilities.get(cap)
-                if isinstance(want, bool) and want and not have:
-                    ok = False
-                elif isinstance(want, (int, float)) and not isinstance(want, bool) and (have or 0) < want:
-                    ok = False
-            if ok:
+            if all(capability_covers(job, e.capabilities, cap, want) for cap, want in need.items()):
                 out.append(e)
 
         def level(e: CatalogEntry) -> int:

@@ -14,7 +14,7 @@ video:
     model: veo-3.1-generate-preview
     vendor: google
     strengths: {dialogue_scene: 5, wildlife: 5, landscape: 5, product: 4, human_motion: 3, talking_head: 3, other: 4}
-    capabilities: {start_frame: true, end_frame: true, reference_images: 3, native_audio: true, max_seconds: 8}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 3, native_audio: true, max_seconds: 8, animates: scene, length: fixed}
     price: {unit: second, usd: 0.40}
     time: {queue_s: 30, per_output_s: 12}
     licence: commercial (Google Gemini API terms)
@@ -25,7 +25,7 @@ video:
     model: veo-3.1-fast-generate-preview
     vendor: google
     strengths: {dialogue_scene: 4, wildlife: 4, landscape: 4, product: 3, human_motion: 3, talking_head: 3, other: 3}
-    capabilities: {start_frame: true, end_frame: true, reference_images: 0, native_audio: true, max_seconds: 8}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 0, native_audio: true, max_seconds: 8, animates: scene, length: fixed}
     price: {unit: second, usd: 0.12}
     time: {queue_s: 20, per_output_s: 6}
     licence: commercial (Google Gemini API terms)
@@ -36,7 +36,7 @@ video:
     model: fal-ai/kling-video/v3/pro/image-to-video
     vendor: fal
     strengths: {human_motion: 5, product: 4, dialogue_scene: 3, wildlife: 4, landscape: 4, talking_head: 3, other: 4}
-    capabilities: {start_frame: true, end_frame: true, reference_images: 0, native_audio: true, max_seconds: 15}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 0, native_audio: true, max_seconds: 15, animates: scene, length: fixed}
     # fal's page: about $0.112/s without sound, $0.168/s with sound (we ask for sound)
     price: {unit: second, usd: 0.168}
     time: {queue_s: 60, per_output_s: 15}
@@ -50,7 +50,7 @@ video:
     model: bytedance/seedance-2.0/image-to-video
     vendor: fal
     strengths: {human_motion: 5, dialogue_scene: 4, product: 4, wildlife: 4, landscape: 4, talking_head: 3, other: 4}
-    capabilities: {start_frame: true, end_frame: true, reference_images: 0, native_audio: true, max_seconds: 15}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 0, native_audio: true, max_seconds: 15, animates: scene, length: fixed}
     # about $0.30/s at 720p with sound (fal listing)
     price: {unit: second, usd: 0.30}
     time: {queue_s: 60, per_output_s: 12}
@@ -64,7 +64,7 @@ video:
     model: bytedance/seedance-2.0/fast/image-to-video
     vendor: fal
     strengths: {human_motion: 4, dialogue_scene: 3, product: 3, wildlife: 4, landscape: 4, talking_head: 3, other: 3}
-    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: true, max_seconds: 15}
+    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: true, max_seconds: 15, animates: scene, length: fixed}
     # about $0.24/s at 720p with sound (fal listing)
     price: {unit: second, usd: 0.24}
     time: {queue_s: 40, per_output_s: 8}
@@ -78,7 +78,7 @@ video:
     model: wan/v2.6/image-to-video
     vendor: fal
     strengths: {wildlife: 4, landscape: 5, product: 3, human_motion: 4, dialogue_scene: 3, talking_head: 2, other: 4}
-    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: false, max_seconds: 15}
+    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: false, max_seconds: 15, animates: scene, length: fixed}
     # about $0.05 / $0.10 / $0.15 per second at 480p / 720p / 1080p (fal listing); we ask for 720p
     price: {unit: second, usd: 0.10}
     time: {queue_s: 45, per_output_s: 10}
@@ -92,7 +92,7 @@ video:
     model: gen4.5
     vendor: runway
     strengths: {product: 5, landscape: 4, human_motion: 3, wildlife: 3, dialogue_scene: 2, talking_head: 2, other: 4}
-    capabilities: {start_frame: true, end_frame: false, reference_images: 1, native_audio: false, max_seconds: 10, camera_control: true}
+    capabilities: {start_frame: true, end_frame: false, reference_images: 1, native_audio: false, max_seconds: 10, camera_control: true, animates: scene, length: fixed}
     price: {unit: second, usd: 0.12}
     time: {queue_s: 20, per_output_s: 8}
     licence: commercial (Runway API terms)
@@ -103,7 +103,7 @@ video:
     model: ray-2
     vendor: luma
     strengths: {landscape: 4, product: 4, wildlife: 3, human_motion: 3, dialogue_scene: 2, talking_head: 2, other: 3}
-    capabilities: {start_frame: true, end_frame: true, reference_images: 0, native_audio: false, max_seconds: 9}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 0, native_audio: false, max_seconds: 9, animates: scene, length: fixed}
     price: {unit: second, usd: 0.18}
     time: {queue_s: 30, per_output_s: 10}
     licence: commercial (Luma API terms)
@@ -115,7 +115,7 @@ video:
     vendor: kling
     enabled: false   # official API may need prepaid packages; fal route above is simpler
     strengths: {human_motion: 5, product: 4, dialogue_scene: 3, wildlife: 4, landscape: 4, talking_head: 3, other: 4}
-    capabilities: {start_frame: true, end_frame: true, reference_images: 1, native_audio: true, max_seconds: 10}
+    capabilities: {start_frame: true, end_frame: true, reference_images: 1, native_audio: true, max_seconds: 10, animates: scene, length: fixed}
     price: {unit: second, usd: 0.112}
     time: {queue_s: 60, per_output_s: 15}
     licence: commercial (Kuaishou terms)
@@ -126,7 +126,7 @@ video:
     model: wan-video/wan-2.2-i2v-fast
     vendor: replicate
     strengths: {landscape: 3, wildlife: 3, product: 2, human_motion: 2, dialogue_scene: 1, talking_head: 1, other: 3}
-    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: false, max_seconds: 5}
+    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: false, max_seconds: 5, animates: scene, length: fixed}
     price: {unit: second, usd: 0.05}
     time: {queue_s: 30, per_output_s: 8}
     licence: Apache-2.0 weights (Wan 2.2)
@@ -137,7 +137,7 @@ video:
     model: ken-burns
     vendor: local
     strengths: {human_motion: 1, dialogue_scene: 1, wildlife: 1, landscape: 1, product: 1, talking_head: 1, other: 1}
-    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: false, max_seconds: 600}
+    capabilities: {start_frame: true, end_frame: false, reference_images: 0, native_audio: false, max_seconds: 600, animates: scene, length: flexible}
     price: {unit: second, usd: 0}
     time: {queue_s: 0, per_output_s: 0.3}
     licence: free (local, placeholder motion)
@@ -206,7 +206,7 @@ voice:
     plugin: elevenlabs
     model: eleven_v3
     vendor: elevenlabs
-    capabilities: {clone: true}
+    capabilities: {clone: true, voice_preview: true}
     quality: 5
     price: {unit: 1k_chars, usd: 0.10}
     time: {queue_s: 0, per_output_s: 0.3}
@@ -263,7 +263,7 @@ avatar:
     plugin: heygen
     model: avatar_iv
     vendor: heygen
-    capabilities: {max_seconds: 300, needs_photo: true}
+    capabilities: {max_seconds: 300, needs_photo: true, animates: face, length: follows_audio}
     quality: 5
     price: {unit: second, usd: 0.0667}
     time: {queue_s: 60, per_output_s: 6}
@@ -274,7 +274,7 @@ avatar:
     plugin: fal_avatar
     model: veed/fabric-1.0
     vendor: fal
-    capabilities: {max_seconds: 300, needs_photo: true}
+    capabilities: {max_seconds: 300, needs_photo: true, animates: face, length: follows_audio}
     quality: 4
     price: {unit: second, usd: 0.15}
     time: {queue_s: 30, per_output_s: 5}
@@ -285,7 +285,7 @@ avatar:
     plugin: fal_avatar
     model: fal-ai/kling-video/ai-avatar/v2/pro
     vendor: fal
-    capabilities: {max_seconds: 60, needs_photo: true, non_human: true}   # animates animals/characters too
+    capabilities: {max_seconds: 60, needs_photo: true, non_human: true, animates: face, length: follows_audio}   # animates animals/characters too
     quality: 4
     price: {unit: second, usd: 0.115}
     time: {queue_s: 60, per_output_s: 8}
@@ -296,7 +296,7 @@ avatar:
     plugin: fake_avatar
     model: still-with-audio
     vendor: local
-    capabilities: {max_seconds: 3600, needs_photo: false, non_human: true}
+    capabilities: {max_seconds: 3600, needs_photo: false, non_human: true, animates: face, length: follows_audio}
     quality: 1
     price: {unit: second, usd: 0}
     time: {queue_s: 0, per_output_s: 0.2}
@@ -309,7 +309,7 @@ lipsync:
     plugin: fal_lipsync
     model: fal-ai/sync-lipsync/v2/pro
     vendor: fal
-    capabilities: {}
+    capabilities: {faces: human}
     quality: 5
     price: {unit: second, usd: 0.083}
     time: {queue_s: 30, per_output_s: 4}

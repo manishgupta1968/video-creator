@@ -79,7 +79,7 @@ def test_pitch_measurement_and_bounded_correction(tmp_path):
         assert abs(media.voice_pitch(wav) - hz) < 6
     wav = tmp_path / "t260.wav"
     out, note, shift = casting.fit_voice(wav, casting.Profile(gender="male", pitch="low"))
-    assert shift == -casting.MAX_SHIFT and "choose another voice" in note                  # too high to fix: capped, and the user is told
+    assert shift == -casting.policy_mod.current().max_pitch_shift_st and "choose another voice" in note                  # too high to fix: capped, and the user is told
     assert media.voice_pitch(out) < 215 and abs(media.probe_duration(out) - 2.0) < 0.1
     ok, note2, shift2 = casting.fit_voice(tmp_path / "t110.wav", casting.Profile(gender="male", pitch="low"))
     assert ok == tmp_path / "t110.wav" and shift2 == 0.0 and note2 == ""                  # a fitting voice is left alone

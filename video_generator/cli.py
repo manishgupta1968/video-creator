@@ -535,7 +535,7 @@ def doctor():
 def smoke_test(max_usd: float = typer.Option(1.0, "--max-usd", help="never spend more than this many dollars"),
                yes: bool = typer.Option(False, "--yes", help="do not ask before spending"),
                all_video_models: bool = typer.Option(False, "--all-video-models", help="test up to 3 video models (costs more)")):
-    """A tiny REAL test of voice, picture, video and the talking lion with your own keys (about $1 at most). Asks first."""
+    """A tiny REAL test of voice, picture, video and a talking picture with your own keys (about $1 at most). Asks first."""
     from . import smoketest
     svc = _svc()
     rep = asyncio.run(smoketest.run(svc, max_usd, None if yes else (lambda q: typer.confirm(q)),
@@ -543,8 +543,19 @@ def smoke_test(max_usd: float = typer.Option(1.0, "--max-usd", help="never spend
     con.print("\n" + rep.text(), highlight=False)
 
 
+@app.command()
+def policy():
+    """Show every quality rule and its value. Change one in ~/.video-generator/config.yaml under `policy:`."""
+    from . import policy as pol
+    from .config import Config
+    Config.load()
+    for name, value, why in pol.describe():
+        con.print(f"[bold]{name}[/] = {value}", highlight=False)
+        con.print(f"    {why}", highlight=False)
+
+
 @app.command("photo-test")
-def photo_test(words: str = typer.Argument("male lion", help="what to search for, e.g. 'male lion'")):
+def photo_test(words: str = typer.Argument("wild animal portrait", help="what to search for, e.g. 'red fox winter'")):
     """Check the automatic photo search on this computer, step by step. Saves the first photo it can download here."""
     from . import stock
     from .config import load_env

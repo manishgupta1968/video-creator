@@ -17,6 +17,7 @@ from .context import effective_context, summarize_for_llm
 from .models import (ActorInShot, ClipScript, ContextType, DialogueLine, Node, Project, ShotType)
 from .plugins.base import PluginError, Usage
 from .registry import Registry
+from . import routes as routes_mod
 from .tree import ancestors, numbering, outline, walk
 
 SHOT_TYPES = [s.value for s in ShotType]
@@ -89,6 +90,26 @@ class Line(BaseModel):
     emotion: str = ""
 
 
+class SplitPart(BaseModel):
+    title: str
+    goal: str = ""
+    seconds: float = 4
+    shot_type: str = "other"
+    motion: str = ""                  # face | body | scene
+    visual: str = ""
+    action_beats: list[str] = Field(default_factory=list)
+    dialogue: list[Line] = Field(default_factory=list)
+    narration: str = ""
+    sound_notes: str = ""
+    start_state: str = ""
+    end_state: str = ""
+
+
+class ClipSplit(BaseModel):
+    parts: list[SplitPart]
+    note: str = ""
+
+
 class ClipScriptDraft(BaseModel):
     shot_type: str = "other"
     visual: str
@@ -99,6 +120,7 @@ class ClipScriptDraft(BaseModel):
     narration: str = ""
     on_camera_speech: bool = False
     sound_notes: str = ""
+    motion: str = ""                  # face | body | scene: what must move in this clip
     start_state: str = ""
     end_state: str = ""
     negative: str = ""
@@ -256,7 +278,7 @@ class Brain:
 
     # ------------------------------------------------------------- tasks
     async def draft_project(self, project: Project) -> ProjectDraft:
-        prompt = render("draft", goal=project.goal, seconds=project.settings.target_seconds,
+        prompt = render("draft", goal=project.goal, seconds=project.settings.target_seconds, routes=routes_mod.describe(self.reg),
                         aspect=project.settings.aspect, context=summarize_for_llm(effective_context(project, project.root.id)))
         return await self.ask("draft", prompt, ProjectDraft,
                               {"goal": project.goal, "seconds": project.settings.target_seconds,
@@ -264,12 +286,23 @@ class Brain:
 
     async def decompose(self, project: Project, node: Node) -> Decomposition:
         nums = numbering(project)
-        prompt = render("decompose", outline=outline(project), number=nums.get(node.id, ""), title=node.title,
+        prompt = render("decompose", outline=outline(project), number=nums.get(node.id, ""), title=node.title, routes=routes_mod.describe(self.reg),
                         goal=node.goal, seconds=node.duration.likely_s or node.target_seconds or 20,
                         context=self._context_block(project, node.id), actors=self._actor_list(project, node.id))
         return await self.ask("decompose", prompt, Decomposition,
                               {"goal": node.goal, "title": node.title,
                                "seconds": node.duration.likely_s or node.target_seconds or 20})
+
+    async def split_clip(self, project: Project, node: Node) -> ClipSplit:
+        """Split one clip into consecutive clips that each need only what ONE route can do (the rule comes from the catalogue)."""
+        nums = numbering(project)
+        sc = node.script
+        secs = node.target_seconds or (sc.target_seconds if sc else None) or node.duration.likely_s or 6
+        prompt = render("split_clip", outline=outline(project), number=nums.get(node.id, ""), title=node.title, goal=node.goal,
+                        seconds=f"{secs:g}", routes=routes_mod.describe(self.reg), actors=self._actor_list(project, node.id),
+                        script=sc.model_dump_json(indent=1) if sc else "(none)", shot_types=", ".join(SHOT_TYPES))
+        return await self.ask("split_clip", prompt, ClipSplit, {"title": node.title, "goal": node.goal, "seconds": secs,
+                                                                  "script": sc.model_dump() if sc else {}})
 
     async def write_clip_script(self, project: Project, node: Node, feedback: str = "") -> ClipScriptDraft:
         nums = numbering(project)
@@ -277,7 +310,7 @@ class Brain:
         parents = " > ".join(f"{a.title}: {a.goal}" for a in ancestors(project, node.id) if a.id != project.root.id)
         current = node.script.model_dump_json(indent=1) if node.script else "(none yet)"
         secs = node.target_seconds or (node.script.target_seconds if node.script else None) or node.duration.likely_s or 6
-        prompt = render("clip_script", outline=outline(project), number=nums.get(node.id, ""), title=node.title,
+        prompt = render("clip_script", outline=outline(project), number=nums.get(node.id, ""), title=node.title, routes=routes_mod.describe(self.reg),
                         goal=node.goal, parents=parents or "(top level)", seconds=f"{secs:g}", max_beats=max(1, round(secs / 2.5)),
                         context=self._context_block(project, node.id), actors=self._actor_list(project, node.id),
                         previous=(f"{prev.title}: {prev.script.visual if prev.script else prev.goal}"
@@ -415,4 +448,5 @@ def draft_to_script(project: Project, d: ClipScriptDraft) -> ClipScript:
                         for a in d.actors_in_shot],
         dialogue=[DialogueLine(speaker=resolve(l.speaker_name), text=l.text, emotion=l.emotion) for l in d.dialogue],
         narration=d.narration, on_camera_speech=d.on_camera_speech and bool(d.dialogue),
-        sound_notes=d.sound_notes, start_state=d.start_state, end_state=d.end_state, negative=d.negative)
+        sound_notes=d.sound_notes, motion=d.motion if d.motion in ("face", "body", "scene") else "",
+        start_state=d.start_state, end_state=d.end_state, negative=d.negative)

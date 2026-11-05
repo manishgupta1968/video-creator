@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import media
+from . import policy as policy_mod
 from .models import Review, ReviewIssue, ReviewSuggestion
 from .project import ProjectStore
 from .tree import find, leaves, numbering, walk
@@ -52,6 +53,7 @@ class Reviewer:
         measurements = dict(take.quality)
         keyframe = base / take.keyframe if take.keyframe else None
         measurements.update(media.motion_stats(video))
+        measurements.update(media.freeze_stats(video))
         measurements.update(media.sharpness_ratio(video, keyframe, work / "sharp"))
         measurements.update(media.audio_stats(video))
         placeholder = self._is_placeholder(take)
@@ -188,6 +190,17 @@ def apply_quality_rules(draft, meas: dict, placeholder: bool, speech_expected: b
         for k in ("realism", "motion", "fidelity"):
             scores[k] = 1
     else:
+        pol = policy_mod.current()
+        longest, ratio = meas.get("longest_freeze_s", 0.0), meas.get("frozen_ratio", 0.0)
+        if longest > pol.max_freeze_s or ratio > pol.max_freeze_ratio:
+            tail = meas.get("tail_freeze_s", 0.0)
+            issue("motion", f"The picture is frozen for {meas.get('frozen_s', longest):.1f} s ({ratio:.0%} of the clip"
+                  + (f", {tail:.1f} s at the end" if tail else "") + "). Rules allow at most "
+                  f"{pol.max_freeze_s:.1f} s or {pol.max_freeze_ratio:.0%}.", "major")
+            cap("motion", 2)
+            cap("realism", 3)
+            suggestions.append("The model could not make this clip as long as planned. Split the clip so each part needs one kind of movement, "
+                               "or shorten it to what the model made.")
         m, st = meas.get("motion"), meas.get("static_ratio", 0)
         if m is not None:
             if m < 0.3 or st > 0.6:

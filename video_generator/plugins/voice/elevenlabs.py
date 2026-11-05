@@ -114,12 +114,32 @@ class ElevenLabsVoice(VoiceSynth):
                 score += 0.5
             if v.get("voice_id") in taken:
                 score -= 100
-            scored.append(VoiceChoice(v.get("voice_id", ""), v.get("name", ""), self.name, score, g))
+            scored.append(VoiceChoice(v.get("voice_id", ""), v.get("name", ""), self.name, score, g, preview_url=v.get("preview_url") or ""))
         scored = [c for c in scored if c.voice_id]
         scored.sort(key=lambda c: -c.score)
         if not scored and spec.gender in STOCK:
             return self._stock(spec, taken, f"no {spec.gender} voice in your ElevenLabs voice list; stock voices are tried instead")
         return scored[:8]
+
+    async def preview(self, choice: VoiceChoice):
+        """The free sample clip of a voice (no key, no charge), as a wav file; None when there is none."""
+        if not choice.preview_url:
+            return None
+        import tempfile
+        from pathlib import Path
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                r = await client.get(choice.preview_url)
+            if r.status_code >= 400 or not r.content:
+                return None
+            tmp = Path(tempfile.mkdtemp())
+            raw = tmp / "preview.mp3"
+            raw.write_bytes(r.content)
+            wav = tmp / "preview.wav"
+            media.ff("-i", str(raw), "-ac", "1", "-ar", "16000", str(wav))
+            return wav
+        except Exception:
+            return None
 
     async def match(self, description: str, language: str = "en"):
         cands = await self.candidates(VoiceSpec(description=description, language=language))

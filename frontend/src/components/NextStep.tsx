@@ -30,6 +30,7 @@ export default function NextStep() {
       case "budget": window.dispatchEvent(new Event("vg-open-budget")); break;
       case "run": run({ mode: a.mode || "next", targets: a.targets, title: a.title || a.label }); break;
       case "scripts": P.act("Writing scripts", () => api.writeScripts(P.pid), "Scripts written"); break;
+      case "split": if (a.id) P.act("Splitting", () => api.splitClip(P.pid, a.id!), "Clip split into parts"); break;
       case "assemble": P.act("Joining", () => api.assemble(P.pid)); break;
       case "final": finalPlayer.open(); break;
       case "resume": P.act("Resume", () => api.resume(P.pid)); break;

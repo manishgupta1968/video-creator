@@ -13,4 +13,6 @@ CONTEXT THAT APPLIES HERE:
 ACTORS:
 {{actors}}
 
+{{routes}}
+
 Return 2–6 children in story order. Use kind "clip" for something filmable in one shot (4–12 s), kind "goal" for a larger idea that needs further breakdown. Seconds should add up to the length to fill.

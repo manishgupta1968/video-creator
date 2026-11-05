@@ -173,6 +173,34 @@ class FakeLLM(LLM):
         return {"children": [{"title": f"{l}", "goal": f"{l} — {goal}", "seconds": round(secs / n, 1), "kind": "clip"}
                              for l in labels], "note": "offline brain: simple split"}
 
+    def _split_clip(self, m: dict) -> dict:
+        """Offline fallback: split at the script's own structure. The spoken part (all dialogue) becomes a face-only clip about as long
+        as the speech; the action steps become the other clip(s)."""
+        sc = m.get("script") or {}
+        secs = float(m.get("seconds") or 6)
+        lines = sc.get("dialogue") or []
+        beats = sc.get("action_beats") or []
+        words = sum(len((l.get("text") or "").split()) for l in lines)
+        speech_s = round(min(max(words / 2.5 + 1.0, 2.0), max(secs - 1.0, 2.0)), 1)
+        start, end = sc.get("start_state") or "", sc.get("end_state") or ""
+        mid = f"Right after the speech: {(sc.get('visual') or m.get('title') or '')[:80]}"
+        if lines:
+            parts = [{"title": f"{m.get('title', 'Clip')}: speaking", "goal": "speak to the camera", "seconds": speech_s, "shot_type": "talking_head",
+                      "motion": "face", "visual": sc.get("visual", ""), "dialogue": [{"speaker_name": l.get("speaker", ""), "text": l.get("text", "")} for l in lines],
+                      "sound_notes": sc.get("sound_notes", ""), "start_state": start, "end_state": mid},
+                     {"title": f"{m.get('title', 'Clip')}: movement", "goal": m.get("goal", ""), "seconds": round(max(secs - speech_s, 2.0), 1),
+                      "shot_type": sc.get("shot_type", "other") if sc.get("shot_type") != "talking_head" else "other", "motion": "body",
+                      "visual": sc.get("visual", ""), "action_beats": beats, "sound_notes": sc.get("sound_notes", ""), "start_state": mid, "end_state": end}]
+        else:
+            half = max(len(beats) // 2, 1)
+            parts = [{"title": f"{m.get('title', 'Clip')}: first", "goal": m.get("goal", ""), "seconds": round(secs / 2, 1), "shot_type": sc.get("shot_type", "other"),
+                      "motion": sc.get("motion") or "scene", "visual": sc.get("visual", ""), "action_beats": beats[:half], "sound_notes": sc.get("sound_notes", ""),
+                      "start_state": start, "end_state": mid},
+                     {"title": f"{m.get('title', 'Clip')}: second", "goal": m.get("goal", ""), "seconds": round(secs / 2, 1), "shot_type": sc.get("shot_type", "other"),
+                      "motion": sc.get("motion") or "scene", "visual": sc.get("visual", ""), "action_beats": beats[half:], "sound_notes": sc.get("sound_notes", ""),
+                      "start_state": mid, "end_state": end}]
+        return {"parts": parts, "note": "offline brain: split at the script's own structure"}
+
     def _write_clip_script(self, m: dict) -> dict:
         goal = m.get("goal", "")
         secs = float(m.get("seconds") or 6)

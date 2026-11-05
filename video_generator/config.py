@@ -16,6 +16,9 @@ import yaml
 from dotenv import dotenv_values
 from pydantic import BaseModel, Field
 
+from . import policy as policy_mod
+from .policy import Policy
+
 
 def vg_home() -> Path:
     home = Path(os.environ.get("VG_HOME", Path.home() / ".video-generator"))
@@ -46,6 +49,7 @@ class Config(BaseModel):
     projects_dir: str = ""
     max_parallel_jobs: int = 4
     user_name: str = ""
+    policy: Policy = Field(default_factory=Policy)     # every quality threshold in one place: see `vg policy`
 
     # ------------------------------------------------------------------ io
     @classmethod
@@ -55,6 +59,7 @@ class Config(BaseModel):
         if path.exists():
             data = yaml.safe_load(path.read_text()) or {}
         cfg = cls.model_validate(data)
+        policy_mod.use(cfg.policy)
         load_env()
         return cfg
 

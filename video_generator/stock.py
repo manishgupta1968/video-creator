@@ -254,7 +254,7 @@ async def diagnose(query: str, dest_dir: Path, client: Optional[httpx.AsyncClien
             if p not in kept:
                 lines.append(f"     removed: “{p.title}” ({p.license})")
         if not kept:
-            lines.append("   Nothing left to download. Try other words, for example: vg photo-test \"african lion portrait\".")
+            lines.append("   Nothing left to download. Try other words, for example: vg photo-test \"red fox in winter\".")
         for i, p in enumerate(kept[:4], 1):
             host = urlparse(p.url).hostname or "(none)"
             lines.append(f"3.{i} “{p.title}” by {p.author} ({p.license}); address host: {host}; allowed: {'yes' if host_allowed(host) and p.url.startswith('https://') else 'NO'}")

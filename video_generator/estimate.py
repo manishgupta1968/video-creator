@@ -15,16 +15,14 @@ from typing import Optional
 
 from .catalog import CatalogEntry
 from .context import effective_context
-from .deps import topo_order, upstream
+from .deps import downstream, topo_order, upstream
 from .models import (ContextItem, ContextRole, ContextType, CostEstimate, CostLine, DependencyType,
                      DurationEstimate, EstimateBasis, Node, NodeKind, Project, ShotType, TimeEstimate)
-from .registry import Registry
+from . import policy as policy_mod
+from .registry import MOTION_LEVELS, Registry
 from .tree import find, leaves, walk
 
 PEOPLE_SHOTS = {ShotType.talking_head, ShotType.dialogue_scene, ShotType.human_motion}
-ACTION_SECONDS = 2.5
-LINE_PAUSE = 0.6
-EDGE_PAD = 0.5
 SECONDS_PER_SLIDE = 5.0
 SCRIPT_TOKENS = (6000, 2500)       # in, out per clip script
 REVIEW_TOKENS = (26000, 1800)      # per take review (frames + context)
@@ -64,7 +62,16 @@ def takes_for(project: Project, node: Node) -> int:
 
 
 # --------------------------------------------------------------------- duration
-def estimate_duration(project: Project, node: Node, siblings_share: Optional[float] = None) -> DurationEstimate:
+def follows_audio(project: Project, node: Node, reg: Optional[Registry]) -> bool:
+    """True when the route chosen for this clip makes a clip exactly as long as its audio (the catalogue row says
+    `length: follows_audio`), so the planned target length cannot be met by that route."""
+    if reg is None or node.kind != NodeKind.clip or not node.script:
+        return False
+    plan = plan_clip(project, node, reg)
+    return bool(plan.video and not plan.video.is_free and plan.route == "avatar" and plan.video.capabilities.get("length") == "follows_audio")
+
+
+def estimate_duration(project: Project, node: Node, siblings_share: Optional[float] = None, reg: Optional[Registry] = None) -> DurationEstimate:
     if node.kind == NodeKind.user_clip:
         secs = float(node.voice_seconds or node.duration.likely_s or 0)
         if node.media:
@@ -89,9 +96,13 @@ def estimate_duration(project: Project, node: Node, siblings_share: Optional[flo
 
     if node.kind == NodeKind.clip and node.voice_seconds:
         s = node.script
-        action = len(s.action_beats) * ACTION_SECONDS if s else 0
+        action = len(s.action_beats) * policy_mod.current().action_seconds if s else 0
         target = (s.target_seconds if s else None) or node.target_seconds
-        base = node.voice_seconds + 2 * EDGE_PAD * 0.5
+        base = node.voice_seconds + 2 * policy_mod.current().edge_pad * 0.5
+        if follows_audio(project, node, reg):
+            secs = max(base, 2.0)                      # this route is exactly as long as the speech: the target cannot be met
+            return DurationEstimate(min_s=secs, likely_s=secs, max_s=secs, basis=EstimateBasis.actual,
+                                    explain=f"the talking animation is as long as the voice ({node.voice_seconds:.1f} s + padding)")
         if target:
             secs = max(base, target, 2.0)          # the length you asked for wins; action steps never stretch it
             why = (f"real voice {node.voice_seconds:.1f} s fits your {target:.0f} s target" if base <= target
@@ -111,10 +122,14 @@ def estimate_duration(project: Project, node: Node, siblings_share: Optional[flo
         for speaker, text in lines:
             wpm = speaking_wpm(project, node, speaker)
             speech += _words(text) / wpm * 60
-        pauses = LINE_PAUSE * max(len(lines) - 1, 0) + (2 * EDGE_PAD if lines else 0)
-        action = len(s.action_beats) * ACTION_SECONDS
+        pauses = policy_mod.current().line_pause * max(len(lines) - 1, 0) + (2 * policy_mod.current().edge_pad if lines else 0)
+        action = len(s.action_beats) * policy_mod.current().action_seconds
         target = s.target_seconds or node.target_seconds
-        if target:
+        route_follows_speech = bool(lines) and follows_audio(project, node, reg)
+        if route_follows_speech:
+            likely = max(speech + pauses, 2.0)          # exactly as long as the speech: the target cannot be met by this route
+            target = None
+        elif target:
             # the length you asked for wins. Action steps never stretch a clip that has a target;
             # only the speech can, because words cannot be squeezed.
             likely = max(speech + pauses, target, 2.0)
@@ -125,7 +140,9 @@ def estimate_duration(project: Project, node: Node, siblings_share: Optional[flo
             parts.append(f"{words} words ≈ {speech:.0f} s speech")
             if pauses:
                 parts.append(f"{pauses:.1f} s pauses")
-        if target:
+        if route_follows_speech:
+            parts.append("the talking animation is exactly as long as the speech")
+        elif target:
             parts.append(f"your target length ({target:.0f} s)" if likely <= target + 0.01 else
                          f"the speech is longer than your {target:.0f} s target, so the clip follows the speech")
         elif action:
@@ -159,6 +176,9 @@ class ClipPlan:
     lipsync_needed: bool
     warnings: list[str]
     sfx: Optional[CatalogEntry] = None     # natural-sound maker for this clip (None = the clip needs none)
+    uncovered: str = ""                    # what the clip needs that no single route can do (empty = covered)
+    end_picture: bool = False              # make a picture of the planned ending and give it to the video model
+    motion: str = ""                       # what must move: face | body | scene (declared by the plan, or the legacy default)
 
 
 def wants_ambience(project: Project, node: Node, plan: "ClipPlan") -> bool:
@@ -209,6 +229,28 @@ def speaking_actor(project: Project, node: Node) -> Optional[ContextItem]:
     return None
 
 
+def wants_end_picture(project: Project, node: Node) -> bool:
+    """A clip whose ending is planned and which the next clip continues from should really END that way. The policy
+    can switch this off (precise_endings: off)."""
+    if policy_mod.current().precise_endings == "off" or node.kind != NodeKind.clip or not node.script or not node.script.end_state.strip():
+        return False
+    return any(d.type == DependencyType.continues_from for d in downstream(project, node.id))
+
+
+SUBJECT_OF_KIND = {"ai_person": "human", "real_person": "human", "digital_twin": "human", "animal": "animal", "product": "object"}
+
+
+def clip_motion(node: Node, speaker: Optional[ContextItem]) -> str:
+    """What must move in this clip. The plan declares it (`motion`). Projects made before that field existed fall back
+    to: a visible speaker of a presenter-style shot or a non-human speaker moves only the face; anything else is a scene."""
+    s = node.script
+    if s and s.motion in MOTION_LEVELS:
+        return s.motion
+    if speaker and speaker.actor and (speaker.actor.kind in ("animal", "product") or s.shot_type == ShotType.talking_head):
+        return "face"
+    return "scene"
+
+
 def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     warnings: list[str] = []
     if node.kind in (NodeKind.slides, NodeKind.user_clip):
@@ -235,30 +277,39 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     image = reg.choose("image", mode=mode)
 
     speaker = speaking_actor(project, node)
+    motion = clip_motion(node, speaker)
     avatar_entry = None
-    if speaker and speaker.actor:
+    if speaker and speaker.actor and motion == "face":
         nonhuman = speaker.actor.kind in ("animal", "product")
-        if nonhuman or s.shot_type == ShotType.talking_head:
-            try:
-                avatar_entry = reg.choose("avatar", mode=mode, override=node.provider_override,
-                                          need={"non_human": True} if nonhuman else None, strict=nonhuman)
-            except LookupError:
-                avatar_entry = None
-            # real footage beats a free preview: if only the free avatar exists but a paid video model does too
-            if avatar_entry and avatar_entry.is_free and mode != "free" and any(
-                    not e.is_free for e in reg.candidates("video", shot, mode=mode)):
-                avatar_entry = None
+        try:
+            avatar_entry = reg.choose("avatar", mode=mode, override=node.provider_override,
+                                      need={"animates": "face", **({"non_human": True} if nonhuman else {})}, strict=nonhuman)
+        except LookupError:
+            avatar_entry = None
+        # real footage beats a free preview: if only the free avatar exists but a paid video model does too
+        if avatar_entry and avatar_entry.is_free and mode != "free" and any(
+                not e.is_free for e in reg.candidates("video", shot, mode=mode)):
+            avatar_entry = None
     if avatar_entry:
         if avatar_entry.is_free and not node.takes_override:
             takes = 1          # free previews are identical; one take is enough
         plan_a = ClipPlan("avatar", avatar_entry, image, voice, None, takes, False, ref_images, False, warnings)
+        plan_a.motion = motion
         plan_a.sfx = _sfx_for(reg, mode, project, node, plan_a)
         return plan_a
 
     need: dict = {}
     if needs_start:
         need["start_frame"] = True
-    video = reg.choose("video", shot, need=need, override=node.provider_override, mode=mode)
+    end_wanted = wants_end_picture(project, node)
+    if end_wanted:
+        need["end_frame"] = True
+    video = reg.choose("video", shot, need=need, override=node.provider_override, mode=mode,
+                       strict=end_wanted and policy_mod.current().precise_endings == "on")
+    end_pic = bool(end_wanted and video.capabilities.get("end_frame"))
+    if end_wanted and not end_pic:
+        warnings.append("This clip should end in a planned way (the next clip continues from it), but no usable video model accepts an end "
+                        "picture, so the ending is only a hint to the model.")
     if video.is_free and not node.takes_override:
         takes = 1              # free previews are identical; one take is enough
     max_refs = int(video.capabilities.get("reference_images", 0) or 0)
@@ -269,8 +320,25 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     if needs_start and not video.capabilities.get("start_frame"):
         warnings.append(f"{video.id} cannot start from the previous clip's last frame")
     lip = bool(s and s.on_camera_speech)
-    lipsync = reg.choose("lipsync", mode=mode) if lip else None
+    lipsync = None
+    uncovered = ""
+    if lip:
+        subject = SUBJECT_OF_KIND.get(speaker.actor.kind, "human") if speaker and speaker.actor else "human"
+        try:
+            lipsync = reg.choose("lipsync", mode=mode, need={"faces": subject}, strict=True)
+        except LookupError:
+            lipsync = None
+        speaks = [e for e in reg.candidates("video", shot, {"speech": True}, mode) if not e.is_free]
+        if (lipsync is None or lipsync.is_free) and not speaks:
+            uncovered = (f"This clip needs speech on camera and {('movement of the ' + motion) if motion != 'face' else 'a face that talks'}, "
+                         f"but no available route does both for this speaker ({subject}). Split it into a talking clip and a movement clip.")
+            warnings.append(uncovered)
+        elif lipsync is None or lipsync.is_free:
+            video = speaks[0] if video.id not in {e.id for e in speaks} else video      # a model that speaks the line itself
     plan_v = ClipPlan("video", video, image, voice, lipsync, takes, needs_start, ref_images, lip, warnings)
+    plan_v.motion = motion
+    plan_v.uncovered = uncovered
+    plan_v.end_picture = end_pic
     plan_v.sfx = _sfx_for(reg, mode, project, node, plan_v)
     return plan_v
 
@@ -336,6 +404,9 @@ def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Option
             add(f"Keyframe images ({plan.image.id})", f"{img_count} x ${plan.image.unit_price}",
                 img_count * plan.image.unit_price)
             step_times.append((plan.image.time.queue_s + plan.image.time.per_output_s) * reg.time_factor(plan.image.id))
+        if plan.end_picture and plan.image:
+            add(f"End picture ({plan.image.id})", f"{plan.takes} x ${plan.image.unit_price}", plan.takes * plan.image.unit_price)
+            step_times.append((plan.image.time.queue_s + plan.image.time.per_output_s) * reg.time_factor(plan.image.id))
         v = plan.video
         max_s = float(v.capabilities.get("max_seconds", 10) or 10)
         n_parts = math.ceil(secs / max_s - 0.05) if secs > max_s else 1
@@ -399,11 +470,11 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
 
     def _dur(n: Node, share: Optional[float]) -> None:
         if n.is_leaf:
-            n.duration = estimate_duration(project, n, share)
+            n.duration = estimate_duration(project, n, share, reg)
             return
         kids = n.children
         if not kids:
-            n.duration = estimate_duration(project, n, share)
+            n.duration = estimate_duration(project, n, share, reg)
             return
         base = n.target_seconds or share or project.settings.target_seconds
         fixed = sum((c.target_seconds or 0) for c in kids)
@@ -434,8 +505,10 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
                     has_photo = any(f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) for f in a.files)
                     if not a.actor.reference_sheet and not (has_photo and (nonhuman or plan.image.is_free)):
                         new_sheets.append(a.title)
-        kept = [w for w in leaf.warnings if leaf.status.value == "failed" and w.startswith(("failed:", "compare failed:"))]
+        kept = [w for w in leaf.warnings if (leaf.status.value == "failed" and w.startswith(("failed:", "compare failed:")))
+                or w.startswith(("Made ", "Softer than"))]
         leaf.warnings = kept + list(plan.warnings)
+        leaf.needs_split = bool(plan.uncovered)
         if leaf.script and plan.video and plan.route == "video":
             max_s = float(plan.video.capabilities.get("max_seconds", 10) or 10)
             if leaf.duration.likely_s > max_s + 0.5:
@@ -443,7 +516,7 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
                                      f"({max_s:.0f} s). Split it into {math.ceil(leaf.duration.likely_s / max_s)} parts?")
         if leaf.kind == NodeKind.clip and leaf.script:
             beats = len(leaf.script.action_beats)
-            fits = max(1, round(leaf.duration.likely_s / ACTION_SECONDS))
+            fits = max(1, round(leaf.duration.likely_s / policy_mod.current().action_seconds))
             if beats > fits:
                 leaf.warnings.append(f"{beats} action steps in {leaf.duration.likely_s:.0f} s: they will be squeezed. Remove some, or make the clip longer.")
             tgt = leaf.script.target_seconds or leaf.target_seconds

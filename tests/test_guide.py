@@ -215,3 +215,18 @@ def test_guide_is_part_of_the_project_view(tmp_path, monkeypatch):
     pid = r.json().get("id") or r.json()["project"]["id"]
     v = c.get(f"/api/projects/{pid}").json()
     assert v["summary"]["guide"]["steps"] and v["summary"]["guide"]["current"]
+
+
+def test_a_clip_that_needs_splitting_is_split_before_anything_is_spent(svc, monkeypatch):
+    p = ready(svc, monkeypatch)
+    q = svc.load(p.id)
+    animal = ContextItem(type=ContextType.actor, title="Deer", actor=ActorDetails(kind="animal", voice_gender="female"))
+    q.context.append(animal)
+    leaf = leaves(q)[0]
+    leaf.script.on_camera_speech = True
+    leaf.script.motion = "body"
+    leaf.script.actors_in_shot = [__import__("video_generator.models", fromlist=["ActorInShot"]).ActorInShot(actor_id=animal.id)]
+    leaf.script.dialogue = [DialogueLine(speaker=animal.id, text="Goodbye.")]
+    svc.save(q)
+    g = guide(svc, q)
+    assert cur(g) == "make" and g["action"]["kind"] == "split" and g["action"]["id"] == leaf.id and "Split it first" in g["why"]

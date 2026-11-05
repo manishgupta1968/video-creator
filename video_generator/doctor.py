@@ -97,6 +97,24 @@ async def check_elevenlabs(client: httpx.AsyncClient, model: str = "eleven_v3") 
                              "'Voices: Read' (or make a new key without restrictions) and save it in Settings."))
         else:
             out.append(Check("ElevenLabs voices", SKIP, f"Could not check the voice list (ElevenLabs answered {vr.status_code})."))
+    # What may this key do? An empty request cannot make or charge anything; a key without the permission is refused
+    # with a message that names it, a key with it is refused only for the empty body (or the unknown voice).
+    probes = [("text-to-speech (voices speaking)", "POST", "https://api.elevenlabs.io/v1/text-to-speech/doctor-check"),
+              ("music", "POST", "https://api.elevenlabs.io/v1/music"),
+              ("sound effects", "POST", "https://api.elevenlabs.io/v1/sound-generation")]
+    for label, method, url in probes:
+        try:
+            pr = await client.request(method, url, headers=headers, json={})
+        except httpx.HTTPError:
+            continue
+        from .plugins.base import permission_in
+        perm = permission_in(pr.status_code, pr.text)
+        if perm is not None:
+            out.append(Check(f"ElevenLabs permission: {label}", WARN,
+                             f"This key is missing the permission{(' ' + repr(perm)) if perm else ''}. Features that need it will be skipped or use another "
+                             "service. In ElevenLabs open Developers → API Keys, edit the key and allow it (or use a key without restrictions)."))
+        elif pr.status_code in (400, 404, 405, 422):
+            out.append(Check(f"ElevenLabs permission: {label}", OK, "No permission problem was reported."))
     if m.status_code == 200 and isinstance(m.json(), list):
         ids = [x.get("model_id", "") for x in m.json()]
         out.append(Check("ElevenLabs voice model", OK if model in ids else WARN,

@@ -147,6 +147,14 @@ With the fal.ai key (and ElevenLabs for the voice) this works. A presenter who i
 
 **Is it working?** While anything runs you see a bar under the top menu: what is happening now ("Making clip 2.1 · Making video, take 2 of 3"), the time so far, how many clips are done, and Pause/Stop. The browser tab title shows ⏳ while working, 👆 when it needs your pick and ✅ when finished. The browser can also send a notification (it asks once).
 
+**Quality rules are generic and in one place.** The tool does not know about any particular kind of video. The AI planner writes what each clip needs (for example: only the face moves, the body moves, or the whole scene moves), and each model's row in the catalogue says what it can do. The tool matches the two. If a clip needs more than any single route can do, it is flagged and you get a **Split this clip** button; the planner is also told this rule, in words generated from the catalogue. Every number used to judge a result is a named setting; run `vg policy` to see them all (longest allowed freeze, sound loudness under speech and alone, voice pitch ranges, the sharpness match between clips, whether to make end pictures, …) and change any of them in `~/.video-generator/config.yaml` under `policy:`.
+- A clip is never padded with a frozen picture. If a model makes less than planned, the clip is cut to what was made and you are told why.
+- Sound always lasts as long as the picture, and every made sound is brought to the same level, so cuts have no jump in loudness.
+- Before a voice is paid for, the tool listens to the vendor's free sample clips of the best candidates and picks the one whose pitch fits the character.
+- A clip with a planned ending that the next clip continues from gets an end picture, when a model can use it.
+- A clip much softer than the clip it continues from gets a mild finishing pass.
+- If your key lacks a permission (for example ElevenLabs "music_generation"), the message names it, the next model is tried, and the reason is shown in "Your next step". `vg doctor` checks these permissions up front.
+
 **Your next step.** A strip under the top bar always shows the one thing to do next, with a button that does it, and *Show me where* to highlight the control. It reads the project as it is right now and updates after every click: connect your services, plan, check characters (consent, photos, voices), check the cost against the budget, make the first clip, pick a take, fix a failed clip, make the rest, join, watch and download. *All steps* shows the whole path; things that do not block you (a Review Agent flag, a warning on a clip) are listed as "also worth a look". It uses plain rules, so it is instant and free. Hide it with the ✕ and bring it back with *Show next-step guide*.
 
 **Voices, sound, continuity and frame shape work for any scenario.** You do not have to describe these yourself; the plan decides, and you can change anything.

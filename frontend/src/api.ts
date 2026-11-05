@@ -22,7 +22,7 @@ export interface Node {
   script: Script | null; media: string | null; provider_override: string | null; takes_override: number | null; transition_in: string;
   status: Status; duration: Duration; cost: Cost; time: { likely_s: number; explain: string }; version: number; versions: Version[];
   takes: Take[]; chosen_take: string | null; voice_audio: string | null; voice_seconds: number | null; output: string | null;
-  warnings: string[]; review_enabled: boolean;
+  warnings: string[]; needs_split: boolean; review_enabled: boolean;
 }
 export interface Actor { kind: string; description: string; clothing: string; behaviour: string; voice_description: string; voice_gender: string; voice_age: string; voice_pitch: string; voice_pace: string; voice_accent: string; voice_name: string; voice_note: string; voice_sample: string | null; voice_provider: string | null; voice_id: string | null; speaking_wpm: number | null; props: string; reference_sheet: string[]; avatar_id: string | null }
 export interface Ctx {
@@ -146,6 +146,7 @@ export const api = {
   pause: (pid: string) => req<View>("POST", `${P(pid)}/pause`),
   resume: (pid: string) => req<View>("POST", `${P(pid)}/resume`),
   stop: (pid: string) => req<View>("POST", `${P(pid)}/stop`),
+  splitClip: (pid: string, nid: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/split`),
   assemble: (pid: string) => req<any>("POST", `${P(pid)}/assemble`),
   pick: (pid: string, nid: string, take_id: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/pick`, { take_id }),
   compare: (pid: string, nid: string, models: string[]) => req<any>("POST", `${P(pid)}/nodes/${nid}/compare`, { models }),

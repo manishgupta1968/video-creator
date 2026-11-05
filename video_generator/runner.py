@@ -8,6 +8,7 @@ import json
 import math
 import shutil
 import dataclasses
+import tempfile
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import casting
+from . import policy as policy_mod
 from . import deps as deps_mod
 from . import estimate as est
 from . import media
@@ -585,7 +587,8 @@ class Engine:
                       if c.id != cid and c.actor and c.actor.voice_id and c.actor.voice_provider == voice_entry.plugin)
         cands, note = await casting.choose_voice(plugin, profile, taken)
         top = cands[0] if cands else None
-        await self._store_voice(pid, cid, voice_entry.plugin, top.voice_id if top else None, top.name if top else "", note,
+        label = (top.name + (f" (sample about {top.pitch_hz:.0f} Hz)" if top.pitch_hz else "")) if top else ""
+        await self._store_voice(pid, cid, voice_entry.plugin, top.voice_id if top else None, label, note,
                                 [vars(c) for c in cands[:6]], profile)
 
     async def _ensure_narrator(self, pid: str) -> None:
@@ -679,9 +682,9 @@ class Engine:
             timings.append({"speaker": speaker, "text": text, "seconds": round(media.probe_duration(out), 2)})
             chars += len(text)
         voice = d / "voice.wav"
-        media.concat_audio(parts, voice, gap=est.LINE_PAUSE, lead=est.EDGE_PAD)
+        media.concat_audio(parts, voice, gap=policy_mod.current().line_pause, lead=policy_mod.current().edge_pad)
         secs = media.probe_duration(voice)
-        (d / "voice_lines.json").write_text(json.dumps({"lead": est.EDGE_PAD, "gap": est.LINE_PAUSE, "lines": timings,
+        (d / "voice_lines.json").write_text(json.dumps({"lead": policy_mod.current().edge_pad, "gap": policy_mod.current().line_pause, "lines": timings,
                                                          "voices": self._voices_of(self.svc.load(pid), lines)}))
         cost = chars / 1000 * entry.unit_price
         await self.charge(pid, {"kind": "voice", "what": f"voice {numbering(p).get(nid, '')}", "plugin": entry.plugin,
@@ -784,6 +787,7 @@ class Engine:
             prompt = (f"A talking {speaker.title}: natural mouth movement in sync with the speech, subtle head and eye movement, "
                       f"looking at the camera. {prompt}")
         done_takes = {"n": 0}
+        short_notes: list[str] = []
         negative = (n.script.negative + ", " if n.script.negative else "") + "extra fingers, deformed hands, warped face, waxy skin, flicker, text, watermark"
         voice = self.abs(pid, n.voice_audio) if n.voice_audio else None
         sem = asyncio.Semaphore(max(self.svc.config.max_parallel_jobs, 1))
@@ -830,12 +834,25 @@ class Engine:
                         media.fit_image(kf, kf, p.settings.aspect, mode="cover")     # picture models make 3:2; the video is not
                         start = kf
                     take.keyframe = self.rel(pid, start)
+                    end_used = end_frame
+                    if plan.end_picture and not end_used and plan.image:
+                        # the clip should END as planned: make a picture of that ending from the start picture, hand it to
+                        # the video model, and the next clip (which continues from here) starts from the same look
+                        end_used = d / f"{tag}_end.png"
+                        end_prompt = (f"The same scene, subject, place and light as the reference picture. {n.script.end_state.strip()} "
+                                      f"Compose for a {p.settings.aspect} frame.")
+                        await self._make_image(pid, plan.image, lambda e: ImageRequest(
+                            prompt=end_prompt, out=end_used, model=e.model, references=[start],
+                            aspect=p.settings.aspect, negative=negative, label=label), f"end picture {tag}", nid)
+                        media.fit_image(end_used, end_used, p.settings.aspect, mode="cover")
                     need_v = {"start_frame": True} if start else {}
+                    if end_used:
+                        need_v["end_frame"] = True
                     v_alts = [e for e in self.svc.reg.candidates("video", n.script.shot_type.value, need_v, p.settings.quality_mode)
                               if float(e.capabilities.get("max_seconds", 10) or 10) >= min(seconds, 8)] if not entries else []
                     ventry = await self._video_parts(pid, ventry, VideoRequest(
                         prompt=prompt, out=raw, model=ventry.model, seconds=seconds, aspect=p.settings.aspect,
-                        resolution=p.settings.resolution, start_frame=start, end_frame=end_frame,
+                        resolution=p.settings.resolution, start_frame=start, end_frame=end_used,
                         references=refs[: int(ventry.capabilities.get("reference_images", 0) or 0)],
                         negative=negative, audio=bool(ventry.capabilities.get("native_audio")),
                         camera=n.script.camera, label=label, params=dict(ventry.params)), tag, v_alts, nid)
@@ -843,13 +860,22 @@ class Engine:
                     native = bool(ventry.capabilities.get("native_audio"))
                 # post-process: fit frame, exact length, mix voice + sounds
                 fitted = d / f"{tag}_fit.mp4"
-                media.normalize_clip(raw, fitted, size, p.settings.fps, seconds=seconds, keep_audio=native, fill=p.settings.fill)
+                made = media.probe_duration(raw)
+                pol = policy_mod.current()
+                length = seconds
+                if made and made < seconds - pol.length_tolerance_s and pol.on_short == "shorten":
+                    length = made                       # keep what the model really made: no frozen tail
+                if made and made < seconds - pol.max_freeze_s and pol.on_short == "shorten":
+                    short_notes.append(f"Made {made:.1f} s of the {seconds:.1f} s planned: the route that made it cannot make a longer clip. "
+                                       "Split the clip so that each part needs one kind of movement, or lengthen what drives it (the speech).")
+                media.normalize_clip(raw, fitted, size, p.settings.fps, seconds=length, keep_audio=native, fill=p.settings.fill)
                 final = d / f"{tag}.mp4"
                 sounds = [(path, 0.5) for path in self._sounds(p, nid)]
                 if not entries and est.wants_ambience(p, n, plan):
-                    amb = await self._ambience(pid, nid, p, n, fitted, seconds, d / f"{tag}_amb.wav", tag)
+                    amb = await self._ambience(pid, nid, p, n, fitted, length, d / f"{tag}_amb.wav", tag,
+                                               speech=bool(voice) or plan.route == "avatar")
                     if amb:
-                        sounds.append((amb, 0.35 if (voice or plan.route == "avatar") else 0.8))
+                        sounds.append((amb, 1.0))                      # already at its policy level
                 if plan.route == "avatar":
                     media.replace_audio(fitted, None, final, keep_original=1.0, extra=sounds)
                 else:
@@ -877,6 +903,7 @@ class Engine:
 
         def save_takes(pr: Project):
             nn = find(pr, nid)
+            nn.warnings = [w for w in nn.warnings if not w.startswith("Made ")] + list(dict.fromkeys(short_notes))[:1]
             nn.takes = ([t for t in nn.takes if t.version != version] if not entries else nn.takes) + takes
             nn.status = NodeStatus.needs_pick
             nn.duration.basis = EstimateBasis.actual
@@ -903,7 +930,8 @@ class Engine:
             best = self._best_take(p, n, version)
             await self._finalize_clip(pid, nid, best.id)
 
-    async def _ambience(self, pid: str, nid: str, p: Project, n: Node, clip: Path, seconds: float, out: Path, tag: str) -> Optional[Path]:
+    async def _ambience(self, pid: str, nid: str, p: Project, n: Node, clip: Path, seconds: float, out: Path, tag: str,
+                        speech: bool = False) -> Optional[Path]:
         """Natural sound for a clip that has none of its own, from the planner's sound notes. A sound model that fails
         never stops the clip: the next one is tried, and the free local sound is the last resort."""
         reg = self.svc.reg
@@ -918,16 +946,26 @@ class Engine:
                 await self._with_fallback(pid, real[0], real[1:], call, "sfx", f"natural sound {tag}",
                                           cost_of=lambda e: e.unit_price * seconds,
                                           expected_of=lambda e: e.time.queue_s + e.time.per_output_s * seconds, nid=nid, any_error=True)
-                return out
+                return self._level_bed(out, speech)
             except Exception as exc:
                 traceback.print_exc()
                 await self.message(pid, f"natural sound model failed ({str(exc)[:120]}); a free sound is used instead")
         try:
             local = reg.catalog.get("local_ambience")
             await reg.plugin(local.plugin).generate(notes, seconds, out, local.model)
-            return out
+            return self._level_bed(out, speech)
         except Exception:
             return None
+
+    def _level_bed(self, wav: Path, speech: bool) -> Path:
+        """Every made sound, from any model, is brought to the same policy level (under speech, or alone), so the
+        sound does not jump in loudness from one clip to the next."""
+        pol = policy_mod.current()
+        try:
+            media.set_loudness(wav, pol.bed_under_speech_lufs if speech else pol.bed_alone_lufs, pol.loudness_tolerance_lu)
+        except media.MediaError:
+            pass
+        return wav
 
     async def _video_parts(self, pid: str, entry, req: VideoRequest, tag: str, alternatives=(), nid: Optional[str] = None):
         """Make the clip; if it is longer than the model allows, chain parts from each last frame.
@@ -1021,6 +1059,47 @@ class Engine:
                 seen.add(str(x))
                 uniq.append(x)
         return uniq
+
+    def _clip_sharpness(self, video: Path) -> Optional[float]:
+        tmp = Path(tempfile.mkdtemp()) / "mid.png"
+        try:
+            media.extract_frame(video, tmp, at=max(media.probe_duration(video) * 0.4, 0.0))
+            return media.image_sharpness(tmp)
+        except media.MediaError:
+            return None
+        finally:
+            shutil.rmtree(tmp.parent, ignore_errors=True)
+
+    async def _match_neighbours(self, pid: str, nid: str) -> None:
+        """A clip next to one of the SAME shot or scene (linked 'continues from' or 'same location') that is clearly softer
+        gets a mild finishing pass, so the cut does not show a change of quality. The threshold is policy.min_sharpness_ratio."""
+        pol = policy_mod.current()
+        p = self.svc.load(pid)
+        n = find(p, nid)
+        if not n.output:
+            return
+        for dep in deps_mod.upstream(p, nid) + deps_mod.downstream(p, nid):
+            if dep.type not in (DependencyType.continues_from, DependencyType.same_location):
+                continue
+            other = find(p, dep.from_id if dep.to_id == nid else dep.to_id)
+            if not other.output or other.status != NodeStatus.done:
+                continue
+            a, b = self.abs(pid, n.output), self.abs(pid, other.output)
+            sa, sb = await asyncio.to_thread(self._clip_sharpness, a), await asyncio.to_thread(self._clip_sharpness, b)
+            if not sa or not sb:
+                continue
+            soft, soft_node, ratio = (n, a, sa / sb) if sa < sb else (other, b, sb / sa)
+            if ratio >= pol.min_sharpness_ratio or any(w.startswith("Softer than") for w in soft.warnings):
+                continue
+            finished = soft_node.with_name(soft_node.stem + "_finish.mp4")
+            await asyncio.to_thread(media.finish_clip, soft_node, finished, pol.finish_sharpen, pol.finish_grain)
+
+            def f(pr: Project, sid=soft.id, ratio=ratio, finished=finished):
+                x = find(pr, sid)
+                x.output = self.rel(pid, finished)
+                x.warnings = list(x.warnings) + [f"Softer than the clip next to it (sharpness {ratio:.2f}x): a mild finishing pass was applied so the cut is not visible."]
+            await self.mutate(pid, f)
+            break
 
     def _anchor(self, p: Project, c: ContextItem) -> Optional[Path]:
         """The frame where this character first appeared in a made clip. It keeps their look the same in every later
@@ -1159,7 +1238,8 @@ class Engine:
             real = bool(take.model) and not self.svc.catalog.get(take.model).is_free
             if real:
                 await self._remember_anchor(pid, nid, out)
-        except Exception:                               # the anchor is a bonus: never fail a finished clip
+                await self._match_neighbours(pid, nid)
+        except Exception:                               # the anchor and the matching are bonuses: never fail a finished clip
             traceback.print_exc()
         self.emit(pid, {"type": "clip", "node": nid, "status": "done"})
 
@@ -1272,31 +1352,41 @@ class Engine:
         total = media.probe_duration(root_out)
         current = root_out
         p = self.svc.load(pid)
+        notes: list[str] = []
         if p.settings.music:
             self.step(pid, "final", "Making and mixing the background music", 30)
             try:
-                m_entry = self.svc.reg.choose("music", mode=p.settings.quality_mode)
-                music = out_dir / "music.mp3"
+                reg = self.svc.reg
+                mode = p.settings.quality_mode
                 ref = None
                 for c in p.context:
                     if c.role in (ContextRole.music_reference, ContextRole.sound) and c.scope == "project":
                         files = [self.abs(pid, f) for f in c.files]
                         ref = files[0] if files else None
-                mood = f"{p.style.mood} {p.style.look} music for: {p.goal}"
-                t0 = time.monotonic()
-                await self.svc.reg.plugin(m_entry.plugin).generate(mood, total, music.with_suffix(".wav") if m_entry.is_free else music,
-                                                                   m_entry.model, ref)
-                if m_entry.is_free:
+                mood = f"{p.music_advice or ''} {p.style.mood} {p.style.look} music for: {p.goal}".strip()
+                music = out_dir / "music.mp3"
+                first = reg.choose("music", mode=mode)
+                rest = reg.candidates("music", mode=mode)
+
+                async def call_music(e):
+                    target = music.with_suffix(".wav") if e.is_free else music
+                    _, u = await reg.plugin(e.plugin).generate(mood, total, target, e.model, ref)
+                    return u
+                used, _ = await self._with_fallback(
+                    pid, first, rest, call_music, "music", "music bed",
+                    cost_of=lambda e: (total / 60 * e.unit_price) if e.price.unit == "minute" else e.unit_price,
+                    expected_of=lambda e: e.time.queue_s + e.time.per_output_s * total, nid="final", any_error=True)
+                if used.is_free:
                     music = music.with_suffix(".wav")
-                cost = (total / 60 * m_entry.unit_price) if m_entry.price.unit == "minute" else m_entry.unit_price
-                await self.charge(pid, _row("music", "music bed", m_entry, cost, Usage(), t0,
-                                            m_entry.time.queue_s + m_entry.time.per_output_s * total))
                 with_music = out_dir / "with_music.mp4"
                 media.add_music(current, music, with_music)
                 current = with_music
             except Exception as exc:
                 traceback.print_exc()
-                await self.message(pid, f"music skipped: {exc}")
+                why = str(exc)
+                await self.message(pid, f"music skipped: {why[:200]}")
+                notes.append(f"Background music was not added. {why[:400]}")
+        p.final_notes = notes
         self.step(pid, "final", "Adding subtitles and exporting the file", 20)
         # subtitles
         srt = out_dir / "final.srt"
@@ -1313,6 +1403,7 @@ class Engine:
         def done(pr: Project):
             pr.final_output = self.rel(pid, final)
             pr.final_hash = ProjectStore.final_signature(pr)
+            pr.final_notes = notes
             pr.run.message = f"Final video ready ({total:.0f} s)"
         await self.mutate(pid, done, snapshot=True)
         self.emit(pid, {"type": "final", "path": self.rel(pid, final)})

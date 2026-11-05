@@ -226,6 +226,13 @@ async def decompose(pid: str, nid: str):
     return view(pid)
 
 
+@app.post("/api/projects/{pid}/nodes/{nid}/split")
+async def split_clip(pid: str, nid: str):
+    """Split one clip into consecutive clips that each need only what one route can do."""
+    await guard(svc.split_clip)(pid, nid)
+    return view(pid)
+
+
 @app.post("/api/projects/{pid}/nodes/{nid}/script")
 async def write_script(pid: str, nid: str, body: dict = Body(default={})):
     await guard(svc.write_script)(pid, nid, body.get("feedback", ""))

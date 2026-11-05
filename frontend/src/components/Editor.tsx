@@ -227,8 +227,17 @@ function ClipEditor({ node }: { node: Node }) {
       </div>
 
       {node.warnings.map((w, i) => (
-        <div key={i} className="flex items-start gap-2 rounded-lg bg-warn/10 px-3 py-2 text-xs text-warn"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{w}</div>
+        <div key={i} className="flex items-start gap-2 rounded-lg bg-warn/10 px-3 py-2 text-xs text-warn"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span className="flex-1">{w}</span></div>
       ))}
+      {node.needs_split && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-panel px-3 py-2 text-xs">
+          <span className="min-w-0 flex-1">This clip needs more than any single route can do, so part of it cannot be made well. Splitting makes consecutive clips that each need one kind of movement, linked so each starts where the last ends.</span>
+          <HelpTip id="split-clip">
+            <Button size="sm" variant="primary" loading={P.busy.includes("Splitting")}
+              onClick={() => P.act("Splitting", () => api.splitClip(P.pid, node.id), "Clip split into parts")}>Split this clip</Button>
+          </HelpTip>
+        </div>
+      )}
 
       {/* preview */}
       <Card className="overflow-hidden">
