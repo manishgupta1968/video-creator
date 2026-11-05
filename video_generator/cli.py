@@ -516,6 +516,19 @@ def explain(question: str, project: Optional[str] = typer.Option(None, "-p")):
     con.print(asyncio.run(svc.explain(_pid(project), question)))
 
 
+@app.command()
+def doctor():
+    """Check your keys with free calls (nothing is charged): OpenAI, ElevenLabs and fal.ai."""
+    from . import doctor as dr
+    from .catalog import Catalog
+    marks = {dr.OK: "[green]✓[/]", dr.WARN: "[yellow]![/]", dr.BAD: "[red]✗[/]", dr.SKIP: "[dim]-[/]"}
+    checks = asyncio.run(dr.run_checks(catalog=Catalog.load()))
+    for c in checks:
+        con.print(f"{marks[c.status]} [bold]{c.name}[/]: {c.message}", highlight=False)
+    bad = [c for c in checks if c.status == dr.BAD]
+    con.print("\n[red]Fix the ✗ lines before you generate.[/]" if bad else "\n[green]No problems found with your keys.[/] A real clip is the final test.")
+
+
 @app.command("photo-test")
 def photo_test(words: str = typer.Argument("male lion", help="what to search for, e.g. 'male lion'")):
     """Check the automatic photo search on this computer, step by step. Saves the first photo it can download here."""

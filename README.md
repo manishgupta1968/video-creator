@@ -147,6 +147,8 @@ With the fal.ai key (and ElevenLabs for the voice) this works. A presenter who i
 
 **Is it working?** While anything runs you see a bar under the top menu: what is happening now ("Making clip 2.1 · Making video, take 2 of 3"), the time so far, how many clips are done, and Pause/Stop. The browser tab title shows ⏳ while working, 👆 when it needs your pick and ✅ when finished. The browser can also send a notification (it asks once).
 
+**Check your keys (free).** Run `vg doctor` before you generate. It uses free calls only and says in plain words whether OpenAI, ElevenLabs and fal.ai accept your keys, how many ElevenLabs characters are left, and which OpenAI picture model your key can use. If a picture model fails during a run, the tool tries the next picture model by itself and writes which one it used in the Budget breakdown.
+
 **Photo search check.** If a card says no photo was found, run `vg photo-test "male lion"`. It prints each step (search, filters, download) in plain words and saves the first photo it can fetch. The photos come from Wikimedia Commons (no key needed); only photos with a licence that allows commercial use and changes are used, and the credit is saved next to your video.
 
 **Length.** The length you ask for wins. If you ask for 12 seconds in 3 clips, each clip is 4 seconds, and the AI is told how many action steps fit (about one per 2.5 seconds). A clip only becomes longer when its spoken words need more time, because speech cannot be squeezed; the clip then shows an orange note saying so.

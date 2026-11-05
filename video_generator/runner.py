@@ -440,6 +440,29 @@ class Engine:
                 if plan.voice:
                     await self._actor_voice(pid, a.id, plan.voice)
 
+    async def _make_image(self, pid: str, entry, make_req, what: str, nid: Optional[str] = None):
+        """Make one picture with `entry`. If that model fails, try the other usable picture models (never a free
+        placeholder unless that was the choice) and say so. Only the model that really made it is charged."""
+        reg = self.svc.reg
+        p = self.svc.load(pid)
+        order = [entry]
+        if entry is not None and not entry.is_free:
+            order += [e for e in reg.candidates("image", mode=p.settings.quality_mode) if e.id != entry.id and not e.is_free][:3]
+        problems: list[str] = []
+        for e in order:
+            t0 = time.monotonic()
+            try:
+                _, usage = await reg.plugin(e.plugin).generate(make_req(e))
+            except Exception as exc:
+                problems.append(f"{e.id}: {exc}" if isinstance(exc, PluginError) else f"{e.id}: {type(exc).__name__}: {exc}")
+                if nid and e is not order[-1]:
+                    self.step(pid, nid, f"Picture model {e.id} failed, trying another one")
+                continue
+            note = f" (used {e.id} because {order[0].id} failed)" if problems else ""
+            await self.charge(pid, _row("image", what + note, e, e.unit_price, usage, t0, e.time.queue_s + e.time.per_output_s))
+            return e, usage
+        raise PluginError("No picture model worked. " + " | ".join(problems))
+
     async def _reference_sheet(self, pid: str, cid: str, image_entry) -> None:
         p = self.svc.load(pid)
         a = item_by_id(p, cid)
@@ -465,12 +488,9 @@ class Engine:
                 prompt = (f"Photoreal character reference portrait of {a.title}: {desc}. Wearing {a.actor.clothing if a.actor else ''}. "
                           "Front view, head and shoulders, even soft studio light, neutral background, natural skin texture with pores, "
                           "sharp focus, true-to-life colours.")
-            plugin = self.svc.reg.plugin(image_entry.plugin)
-            t0 = time.monotonic()
-            _, usage = await plugin.generate(ImageRequest(prompt=prompt, out=out, model=image_entry.model,
-                                                          references=photos[:4], aspect="1:1", label=f"{a.title} · reference"))
-            await self.charge(pid, _row("image", f"reference sheet {a.title}", image_entry, image_entry.unit_price,
-                                        usage, t0, image_entry.time.queue_s + image_entry.time.per_output_s))
+            await self._make_image(pid, image_entry, lambda e: ImageRequest(
+                prompt=prompt, out=out, model=e.model, references=photos[:4], aspect="1:1", label=f"{a.title} · reference"),
+                f"reference sheet {a.title}")
             sheet = out
 
         def f(pr: Project):
@@ -651,14 +671,10 @@ class Engine:
                     start = handoff
                     if not start:
                         kf = d / f"{tag}_keyframe.png"
-                        img = plan.image
-                        t0 = time.monotonic()
-                        _, usage = await self.svc.reg.plugin(img.plugin).generate(
-                            ImageRequest(prompt=prompt + f" (variation {i})" if i > 1 else prompt, out=kf, model=img.model,
-                                         references=refs[: int(img.capabilities.get("reference_images", 0) or 0)],
-                                         aspect=p.settings.aspect, negative=negative, label=label))
-                        await self.charge(pid, _row("image", f"keyframe {tag}", img, img.unit_price, usage, t0,
-                                                    img.time.queue_s + img.time.per_output_s))
+                        await self._make_image(pid, plan.image, lambda e: ImageRequest(
+                            prompt=prompt + f" (variation {i})" if i > 1 else prompt, out=kf, model=e.model,
+                            references=refs[: int(e.capabilities.get("reference_images", 0) or 0)],
+                            aspect=p.settings.aspect, negative=negative, label=label), f"keyframe {tag}", nid)
                         start = kf
                     take.keyframe = self.rel(pid, start)
                     await self._video_parts(pid, ventry, VideoRequest(
