@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Coins, Wallet } from "lucide-react";
 import { api, BudgetGroup } from "../api";
-import { fmtUsd, useP } from "../lib";
+import { fmtSec, fmtTime, fmtUsd, useP } from "../lib";
 import { Badge, Dialog, Meter } from "../ui";
 
 const money = (v: number) => (v === 0 ? "$0.00" : v < 0.01 ? `$${v.toFixed(4)}` : `$${v.toFixed(2)}`);
@@ -14,7 +14,7 @@ export default function BudgetDialog({ open, onOpenChange }: { open: boolean; on
   const r = q.data;
   const used = r ? r.spent + r.remaining_estimate : 0;
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} wide="xl" title="Budget: where the money goes"
+    <Dialog open={open} onOpenChange={onOpenChange} wide="xl" title="Cost and budget: where the money goes"
       description="Every amount below is worked out from calls this tool made, so you can check it against your vendor bills.">
       {!r ? <div className="skeleton h-40 rounded-lg" /> : (
         <div className="space-y-6 text-xs">
@@ -28,6 +28,8 @@ export default function BudgetDialog({ open, onOpenChange }: { open: boolean; on
             <div className="mb-1 flex justify-between"><span className="text-muted">Spent plus still to spend, against the budget</span><span>{money(used)} of {money(r.budget)}</span></div>
             <Meter value={used} max={r.budget} />
           </div>
+
+          <CostByPart />
 
           <section aria-label="What the numbers mean">
             <h3 className="mb-2 text-[13px] font-semibold">What these numbers mean</h3>
@@ -61,6 +63,49 @@ export default function BudgetDialog({ open, onOpenChange }: { open: boolean; on
         </div>
       )}
     </Dialog>
+  );
+}
+
+const QUALITY_NAME: Record<string, string> = { best: "Best", balanced: "Balanced", budget: "Budget", free: "Free preview" };
+
+/** Every part and clip with its length, cost, making time, quality and model. The part rows add up to the whole video. */
+function CostByPart() {
+  const P = useP();
+  const s = P.view?.summary;
+  if (!s || s.parts.length === 0) return null;
+  const cell = "py-1.5 pr-3";
+  return (
+    <section aria-label="Cost by part" data-help="cost-by-part">
+      <h3 className="mb-2 text-[13px] font-semibold">Cost by part</h3>
+      <div className="overflow-x-auto rounded-xl border border-line">
+        <table className="w-full text-left">
+          <caption className="sr-only">Length, cost, time, quality and model of every part and clip</caption>
+          <thead className="bg-sunken/60 text-[11px] text-muted">
+            <tr><th className="px-3 py-1.5 font-medium">Part or clip</th><th className="font-medium">Length</th><th className="font-medium">Cost</th><th className="font-medium">Time to make</th>
+              <th className="font-medium">Quality</th><th className="font-medium">Model</th><th className="pr-3 font-medium">Made</th></tr>
+          </thead>
+          <tbody>
+            {s.parts.map((r) => (
+              <tr key={r.id} className={`border-t border-line/60 ${r.kind === "goal" ? "font-medium" : "text-muted"}`}>
+                <td className="px-3 py-1.5" style={{ paddingLeft: 12 + r.depth * 14 }}><span className="mr-1.5 tabular-nums">{r.number}</span>{r.title}</td>
+                <td className={`${cell} tabular-nums`}>{fmtSec(r.seconds)}</td>
+                <td className={`${cell} tabular-nums`} title={`Range ${fmtUsd(r.cost_min)} to ${fmtUsd(r.cost_max)}`}>{fmtUsd(r.cost)}</td>
+                <td className={`${cell} tabular-nums`}>{r.time_s > 0 ? `~${fmtTime(r.time_s)}` : "–"}</td>
+                <td className={cell}>{r.kind === "goal" ? QUALITY_NAME[r.quality] || r.quality : ""}</td>
+                <td className={cell}>{r.models.join(", ") || "–"}</td>
+                <td className="py-1.5 pr-3 tabular-nums">{r.done}/{r.clips}</td>
+              </tr>
+            ))}
+            <tr className="border-t-2 border-line font-semibold">
+              <td className="px-3 py-1.5">Whole video</td><td className={`${cell} tabular-nums`}>{fmtSec(s.seconds)}</td>
+              <td className={`${cell} tabular-nums`}>{fmtUsd(s.cost_total)}</td><td className={`${cell} tabular-nums`}>{s.time_s > 0 ? `~${fmtTime(s.time_s)}` : "–"}</td>
+              <td className={cell}>{QUALITY_NAME[s.quality_mode] || s.quality_mode}</td><td className={cell} /><td className="py-1.5 pr-3 tabular-nums">{s.done}/{s.clips}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-1 text-[11px] text-muted">Costs are estimates for each part's clips (price × amount × takes). “Time to make” is what is left; clips that do not depend on each other are made together, so the part times do not add up to the whole.</p>
+    </section>
   );
 }
 

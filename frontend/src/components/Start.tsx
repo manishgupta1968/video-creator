@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Clapperboard, FileText, Film, HelpCircle, Image as ImageIcon, Mic, Paperclip, Settings2, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, Ballpark as BallparkData } from "../api";
 import { useToast } from "../lib";
 import { Badge, Button, Card, cn, DropZone, HelpTip, Select, Tip } from "../ui";
 import HelpDrawer from "./HelpDrawer";
@@ -14,6 +14,26 @@ const EXAMPLES = [
   "A 1-minute explainer of our product using my slides, with a friendly narrator",
 ];
 
+const MODE_NAME: Record<string, string> = { best: "Best quality", balanced: "Balanced", budget: "Budget", free: "Free preview" };
+const usd = (v: number) => "$" + (v < 10 ? v.toFixed(2) : String(Math.round(v)));
+
+/** A rough price from your catalogue prices, before any plan exists. Hover to see what it is made of. */
+function Ballpark({ data, seconds, mode }: { data?: BallparkData; seconds: number | null; mode: string }) {
+  if (!data) return <div className="skeleton mx-auto mt-3 h-4 w-72 rounded" />;
+  const len = seconds === null ? null : seconds >= 60 ? `${+(seconds / 60).toFixed(1)}-minute` : `${seconds}-second`;
+  const text = !data.real
+    ? "No video service is connected yet, so only free previews are possible ($0). Add keys in Settings to get real footage."
+    : data.total && len
+      ? `A ${len} video in ${MODE_NAME[mode] || mode} costs about ${usd(data.total.low)} to ${usd(data.total.high)}.`
+      : `Each minute of video in ${MODE_NAME[mode] || mode} costs about ${usd(data.per_minute.low)} to ${usd(data.per_minute.high)}.`;
+  const extra = data.lines.map((l) => `${l.item}: ${usd(l.low)}–${usd(l.high)} a minute`).join("; ");
+  return (
+    <HelpTip id="ballpark" extra={extra}>
+      <p className="mt-3 text-center text-xs text-ink">{text} <span className="text-muted">A rough guess from your catalogue prices. You get exact numbers after the draft, before anything is paid for.</span></p>
+    </HelpTip>
+  );
+}
+
 function fileIcon(f: File) {
   const t = f.type;
   if (t.startsWith("image")) return <ImageIcon className="h-3.5 w-3.5" />;
@@ -24,9 +44,11 @@ function fileIcon(f: File) {
 
 export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
   const [goal, setGoal] = useState("");
-  const [seconds, setSeconds] = useState(60);
+  const [seconds, setSeconds] = useState<number | null>(null);        // null = Auto: as short as the story allows
   const [aspect, setAspect] = useState("16:9");
-  const [mode, setMode] = useState("balanced");
+  const [modeSel, setMode] = useState<string | null>(null);
+  const [language, setLanguage] = useState("auto");
+  const [budgetSel, setBudget] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [creating, setCreating] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -43,6 +65,10 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
   const toast = useToast();
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
+  const langs = useQuery({ queryKey: ["languages"], queryFn: api.languages, staleTime: Infinity });
+  const mode = modeSel ?? health.data?.default_quality ?? "balanced";               // pre-selected from your Settings
+  const budget = budgetSel ?? String(health.data?.default_budget ?? 50);
+  const ballpark = useQuery({ queryKey: ["ballpark", seconds ?? 0, mode], queryFn: () => api.ballpark(seconds ?? 0, mode) });
 
   const onGoal = (text: string) => {
     setGoal(text);
@@ -60,9 +86,12 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
     try {
       const fd = new FormData();
       fd.append("goal", goal.trim());
-      fd.append("seconds", String(seconds));
+      fd.append("seconds", String(seconds ?? 60));
+      fd.append("length_mode", seconds === null ? "auto" : "fixed");
       fd.append("aspect", aspect);
       fd.append("quality_mode", mode);
+      fd.append("language", language);
+      if (Number(budget) > 0) fd.append("budget", budget);
       files.forEach((f) => fd.append("files", f));
       const r = await api.create(fd);
       onOpen(r.id);
@@ -117,7 +146,9 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
                 </HelpTip>
                 <div className="mx-1 h-4 w-px bg-line" />
                 <HelpTip id="length-picker"><div className="flex items-center gap-0.5" role="radiogroup" aria-label="Length">
-                  {!LENGTHS.some((l) => l.s === seconds) && <span className="rounded-md bg-brand/10 px-2 py-1 text-xs font-medium text-brand">{seconds >= 60 ? `${+(seconds / 60).toFixed(1)} min` : `${seconds} s`}</span>}
+                  <HelpTip id="length-auto"><button role="radio" aria-checked={seconds === null} onClick={() => setSeconds(null)}
+                    className={cn("rounded-md px-2 py-1 text-xs", seconds === null ? "bg-brand/10 font-medium text-brand" : "text-muted hover:bg-sunken")}>Auto</button></HelpTip>
+                  {seconds !== null && !LENGTHS.some((l) => l.s === seconds) && <span className="rounded-md bg-brand/10 px-2 py-1 text-xs font-medium text-brand">{seconds >= 60 ? `${+(seconds / 60).toFixed(1)} min` : `${seconds} s`}</span>}
                   {LENGTHS.map((l) => (
                     <button key={l.s} role="radio" aria-checked={seconds === l.s} onClick={() => setSeconds(l.s)}
                       className={cn("rounded-md px-2 py-1 text-xs", seconds === l.s ? "bg-brand/10 font-medium text-brand" : "text-muted hover:bg-sunken")}>{l.l}</button>
@@ -125,7 +156,7 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
                 </div></HelpTip>
                 <Select value={aspect} onChange={setAspect} title="Shape" help="shape-picker" options={[
                   { value: "16:9", label: "16:9 wide" }, { value: "9:16", label: "9:16 vertical" }, { value: "1:1", label: "1:1 square" }]} />
-                <Select value={mode} onChange={setMode} title="Quality" help="quality-picker" options={[
+                <Select value={mode} onChange={(v) => setMode(v)} title="Quality" help="quality-picker" options={[
                   { value: "best", label: "Best quality" }, { value: "balanced", label: "Balanced" },
                   { value: "budget", label: "Budget" }, { value: "free", label: "Free preview" }]} />
                 <div className="flex-1" />
@@ -136,6 +167,20 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
             </div>
           </DropZone>
         </Card>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-muted" aria-label="More choices for this video">
+          <label className="flex items-center gap-1.5">
+            <HelpTip id="language-picker"><span>Language</span></HelpTip>
+            <Select title="Language of the video" value={language} onChange={setLanguage}
+              options={[{ value: "auto", label: "Decided from your goal" }, ...(langs.data || []).map((l) => ({ value: l.code, label: l.name }))]} />
+          </label>
+          <label className="flex items-center gap-1.5">
+            <HelpTip id="budget-input"><span>Budget</span></HelpTip>
+            <span>$</span>
+            <input type="number" min={0} step={1} aria-label="Budget in dollars" value={budget} onChange={(e) => setBudget(e.target.value)}
+              className="h-7 w-20 rounded-md border border-line bg-panel px-1.5 text-right text-xs text-ink" />
+          </label>
+        </div>
+        <Ballpark data={ballpark.data} seconds={seconds} mode={mode} />
         <p id="goal-hint" className="mt-2 text-center text-[11px] text-muted">Press Enter to create · drop files anywhere on the box · nothing is paid for until you approve</p>
 
         {!goal && (

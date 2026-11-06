@@ -5,12 +5,14 @@ import { finalPlayer, useP } from "../lib";
 import { Button, cn } from "../ui";
 import { spotlight } from "../ui/help";
 import { useRun } from "./ConfirmRun";
+import { useJoin } from "./JoinDialog";
 
 /** "Your next step": reads the project as it is now (the plan is computed by the server, with no AI and no cost)
  *  and shows the one thing to do next, with a button that does it. It updates after every click. */
 export default function NextStep() {
   const P = useP();
   const run = useRun();
+  const join = useJoin();
   const g: Guide | undefined = P.view?.summary.guide;
   const key = `vg-guide-hidden-${P.pid}`;
   const [hidden, setHidden] = useState<boolean>(() => { try { return localStorage.getItem(key) === "1"; } catch { return false; } });
@@ -31,7 +33,8 @@ export default function NextStep() {
       case "run": run({ mode: a.mode || "next", targets: a.targets, title: a.title || a.label }); break;
       case "scripts": P.act("Writing scripts", () => api.writeScripts(P.pid), "Scripts written"); break;
       case "split": if (a.id) P.act("Splitting", () => api.splitClip(P.pid, a.id!), "Clip split into parts"); break;
-      case "assemble": P.act("Joining", () => api.assemble(P.pid)); break;
+      case "assemble": join(); break;
+      case "unpin": P.act("Choosing the best model", () => api.unpin(P.pid, a.ids), "These clips use the best model again. Make the out-of-date ones again."); break;
       case "final": finalPlayer.open(); break;
       case "resume": P.act("Resume", () => api.resume(P.pid)); break;
       case "show": if (a.node) P.select(a.node); if (a.help) later(() => spotlight(a.help!)); break;

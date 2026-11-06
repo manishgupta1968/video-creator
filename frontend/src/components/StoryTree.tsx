@@ -1,9 +1,10 @@
-import { ChevronDown, ChevronRight, Film, Link2, Loader2, MoreHorizontal, Paperclip, Plus, Presentation, Sparkles, Trash2, Video } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Film, Pin, Link2, Loader2, MoreHorizontal, Paperclip, Plus, Presentation, Sparkles, Trash2, Video } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { useState } from "react";
 import { api, Node } from "../api";
-import { fmtRange, fmtSec, STATUS, useP } from "../lib";
+import { fmtRange, fmtSec, fmtUsd, STATUS, useP } from "../lib";
 import { Button, cn, DropZone, Tip } from "../ui";
+import { useDownload } from "./Download";
 
 export default function StoryTree() {
   const P = useP();
@@ -17,9 +18,9 @@ export default function StoryTree() {
           <div className="field-label">Whole video</div>
           <div className="line-clamp-2 text-xs">{p.goal}</div>
           <div className="mt-1 flex gap-2 text-[11px] text-muted">
-            <span title="Estimated length vs target">~{fmtSec(s.seconds)} / {fmtSec(s.target_seconds)}</span>
-            <span>·</span><span title="Estimated cost">{fmtRange(s.cost_min, s.cost_max)}</span>
-            <span>·</span><span>{s.done}/{s.clips} clips done</span>
+            <span title="Estimated length">~{fmtSec(s.seconds)}{s.length_mode === "auto" ? " (auto)" : ` / ${fmtSec(s.target_seconds)}`}</span>
+            <span>·</span><span title="Estimated cost of the whole video">{s.cost_total === 0 ? "Free" : `≈ ${fmtUsd(s.cost_total)}`}</span>
+            <span>·</span><span>{s.done}/{s.clips} made</span>
           </div>
         </button>
       </div>
@@ -111,7 +112,15 @@ function Row({ node, depth, drag, setDrag, parentId }: { node: Node; depth: numb
         <Tip content={`${node.duration.explain} — ${fmtRange(node.cost.min_usd, node.cost.max_usd)}`}>
           <span className="shrink-0 text-[11px] tabular-nums text-muted">{fmtSec(node.duration.likely_s)}</span>
         </Tip>
-        {!isGoal && preview && node.status !== "done" && <Tip content="Only a free placeholder will be made until you add keys"><span className="text-[10px] font-medium text-warn">preview</span></Tip>}
+        <Tip content={`Estimated cost: ${fmtRange(node.cost.min_usd, node.cost.max_usd)}`}>
+          <span className="w-11 shrink-0 text-right text-[11px] tabular-nums text-muted">{fmtUsd(node.cost.likely_usd)}</span>
+        </Tip>
+        {!isGoal && node.provider_override && (
+          <Tip content={preview && node.status !== "done" ? "You chose a free model for this clip (its Model box), so only a placeholder will be made. Choose “Auto” there." : "You chose a model for this clip (its Model box). Choose “Auto” there to let the tool pick."}>
+            <span aria-label="Model pinned"><Pin className={cn("h-3 w-3 shrink-0", preview && node.status !== "done" ? "text-warn" : "text-info")} /></span>
+          </Tip>
+        )}
+        {!isGoal && preview && !node.provider_override && node.status !== "done" && <Tip content="Only a free placeholder will be made until you add keys"><span className="text-[10px] font-medium text-warn">preview</span></Tip>}
         {!isGoal && (act ? (
           <Tip content={`Working: ${act.step}`}><span aria-label="Working"><Loader2 className="ml-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-brand" /></span></Tip>
         ) : (
@@ -135,8 +144,10 @@ function Row({ node, depth, drag, setDrag, parentId }: { node: Node; depth: numb
 
 function RowMenu({ node, parentId }: { node: Node; parentId: string }) {
   const P = useP();
+  const dl = useDownload(node);
   const item = "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-sunken";
   return (
+    <>
     <Menu.Root>
       <Menu.Trigger asChild>
         <button data-help="row-menu" aria-label="More options for this item" onClick={(e) => e.stopPropagation()} className="grid h-5 w-5 place-items-center rounded text-muted opacity-0 hover:bg-line/60 group-hover:opacity-100 focus:opacity-100">
@@ -153,12 +164,17 @@ function RowMenu({ node, parentId }: { node: Node; parentId: string }) {
           }}><Plus className="h-3.5 w-3.5" />{node.kind === "goal" ? "Add clip inside" : "Add clip after"}</Menu.Item>
           <Menu.Item className={item} onSelect={() => P.act("Add", () => api.addNode(P.pid, { parent_id: node.kind === "goal" ? node.id : parentId, kind: "goal", title: "New part", goal: "" }))}>
             <Plus className="h-3.5 w-3.5" />Add sub-part</Menu.Item>
+          <Menu.Item className={cn(item, !dl.ready && "cursor-not-allowed opacity-50")} disabled={!dl.ready} onSelect={() => dl.go("auto")}>
+            <Download className="h-3.5 w-3.5" />{node.kind === "goal" ? "Download this part" : "Download this clip"}
+            {!dl.ready && <span className="ml-auto pl-3 text-[10px] text-muted">{dl.clips.length === 0 ? "no clips" : `${dl.left} to make`}</span>}</Menu.Item>
           <Menu.Separator className="my-1 h-px bg-line" />
           <Menu.Item className={cn(item, "text-bad")} onSelect={() => P.act("Delete", () => api.removeNode(P.pid, node.id), "Deleted")}>
             <Trash2 className="h-3.5 w-3.5" />Delete</Menu.Item>
         </Menu.Content>
       </Menu.Portal>
     </Menu.Root>
+    {dl.dialog}
+    </>
   );
 }
 

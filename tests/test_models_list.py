@@ -43,6 +43,13 @@ def test_rows_say_the_price_and_the_abilities_in_plain_words(svc):
     assert row(svc, "local_music")["price_text"] == "free"
 
 
+def test_prices_are_written_with_cents_and_without_useless_zeros(svc):
+    assert row(svc, "claude_haiku")["price_text"] == "$0.10 in / $0.50 out per 1M tokens"
+    assert row(svc, "gemini_flash")["price_text"] == "$0.30 in / $2.50 out per 1M tokens"
+    assert row(svc, "gpt")["price_text"] == "$1.25 in / $10 out per 1M tokens"
+    assert row(svc, "wan_2_6")["price_text"].endswith("per second") and "$0.1 " not in row(svc, "wan_2_6")["price_text"]
+
+
 def test_the_brain_list_has_the_claude_family_at_the_vendors_prices_and_a_draft_cost_for_each(svc):
     prices = {r["id"]: (r["price"]["usd_in"], r["price"]["usd_out"]) for r in svc.model_rows() if r["job"] == "llm"}
     assert prices["claude_fable"] == (10.0, 50.0) and prices["claude_opus"] == (4.0, 20.0)

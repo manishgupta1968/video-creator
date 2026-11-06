@@ -3,12 +3,14 @@ import { useCallback, useEffect, useState } from "react";
 import { api, fileUrl } from "../api";
 import { useTheme } from "../App";
 import { commandBus, findNode, finalPlayer, fmtSec, fmtUsd, ProjectProvider, useHotkey, useP } from "../lib";
-import { Badge, Button, Editable, HelpTip, Meter, Tip } from "../ui";
+import { Badge, Button, Editable, HelpTip, Tip } from "../ui";
 import ActivityBar, { TopLine, useTabStatus } from "./ActivityBar";
 import { FinalVideoDialog, PreviewBanner } from "./Banners";
 import CommandBar from "./CommandBar";
 import { RunProvider } from "./ConfirmRun";
 import NextStep from "./NextStep";
+import { JoinProvider } from "./JoinDialog";
+import SummaryStrip from "./SummaryStrip";
 import BudgetDialog from "./BudgetDialog";
 import ContextLibrary from "./ContextLibrary";
 import HelpDrawer from "./HelpDrawer";
@@ -29,7 +31,9 @@ export default function Workspace({ pid, onHome }: { pid: string; onHome: () => 
   return (
     <ProjectProvider pid={pid}>
       <RunProvider>
-        <Shell onHome={onHome} />
+        <JoinProvider>
+          <Shell onHome={onHome} />
+        </JoinProvider>
       </RunProvider>
     </ProjectProvider>
   );
@@ -85,13 +89,6 @@ function Shell({ onHome }: { onHome: () => void }) {
           <HelpTip id="ai-badge"><span><Badge tone={s.brain === "fake_llm" ? "warn" : "brand"}>AI: {s.brain === "fake_llm" ? "offline" : s.brain}</Badge></span></HelpTip>
         </Tip>
         <div className="flex-1" />
-        <HelpTip id="budget-chip" extra={`Right now: spent ${fmtUsd(s.spent)}, still to spend about ${fmtUsd(s.cost)}, limit ${fmtUsd(s.budget)}.`}>
-          <button onClick={() => setBudgetOpen(true)} aria-label={`Budget: spent ${fmtUsd(s.spent)} of ${fmtUsd(s.budget)}. Open the breakdown.`}
-            className="hidden w-48 items-center gap-2 rounded-lg px-2 py-1 hover:bg-sunken md:flex">
-            <span className="whitespace-nowrap text-[11px] text-muted">Budget {fmtUsd(s.spent)}/{fmtUsd(s.budget)}</span>
-            <Meter value={s.spent + s.cost} max={s.budget} />
-          </button>
-        </HelpTip>
         <Button help="ask-ai" variant="outline" size="sm" onClick={() => setCmd(true)} className="hidden sm:inline-flex text-muted">
           <Command className="h-3.5 w-3.5" />Ask AI… <kbd className="ml-1 rounded bg-sunken px-1 text-[10px]">Ctrl K</kbd>
         </Button>
@@ -109,12 +106,13 @@ function Shell({ onHome }: { onHome: () => void }) {
         )}
       </header>
 
+      <SummaryStrip />
       <ActivityBar />
       <PreviewBanner />
       <NextStep />
 
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-[300px] shrink-0 flex-col border-r border-line bg-panel md:flex" aria-label="Story">
+        <aside className="hidden w-[320px] shrink-0 flex-col border-r border-line bg-panel md:flex" aria-label="Story">
           <StoryTree />
         </aside>
         <main className="min-w-0 flex-1 overflow-auto scroll-thin" aria-label="Editor">

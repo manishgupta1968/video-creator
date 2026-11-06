@@ -857,3 +857,14 @@ How the switch works:
 - **Live smoke tests:** these run only when an API key is set. One short clip per provider, plus a run of `vg compare`.
 - **Pluggability:** install the example plugin, add it to the catalogue, and confirm that the router picks it.
 - Commit and push to `claude/stoic-pasteur-76elrs`.
+
+
+## v3.9 additions (what they do and why)
+
+- **Cause of a placeholder** (`Service.preview_info`): every clip that only gets a free placeholder carries a cause: `pinned` (you chose a free model for the clip), `no_key`, `free_mode`, `not_covered`. Only `no_key` produces an "add a key" hint. `Service.unpin` clears pins and marks clips that were made as placeholders out of date.
+- **Auto length** (`Settings.length_mode`): `auto` = no length asked for; the draft prompt says "as short as the story allows" and the plan's own total becomes the target. Asking for a length sets `fixed`. Projects made before this setting stay `fixed`.
+- **Language** (`Settings.language`, `languages.py`, `data/languages.yaml`): a short code. `auto` lives only until the first draft, when the planner's `language` replaces it. Voice and speech-to-text services never receive `auto`.
+- **Cost by part** (`Service.parts_table`) and a **price ballpark** before any plan exists (`estimate.ballpark`, assumptions in `policy.ballpark_*`).
+- **Every model listed** (`Service.model_rows`, `models_list.py`): price in words, abilities, and the exact reason a model cannot be used. Brain models are chosen per kind of work (`llm.per_task_model`, kinds: default, review, simple). `Registry.llm_entry` finds the catalogue row by plugin AND model, so each AI call is priced by the model that answered. A vendor's own model list is read with the data in `vendors.yaml → models_list`.
+- **Music made once** (`musictrack.py`): the track is saved with what it was made from; `Engine._ensure_music` reuses it while the mood and reference are unchanged and the video is not longer than the track by more than `policy.music_reuse_tolerance`. The estimate shows "Music (saved track, reused) $0".
+- **Download any part** (`Engine.export_node`): a clip is its finished file; a part is `Engine._join_node` (the same join the final video uses), a slice of the saved music (`media.music_slice`), and subtitles counted from the start of the part. Nothing is spent without asking: with no saved track and a paid music model the answer is `needs_music_choice` with the cost.

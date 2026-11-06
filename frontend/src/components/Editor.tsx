@@ -4,6 +4,8 @@ import { api, fileUrl, Line, Node, Review, Script, Take } from "../api";
 import { fmtRange, fmtSec, fmtTime, fmtUsd, leaves, SHOT_TYPES, STATUS, useP, useSettings } from "../lib";
 import { Badge, Button, Card, cn, Dialog, Editable, Empty, HelpTip, Select, Switch, Textarea, Tip } from "../ui";
 import { useRun } from "./ConfirmRun";
+import DownloadButton from "./Download";
+import ModelPicker from "./ModelPicker";
 import { FinalVideoDialog, PreviewBadge } from "./Banners";
 import { commandBus, finalPlayer } from "../lib";
 
@@ -79,6 +81,7 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
           <Wand2 className="h-3.5 w-3.5" />Write {unscripted} missing script(s)</Button>}
         {clipsBelow.length > 0 && <Button help="generate-part" onClick={() => run({ mode: "clip", targets: clipsBelow.filter((c) => c.status !== "done").map((c) => c.id), title: `Make the clips in ${isRoot ? "the video" : `part ${P.numbers[node.id]}`}` })}>
           <Play className="h-3.5 w-3.5" />Generate this part</Button>}
+        {!isRoot && clipsBelow.length > 0 && <DownloadButton node={node} />}
       </div>
       <div>
         <div className="field-label mb-2">Inside ({node.children.length})</div>
@@ -207,7 +210,7 @@ function ClipEditor({ node }: { node: Node }) {
   const versionTakes = node.takes.filter((t) => t.version === node.version);
   const shownTakes = versionTakes.length ? versionTakes : node.takes;
   const chosen = node.takes.find((t) => t.id === node.chosen_take);
-  const videoModels = (settings.data?.catalog || []).filter((e: any) => (e.job === "video" || e.job === "avatar") && e.usable);
+  const autoRow = (settings.data?.catalog || []).find((e: any) => e.id === node.cost.model);
   const generating = node.status === "generating";
   const liveStep = (P.view!.engine.activity || []).find((a) => a.node === node.id);
 
@@ -223,7 +226,10 @@ function ClipEditor({ node }: { node: Node }) {
           </div>
           <Editable value={node.title} onSave={(title) => saveNode({ title })} className="text-xl font-semibold" ariaLabel="Clip title" />
         </div>
-        <Badge tone={st.tone} className="mt-5">{st.icon}{st.label}</Badge>
+        <div className="mt-4 flex items-center gap-2">
+          {node.status === "done" && <DownloadButton node={node} />}
+          <Badge tone={st.tone}>{st.icon}{st.label}</Badge>
+        </div>
       </div>
 
       {node.warnings.map((w, i) => (
@@ -263,9 +269,9 @@ function ClipEditor({ node }: { node: Node }) {
           <Tip content={node.time.explain}><span className="cursor-help text-muted">~{fmtTime(node.time.likely_s)} to make</span></Tip>
           <div className="flex-1" />
           {node.kind === "clip" && (
-            <Select help="model-select" value={node.provider_override || ""} onChange={(v) => saveNode({ provider_override: v || null })} title="Model"
-              options={[{ value: "", label: `Model: auto (${node.cost.model || "best fit"})` },
-                ...videoModels.map((e: any) => ({ value: e.id, label: `${e.id} · $${e.price.usd}/s` }))]} />
+            <ModelPicker jobs={["video", "avatar"]} help="model-select" showDetail={false} shot={s?.shot_type} value={node.provider_override || ""}
+              autoLabel={`Auto (${node.cost.model || "best fit"}${autoRow ? ` · ${autoRow.price_text}` : ""})`}
+              onChange={(v) => saveNode({ provider_override: v || null })} />
           )}
           <Button help="clip-generate" variant="primary" size="sm" disabled={generating}
             onClick={() => run({ mode: "clip", targets: [node.id], title: `Make clip ${P.numbers[node.id]}` })}>

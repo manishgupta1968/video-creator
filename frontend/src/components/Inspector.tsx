@@ -5,6 +5,7 @@ import { api, Node } from "../api";
 import { DEP_TYPES, depLabel, fmtRange, fmtSec, fmtTime, fmtUsd, leaves, TRANSITIONS, useP, useSettings } from "../lib";
 import { Badge, Button, DropZone, Empty, HelpTip, Input, Select, TabList, TabPanel, Tabs } from "../ui";
 import { ContextCard } from "./ContextCard";
+import ModelPicker from "./ModelPicker";
 import StockSearch from "./StockSearch";
 import { RecordVoiceDialog } from "./VoiceRecorder";
 
@@ -113,8 +114,10 @@ function CostTab({ node }: { node: Node }) {
   const P = useP();
   const p = P.view!.project;
   const isClip = node.kind === "clip";
-  const settings = useSettings();
-  const models = (settings.data?.catalog || []).filter((e: any) => (e.job === "video" || e.job === "avatar") && e.usable);
+  const langs = useQuery({ queryKey: ["languages"], queryFn: api.languages, staleTime: Infinity });
+  const language = p.settings.language;
+  const languageOptions = [{ value: "auto", label: "Decided from your goal" }, ...(langs.data || []).map((l) => ({ value: l.code, label: `${l.name} (${l.code})` })),
+    ...(language !== "auto" && !(langs.data || []).some((l) => l.code === language) ? [{ value: language, label: language }] : [])];
   const ledger = useQuery({ queryKey: ["ledger", P.pid, p.updated_at], queryFn: () => api.ledger(P.pid) });
   const rows = (ledger.data || []).filter((r) => node.id === p.root.id || (r.what || "").includes(node.id) || r.node === node.id);
   return (
@@ -141,9 +144,10 @@ function CostTab({ node }: { node: Node }) {
       {isClip && (
         <div data-help="what-if" className="space-y-2 rounded-xl border border-line p-3">
           <div className="text-xs font-semibold">What if…</div>
-          <div className="flex items-center justify-between gap-2"><span className="text-muted">Model</span>
-            <Select value={node.provider_override || ""} onChange={(v) => P.act("Save", () => api.patchNode(P.pid, node.id, { provider_override: v || null }))}
-              options={[{ value: "", label: "Auto (best fit)" }, ...models.map((m: any) => ({ value: m.id, label: `${m.id} · $${m.price.usd}/s` }))]} /></div>
+          <div className="flex items-start justify-between gap-2"><span className="mt-1 text-muted">Model</span>
+            <ModelPicker jobs={["video", "avatar"]} shot={node.script?.shot_type} value={node.provider_override || ""} className="max-w-[16rem]"
+              autoLabel={`Auto (${node.cost.model || "best fit"})`}
+              onChange={(v) => P.act("Save", () => api.patchNode(P.pid, node.id, { provider_override: v || null }))} /></div>
           <div className="flex items-center justify-between gap-2"><span className="text-muted">Takes</span>
             <Select value={String(node.takes_override || "")} onChange={(v) => P.act("Save", () => api.patchNode(P.pid, node.id, { takes_override: v ? Number(v) : null }))}
               options={[{ value: "", label: "Default" }, { value: "1", label: "1" }, { value: "2", label: "2" }, { value: "3", label: "3" }, { value: "4", label: "4" }]} /></div>
@@ -159,6 +163,7 @@ function CostTab({ node }: { node: Node }) {
           <div className="text-xs font-semibold">Whole video</div>
           {[
             ["Quality", "quality_mode", [{ value: "best", label: "Best" }, { value: "balanced", label: "Balanced" }, { value: "budget", label: "Budget" }, { value: "free", label: "Free preview" }]],
+            ["Language", "language", languageOptions],
             ["Resolution", "resolution", [{ value: "720p", label: "720p" }, { value: "1080p", label: "1080p" }, { value: "4k", label: "4K" }]],
             ["Takes for people", "takes_people", [1, 2, 3, 4].map((n) => ({ value: String(n), label: String(n) }))],
             ["Format", "format", [{ value: "mp4", label: ".mp4" }, { value: "mov", label: ".mov" }]],

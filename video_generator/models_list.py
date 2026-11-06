@@ -25,7 +25,11 @@ UNIT_WORDS = {"second": "per second", "image": "per image", "1k_chars": "per 1,0
 
 
 def _n(x: float) -> str:
-    return f"{x:.3f}".rstrip("0").rstrip(".") if x < 1 else f"{x:g}"
+    """A price without useless zeros but with the usual two decimals for cents: 0.10, 0.168, 0.035, 4, 12.5."""
+    if x >= 1:
+        return f"{x:g}" if float(x).is_integer() else f"{x:.2f}"
+    s = f"{x:.3f}".rstrip("0")
+    return s + "0" if len(s.split(".")[-1]) < 2 else s
 
 
 def price_text(e: CatalogEntry) -> str:

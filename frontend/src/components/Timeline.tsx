@@ -3,11 +3,13 @@ import { api } from "../api";
 import { finalPlayer, fmtSec, fmtTime, fmtUsd, leaves, STATUS, useP } from "../lib";
 import { Badge, Button, cn, Tip } from "../ui";
 import { useRun } from "./ConfirmRun";
+import { useJoin } from "./JoinDialog";
 import { fileUrl } from "../api";
 
 export default function Timeline() {
   const P = useP();
   const run = useRun();
+  const join = useJoin();
   const p = P.view!.project;
   const s = P.view!.summary;
   const clips = leaves(p);
@@ -18,7 +20,7 @@ export default function Timeline() {
   const doneSome = clips.some((c) => c.status === "done");
   const allDone = clips.length > 0 && remaining === 0;
   const continues = new Set(p.dependencies.filter((d) => d.type === "continues_from").map((d) => d.to_id));
-  const over = s.target_seconds ? (s.seconds - s.target_seconds) / s.target_seconds : 0;
+  const over = s.target_seconds && s.length_mode !== "auto" ? (s.seconds - s.target_seconds) / s.target_seconds : 0;
   const working = new Set((P.view!.engine.activity || []).map((a) => a.node));
   const finalReady = s.final_ready && !s.final_stale;
   const joining = working.has("final");
@@ -57,7 +59,7 @@ export default function Timeline() {
               </>
             ) : allDone ? (
               <Button help="join-final" helpExtra={s.final_stale ? "Something changed since your final video was made, so this makes a new one from the current clips." : "All clips are made, so this is the last step."}
-                variant="primary" onClick={() => P.act("Joining", () => api.assemble(P.pid))}>
+                variant="primary" onClick={() => join()}>
                 <Clapperboard className="h-3.5 w-3.5" />{s.final_stale ? "Update final video" : "Join clips into final video"}
               </Button>
             ) : (
@@ -89,7 +91,7 @@ export default function Timeline() {
             {Math.abs(over) > 0.1 && <div>This is {Math.abs(Math.round(over * 100))}% {over > 0 ? "over" : "under"} your target. Shorten a clip, or change the target in the Whole video page.</div>}
           </div>}>
             <span tabIndex={0} className={cn("text-xs tabular-nums", Math.abs(over) > 0.1 ? "text-warn" : "text-muted")}>
-              <span className="font-medium text-ink">{fmtSec(s.seconds)}</span> / {fmtSec(s.target_seconds)}</span>
+              <span className="font-medium text-ink">{fmtSec(s.seconds)}</span> {s.length_mode === "auto" ? "(auto)" : `/ ${fmtSec(s.target_seconds)}`}</span>
           </Tip>
           <Tip content={<div className="space-y-1">
             <div className="font-semibold">Still to spend</div>

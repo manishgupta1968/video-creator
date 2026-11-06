@@ -35,22 +35,27 @@ export interface Review {
   issues: { check: string; text: string; at_s: number | null; frame: string | null; severity: string }[];
   suggestions: { id: string; text: string; accepted: boolean }[]; summary: string; reviewer_model: string; cost_usd: number;
 }
-export interface Settings { auto_photo: boolean; target_seconds: number; aspect: string; resolution: string; fps: number; format: "mp4" | "mov"; budget_usd: number; takes_people: number; takes_other: number; language: string; default_wpm: number; subtitles: boolean; auto_pick: boolean; review_enabled: boolean; music: boolean; ambience: boolean; fill: "blur" | "black" | "crop"; quality_mode: string }
+export interface Settings { auto_photo: boolean; length_mode: "auto" | "fixed"; target_seconds: number; aspect: string; resolution: string; fps: number; format: "mp4" | "mov"; budget_usd: number; takes_people: number; takes_other: number; language: string; default_wpm: number; subtitles: boolean; auto_pick: boolean; review_enabled: boolean; music: boolean; ambience: boolean; fill: "blur" | "black" | "crop"; quality_mode: string }
 export interface Project {
   id: string; name: string; goal: string; settings: Settings; style: { look: string; colour: string; mood: string; notes: string };
   root: Node; context: Ctx[]; dependencies: Dep[]; reviews: Review[];
   run: { mode: string; status: string; targets: string[]; message: string; started_at: string; spent_usd: number };
   music_advice: string; final_output: string | null; final_review_id: string | null; updated_at: string;
 }
-export interface GuideAction { kind: string; label: string; id?: string; node?: string; mode?: string; title?: string; targets?: string[]; help?: string }
+export interface GuideAction { kind: string; label: string; id?: string; ids?: string[]; node?: string; mode?: string; title?: string; targets?: string[]; help?: string }
 export interface GuideStep { id: string; title: string; state: "done" | "current" | "attention" | "todo"; detail: string; action: GuideAction | null; also: { text: string; action: GuideAction }[] }
 export interface Guide { headline: string; current: string | null; why: string; action: GuideAction | null; steps: GuideStep[]; issues: { text: string; action: GuideAction }[]; progress: { done: number; total: number } }
+export interface PartRow {
+  id: string; number: string; title: string; kind: NodeKind; depth: number; seconds: number; cost: number; cost_min: number; cost_max: number;
+  time_s: number; quality: string; models: string[]; clips: number; done: number;
+}
 export interface Summary {
   guide: Guide;
+  length_mode: "auto" | "fixed"; language: string; quality_mode: string; parts: PartRow[];
   seconds: number; seconds_min: number; seconds_max: number; target_seconds: number; cost: number; cost_min: number; cost_max: number; cost_total: number;
   time_s: number; spent: number; budget: number; warnings: string[]; waiting_picks: number; review_flags: number; clips: number; done: number;
   numbers: Record<string, string>; brain: string;
-  preview: { clips: Record<string, string[]>; jobs: Record<string, string>; all_preview: boolean; chosen_free_mode: boolean; voice_sample_unused: string[] };
+  preview: { clips: Record<string, string[]>; causes: Record<string, Record<string, "pinned" | "no_key" | "free_mode" | "not_covered">>; pinned: string[]; jobs: Record<string, string>; all_preview: boolean; chosen_free_mode: boolean; voice_sample_unused: string[] };
   final_ready: boolean; final_stale: boolean; all_clips_done: boolean;
 }
 export interface Activity { node: string; step: string; elapsed_s: number; step_elapsed_s: number; started: number; since: number; now: number; expected_s: number }
@@ -62,6 +67,25 @@ export interface BudgetGroup { key: string; label: string; calls: number; estima
 export interface BudgetReport {
   budget: number; spent: number; ledger_total: number; remaining_estimate: number; left_in_budget: number;
   groups: BudgetGroup[]; brain: { plugin: string; model: string; price: string }; explain: string[];
+}
+export interface ModelRow {
+  id: string; job: string; plugin: string; model: string; vendor: string; enabled: boolean; quality: number; note: string;
+  strengths: Record<string, number>; capabilities: Record<string, any>; price: { unit: string; usd: number; usd_in: number; usd_out: number };
+  usable: boolean; why_not: string; price_text: string; unit_price: number; is_free: boolean; abilities: string[]; days_old: number;
+  price_verified: boolean; last_checked: string; pricing_url: string; draft_cost_usd?: number; source: string;
+}
+export interface FoundModel { id: string; name: string; vendor: string; plugin: string | null; in_catalogue: boolean }
+export interface MusicStatus {
+  enabled: boolean; total_s: number; saved: boolean; reusable: boolean; why: string; made_for_s: number; model: string; free: boolean;
+  cost_new_usd: number; cost_usd: number;
+}
+export interface ExportResult {
+  needs_music_choice?: boolean; cost_usd?: number; model?: string; seconds?: number;
+  path?: string; url?: string; srt?: string | null; srt_url?: string; filename?: string; with_music?: boolean; notes?: string[];
+}
+export interface Ballpark {
+  mode: string; real: boolean; per_minute: { low: number; high: number }; total: { low: number; high: number } | null; seconds: number | null;
+  lines: { item: string; low: number; high: number }[]; models: Record<string, string>;
 }
 export interface CommandPlan { summary: string; ops: { op: string; target: string; field: string; value: string }[] }
 
@@ -84,7 +108,9 @@ async function req<T>(method: string, url: string, body?: any): Promise<T> {
 const P = (pid: string) => `/api/projects/${encodeURIComponent(pid)}`;
 
 export const api = {
-  health: () => req<any>("GET", "/api/health"),
+  health: () => req<{ ok: boolean; ffmpeg: boolean; brain: string; default_budget: number; default_quality: string }>("GET", "/api/health"),
+  languages: () => req<{ code: string; name: string }[]>("GET", "/api/languages"),
+  ballpark: (seconds: number, quality: string) => req<Ballpark>("GET", `/api/ballpark?seconds=${seconds || 0}&quality=${encodeURIComponent(quality)}`),
   projects: () => req<{ id: string; name: string; goal: string; updated_at: string; final_output: string | null }[]>("GET", "/api/projects"),
   create: (fd: FormData) => req<{ id: string }>("POST", "/api/projects", fd),
   get: (pid: string) => req<View>("GET", P(pid)),
@@ -147,7 +173,10 @@ export const api = {
   resume: (pid: string) => req<View>("POST", `${P(pid)}/resume`),
   stop: (pid: string) => req<View>("POST", `${P(pid)}/stop`),
   splitClip: (pid: string, nid: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/split`),
-  assemble: (pid: string) => req<any>("POST", `${P(pid)}/assemble`),
+  assemble: (pid: string, music: "auto" | "reuse" | "new" | "none" = "auto") => req<any>("POST", `${P(pid)}/assemble`, { music }),
+  musicStatus: (pid: string) => req<MusicStatus>("GET", `${P(pid)}/music`),
+  exportNode: (pid: string, nid: string, music: "auto" | "new" | "none" = "auto") => req<ExportResult>("POST", `${P(pid)}/nodes/${nid}/export`, { music }),
+  unpin: (pid: string, ids?: string[]) => req<View>("POST", `${P(pid)}/unpin`, ids ? { ids } : {}),
   pick: (pid: string, nid: string, take_id: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/pick`, { take_id }),
   compare: (pid: string, nid: string, models: string[]) => req<any>("POST", `${P(pid)}/nodes/${nid}/compare`, { models }),
 
@@ -161,6 +190,8 @@ export const api = {
   setKey: (name: string, value: string) => req<any>("POST", "/api/settings/keys", { name, value }),
   testPlugin: (plugin: string) => req<{ ok: boolean; message: string }>("POST", "/api/settings/test", { plugin }),
   patchCatalog: (id: string, patch: any) => req<any>("PATCH", `/api/catalog/${id}`, patch),
+  refreshModels: () => req<{ models: FoundModel[]; errors: Record<string, string>; skipped: string[] }>("POST", "/api/models/llm/refresh"),
+  addModel: (plugin: string, model: string, usd_in: number, usd_out: number) => req<any>("POST", "/api/catalog/llm", { plugin, model, usd_in, usd_out }),
 };
 
 export const fileUrl = (pid: string, rel?: string | null) => (rel ? `/files/${encodeURIComponent(pid)}/${rel}` : "");

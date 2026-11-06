@@ -53,13 +53,19 @@ export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttrib
   return <textarea ref={ref} className={cn("w-full rounded-lg border border-line bg-panel px-2.5 py-2 text-[13px] placeholder:text-muted/70 focus:border-brand focus:outline-none resize-none", className)} {...p} />;
 });
 
+export type SelectOption = { value: string; label: string; group?: string; disabled?: boolean };
+
 export function Select({ value, onChange, options, className, title, help }: {
-  value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; className?: string; title?: string; help?: string;
+  value: string; onChange: (v: string) => void; options: SelectOption[]; className?: string; title?: string; help?: string;
 }) {
+  // options with a `group` are shown under that heading (headings in order of first appearance); the rest come first
+  const groups = Array.from(new Set(options.filter((o) => o.group).map((o) => o.group as string)));
+  const opt = (o: SelectOption) => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>;
   const sel = (
     <select title={help ? undefined : title} aria-label={title} value={value} onChange={(e) => onChange(e.target.value)}
       className={cn("h-7 rounded-md border border-line bg-panel px-1.5 text-xs text-ink focus:border-brand focus:outline-none cursor-pointer", className)}>
-      {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      {options.filter((o) => !o.group).map(opt)}
+      {groups.map((g) => <optgroup key={g} label={g}>{options.filter((o) => o.group === g).map(opt)}</optgroup>)}
     </select>
   );
   return help ? <HelpTip id={help}><span className={cn("inline-flex", className?.includes("w-full") && "w-full")}>{sel}</span></HelpTip> : sel;
@@ -124,7 +130,7 @@ export function Dialog({ open, onOpenChange, title, description, children, wide,
             <DialogP.Close className="rounded-md p-1 text-muted hover:bg-sunken hover:text-ink" aria-label="Close"><X className="h-4 w-4" /></DialogP.Close>
           </div>
           <div className="overflow-auto scroll-thin px-5 py-4">{children}</div>
-          {footer && <div className="flex justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>}
+          {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>}
         </DialogP.Content>
       </DialogP.Portal>
     </DialogP.Root>

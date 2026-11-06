@@ -268,3 +268,22 @@ def test_api_refuses_a_half_made_part_with_a_plain_message(svc, monkeypatch):
     with TestClient(appmod.app) as client:
         r = client.post(f"/api/projects/{p.id}/nodes/{p.root.children[0].id}/export", json={})
         assert r.status_code == 400 and "still to make" in r.json()["detail"]
+
+
+# ------------------------------------------------------------------ the command line
+def test_cli_new_auto_length_and_export_save_a_part_to_a_file(svc, monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+    from video_generator.cli import app
+    runner = CliRunner()
+    made = runner.invoke(app, ["new", "A calm product demo", "--auto-length", "--language", "auto", "--no-draft"])
+    assert made.exit_code == 0, made.output
+    q = svc.load(ProjectStore.list()[0]["id"])
+    assert q.settings.length_mode == "auto" and q.settings.language == "auto"
+    p = made_project(svc, monkeypatch, music=False)                       # (the newest project is the one with made clips)
+    dest = tmp_path / "part1.mp4"
+    out = runner.invoke(app, ["export", "1", "-o", str(dest), "-p", p.id])
+    assert out.exit_code == 0, out.output
+    assert dest.exists() and abs(media.probe_duration(dest) - 4.0) < 0.5 and dest.with_suffix(".srt").exists()
+    assert "no music" in out.output
+    half = runner.invoke(app, ["export", "2.1", "-o", str(tmp_path / "x.mp4"), "-p", p.id])
+    assert half.exit_code == 0 and (tmp_path / "x.mp4").exists()          # a single clip is its own file

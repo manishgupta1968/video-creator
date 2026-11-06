@@ -91,6 +91,8 @@ Add these only if you need them:
 
 1. **Type your goal** on the start page and press Enter. You may drop photos, slides, clips or a voice recording on the box.
    - If the goal says "30-second" or "2 minute", the length is set for you.
+   - **Length is "Auto" until you choose one.** Auto means: as short as the story allows, every spoken line heard in full, no filler. Press 15 s, 30 s, 1 min … to ask for a length instead.
+   - Under the box you also choose the **language** (or let the plan decide from your goal) and the **budget**. A line below shows a **rough price** from your catalogue prices, before any plan exists.
 2. **Edit the draft.** The workspace has five areas:
    - **Left – Story:** the goal tree. Parts contain sub-parts, which contain clips. Drag to reorder. Use ••• → *Break down with AI*.
    - **Middle – Editor:** click any text to change it; it saves by itself. Or type in *Ask AI*, e.g. "make Rahul look more frustrated".
@@ -116,6 +118,9 @@ Add these only if you need them:
    - Tick the suggestions you like, add your own feedback (yours wins), and press **Re-make with feedback**. You see the before/after script and the new cost before anything runs.
    - Older versions are kept under *Versions*.
 7. **Download** the final video (top right). Subtitles (`final.srt`) are made too.
+   - **Any clip or part can be downloaded** once its clips are made: the *Download part* button in the part, *Download clip* in the clip, or ••• → *Download* in the story. A part is its clips joined with their transitions, with the same music as the final video, and a subtitle file.
+
+**The numbers you look at first** are always at the top: **Length**, **Cost of the whole video**, **Time to make**, **Quality** and **Budget**. After each edit a small chip shows what changed ("Cost +$1.02"). Click the cost to see the **cost of every part and clip**, with its length, time, quality and model.
 
 Keyboard shortcuts:
 - **Ctrl/⌘ K**: ask AI for any change
@@ -125,6 +130,12 @@ Keyboard shortcuts:
 ### Things worth knowing
 
 **Quality choices.** *Best* = highest quality. *Balanced* = quality for the money. *Budget* = the cheapest **real** model that is good enough for the shot. *Free preview* = free local tools only (text cards). Free tools are never chosen in the other modes unless nothing real is connected.
+
+**Why a clip is only a placeholder.** The banner says the real reason: a clip **you pinned to the free model** (its Model box), a **missing key**, **Free preview** quality, or no connected model that fits the clip. A pinned clip is never blamed on a missing key. *Use the best model* clears the pins in one click; clips that were already made as placeholders are then marked out of date so you can make them for real.
+
+**Every model is listed.** In Settings → *AI brain* each kind of work (planning and scripts, the Review Agent, simple jobs) has a dropdown of every brain model with its price per 1 million tokens and about what one plan draft costs. In a clip's *Model* box every video model is listed, with what is missing for the ones that are not connected. *Refresh from vendor* asks each connected AI vendor which models your key can use (free); a model that is not in your catalogue yet can be added with the price you read on the vendor's page. Every AI call is priced by the model that really answered.
+
+**Background music is made once.** The first time it is needed, one track is made for the whole video and saved (`output/music.mp3` and `music.json`). Joining again, and every part you download, reuse it for free. New music is made only if the music mood or example changed, or the video became much longer than the track (`music_reuse_tolerance` in `vg policy`). Before it spends, the *Join* button and *Download part* tell you what the music would cost.
 
 **Preview mode.** Without keys for a video or image service, the tool cannot make real footage. It makes *text-card previews* instead (each card says "PREVIEW — not real footage"). A banner at the top, a "preview" mark on each clip, and the Generate box all tell you this and what to add.
 
@@ -141,7 +152,7 @@ With the fal.ai key (and ElevenLabs for the voice) this works. A presenter who i
 
 **How the Review Agent judges quality.** It judges every take as *video*, to cinema quality, not only against your goal. It scores: goal, script, actors, behaviour, **realism** (skin, eyes, hands, fur, no AI artifacts), **motion** (real, natural movement, not a slideshow or zoom), **consistency** (same face, clothing, light and background across frames), **fidelity** (sharp, no blur or blocks), **audio** (natural, clear voice), continuity, timing and lip-sync. It looks at spread-out frames and at pairs of neighbouring frames, to catch warping and morphing. The tool also measures numbers itself, for free: how much moves, how sharp the clip is compared with its starting picture, loudness and silence. Some rules cannot be overruled by the AI: a free preview card, or a clip where almost nothing moves, can never pass as realistic animation. A score of 0 means "could not be checked" (for example the offline brain cannot see). The Review Agent only suggests; you decide.
 
-**Where did the money go?** Click the *Budget* chip at the top. It shows your budget, what has been spent, what is still to spend, and every paid call grouped by type (AI brain, pictures, video, voices, music), with how each amount was counted. In the terminal: `vg budget`. The Budget is a safety limit; the default comes from Settings.
+**Where did the money go?** Click the *Cost* or *Budget* tile at the top. It shows your budget, what has been spent, what is still to spend, and every paid call grouped by type (AI brain, pictures, video, voices, music), with how each amount was counted. In the terminal: `vg budget`. The Budget is a safety limit; the default comes from Settings.
 
 **Help is everywhere.** Hover any button, or tab to it, to see *what it does* and *what you get*. Press **?** (or the Help button) for step-by-step guides; each step has a **Show me** button that points at the real control. You can also ask questions in plain words (Ctrl/⌘ K, or Help): "Why does this clip cost so much?" The answer comes from your project's own numbers. In the terminal: `vg explain "why is the budget $0.23?"`.
 
@@ -184,11 +195,23 @@ Each command below is shown on its own line so you can copy it.
 vg new "A 30-second advert for our travel bag, presented by me" --length 30 --add slides.pdf --add me.wav
 ```
 
+Leave out the length and add `--auto-length` to let the plan be as short as the story allows. Add `--language hi` (or `--language auto`) to set the spoken language.
+
+```bash
+vg new "Explain our product simply" --auto-length --language auto
+```
+
 ```bash
 vg show
 ```
 
 The goal tree with length, cost and status.
+
+```bash
+vg export 2 -o part2.mp4
+```
+
+Saves the finished video of part 2 (or a clip such as `2.1`). Every clip under it must be made. It uses the saved music; if new music would cost money it asks first (`--yes` agrees, `--music none` leaves it out).
 
 ```bash
 vg tree decompose 2
