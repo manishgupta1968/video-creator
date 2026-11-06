@@ -308,6 +308,7 @@ class Node(BaseModel):
     review_enabled: bool = True
     locked: bool = False            # "keep this clip as it is": its length is never changed by resizing or optimizing
     quality_mode: Optional[Literal["best", "balanced", "budget", "free"]] = None   # this part's own quality; None = the part above, then the video
+    ambience: Optional[bool] = None   # natural sound made for the clips under this node: None = the part above, then the video; False = none
     continuity: Continuity = Field(default_factory=Continuity)
     blocked: str = ""               # computed: why this clip cannot be made yet (for example it must continue a shot but no model can)
 

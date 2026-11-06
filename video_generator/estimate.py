@@ -242,10 +242,20 @@ class ClipPlan:
     blocked: str = ""                      # why this clip cannot be made at all right now (empty = it can)
 
 
+def ambience_for(project: Project, node: Node) -> bool:
+    """Is natural sound made for this clip? Its own choice, else the nearest part above that chose, else the whole video's."""
+    if node.ambience is not None:
+        return node.ambience
+    for a in reversed(ancestors(project, node.id)):
+        if a.ambience is not None:
+            return a.ambience
+    return project.settings.ambience
+
+
 def wants_ambience(project: Project, node: Node, plan: "ClipPlan") -> bool:
     """Does this AI clip need natural sound made for it? Yes when it would otherwise be silent (a video model with
     no sound of its own, or a talking-picture clip that has only the voice) and the plan does not ask for silence."""
-    if not project.settings.ambience or node.kind != NodeKind.clip or not node.script:
+    if not ambience_for(project, node) or node.kind != NodeKind.clip or not node.script:
         return False
     notes = (node.script.sound_notes or "").strip().lower()
     if notes in ("silence", "none", "no sound") or notes.startswith("silence"):

@@ -25,7 +25,7 @@ export interface Node {
   status: Status; duration: Duration; cost: Cost; time: { likely_s: number; explain: string }; version: number; versions: Version[];
   takes: Take[]; chosen_take: string | null; voice_audio: string | null; voice_seconds: number | null; output: string | null;
   warnings: string[]; needs_split: boolean; review_enabled: boolean;
-  locked?: boolean; quality_mode?: "best" | "balanced" | "budget" | "free" | null; continuity?: Continuity; blocked?: string;
+  locked?: boolean; quality_mode?: "best" | "balanced" | "budget" | "free" | null; ambience?: boolean | null; continuity?: Continuity; blocked?: string;
 }
 export interface Actor { kind: string; description: string; clothing: string; behaviour: string; voice_description: string; voice_gender: string; voice_age: string; voice_pitch: string; voice_pace: string; voice_accent: string; voice_accent_label?: string; language?: string; voice_name: string; voice_note: string; voice_sample: string | null; voice_provider: string | null; voice_id: string | null; speaking_wpm: number | null; props: string; reference_sheet: string[]; avatar_id: string | null }
 export interface Ctx {
@@ -68,6 +68,18 @@ export interface Activity { node: string; step: string; elapsed_s: number; step_
 export interface View { scale?: ScaleResult; project: Project; summary: Summary; engine: { active: boolean; running_clips: string[]; activity: Activity[] } }
 export interface StockPhoto { source: string; title: string; thumb: string; url: string; width: number; height: number; author: string; license: string; source_url: string }
 export interface Estimate { clips: string[]; extra_upstream: string[]; cost_usd: number; time_s: number; spent_usd: number; budget_usd: number; over_budget: boolean; blocked?: { id: string; number: string; why: string }[]; reuses?: string[] }
+export interface OptMeasure { seconds: number; cost: number; cost_total: number; time_s: number; clips: number; to_make: number }
+export interface OptDelta { seconds: number; cost: number; time_s: number }
+export interface OptEdit { id: string; level: number; kind: string; nodes: string[]; numbers: string[]; value: any; label: string; loses: string; reason: string; kept: string; effect: OptDelta; checked: boolean }
+export interface OptLevel { level: number; name: string; help: string; edits: string[]; after: OptMeasure; saves: OptDelta; meets_goal: boolean; available: boolean }
+export interface OptProposal {
+  scope: { id: string; number: string; title: string; is_whole_video: boolean }; goal: { length: number | null; cost: number | null; lowest: boolean };
+  max_level: number; met: boolean; stopped_at: number; reason: string; notes: string[]; before: OptMeasure; after: OptMeasure; saves: OptDelta;
+  levels: OptLevel[]; edits: OptEdit[]; joins: { kept: number; of: number; broken: string[] }; findings: Finding[]; protected: { numbers: string[]; count: number };
+  ai: { available: boolean; clips: number; cost_low: number; cost_high: number; model?: string; why: string };
+}
+export interface OptRequest { scope?: string; length?: number | null; cost?: number | null; lowest?: boolean; max_level?: number; ticked?: string[]; protect?: string[]; ai_edits?: any[] }
+export interface OptAi { edits: any[]; valid: any[]; skipped: string[]; note: string; cost_usd: number }
 export interface ModeCost { cost: number; cost_todo: number; cost_min: number; cost_max: number; seconds: number; time_s: number; models: string[]; clips: number; to_make: number }
 export interface ModeCosts { current: string; effective: string; inherits: string; is_whole_video: boolean; modes: Record<string, ModeCost> }
 export interface BudgetRow { at: string; what: string; vendor: string; model: string; how: string; estimated: number; actual: number }
@@ -185,6 +197,9 @@ export const api = {
   musicStatus: (pid: string) => req<MusicStatus>("GET", `${P(pid)}/music`),
   exportNode: (pid: string, nid: string, music: "auto" | "new" | "none" = "auto") => req<ExportResult>("POST", `${P(pid)}/nodes/${nid}/export`, { music }),
   setJoin: (pid: string, nid: string, join: Join, reason = "") => req<View>("POST", `${P(pid)}/nodes/${nid}/join`, { join, reason }),
+  optimizePropose: (pid: string, body: OptRequest) => req<OptProposal>("POST", `${P(pid)}/optimize/propose`, body),
+  optimizeAi: (pid: string, body: OptRequest) => req<OptAi>("POST", `${P(pid)}/optimize/ai`, body),
+  optimizeApply: (pid: string, body: OptRequest) => req<View>("POST", `${P(pid)}/optimize/apply`, body),
   rewriteOffer: (pid: string, nid: string) => req<{ clips: number; numbers: string[]; kept: string[]; cost_usd: number }>("GET", `${P(pid)}/nodes/${nid}/rewrite-offer`),
   modeCosts: (pid: string, nid: string) => req<ModeCosts>("GET", `${P(pid)}/nodes/${nid}/mode-costs`),
   fixContinuity: (pid: string, body: { action: string; node?: string; join?: string }) => req<View>("POST", `${P(pid)}/continuity/fix`, body),

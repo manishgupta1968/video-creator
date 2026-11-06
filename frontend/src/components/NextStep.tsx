@@ -30,6 +30,7 @@ export default function NextStep() {
       case "select": if (a.id) P.select(a.id); break;
       case "context": P.select(root); later(() => window.dispatchEvent(new CustomEvent("vg-open-context", { detail: a.id })), 200); break;
       case "budget": window.dispatchEvent(new Event("vg-open-budget")); break;
+      case "optimize": window.dispatchEvent(new CustomEvent("vg-open-optimize", { detail: a.node || "" })); break;
       case "run": run({ mode: a.mode || "next", targets: a.targets, title: a.title || a.label }); break;
       case "scripts": P.act("Writing scripts", () => api.writeScripts(P.pid), "Scripts written"); break;
       case "split": if (a.id) P.act("Splitting", () => api.splitClip(P.pid, a.id!), "Clip split into parts"); break;

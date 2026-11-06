@@ -194,6 +194,22 @@ class FakeLLM(LLM):
                               "place": goal[:60], "start_state": f"{l}: {goal[:50]}", "end_state": f"End of '{l}': {goal[:50]}"}
                              for i, l in enumerate(labels)], "note": "offline brain: simple split"}
 
+    def _optimize(self, m: dict) -> dict:
+        """Offline tightening: a spoken text of two or more sentences loses its LAST sentence (never a line marked exact). It cannot judge
+        meaning, so the reason says so; the person decides by ticking."""
+        def shorter(text: str) -> str:
+            parts = [x for x in re.split(r"(?<=[.!?।])\s+", (text or "").strip()) if x]
+            return " ".join(parts[:-1]) if len(parts) >= 2 else text
+        edits = []
+        for c in m.get("clips", []):
+            lines = [d["text"] if d.get("fixed") else shorter(d["text"]) for d in c.get("dialogue", [])]
+            narr = c.get("narration", "")
+            new_narr = narr if c.get("narration_fixed") else shorter(narr)
+            if lines != [d["text"] for d in c.get("dialogue", [])] or new_narr != narr:
+                edits.append({"clip": c["number"], "action": "shorten", "dialogue": lines, "narration": new_narr if narr else None,
+                              "reason": "offline helper: the last sentence of each long text is dropped", "kept": "the first sentences carry the main point (the offline helper cannot judge meaning; check it)"})
+        return {"edits": edits, "note": "offline helper: simple sentence trimming" if edits else "nothing here has two sentences to trim"}
+
     def _split_clip(self, m: dict) -> dict:
         """Offline fallback: split at the script's own structure. The spoken part (all dialogue) becomes a face-only clip about as long
         as the speech; the action steps become the other clip(s)."""

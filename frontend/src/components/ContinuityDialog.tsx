@@ -4,6 +4,7 @@ import { api, FixAction, Finding } from "../api";
 import { useP } from "../lib";
 import { Badge, Button, Dialog } from "../ui";
 import { useRun } from "./ConfirmRun";
+import { OptimizeButton } from "./OptimizeDialog";
 
 /** A slim line under the numbers strip: "Continuity: 3 things to check". Click it to read each one and fix it with one click where the fix is mechanical.
  *  The checks are plain rules (no AI, no cost) and run on every change. */
@@ -16,17 +17,20 @@ export default function ContinuityBar() {
     window.addEventListener("vg-open-continuity", h);
     return () => window.removeEventListener("vg-open-continuity", h);
   }, []);
-  if (!list.length) return null;
   const problems = list.filter((f) => f.severity === "problem").length;
   return (
     <>
-      <button data-help="continuity-bar" type="button" onClick={() => setOpen(true)}
-        className="flex w-full items-center gap-2 border-b border-line bg-panel px-4 py-1.5 text-left text-xs hover:bg-sunken">
-        {problems ? <AlertTriangle className="h-3.5 w-3.5 text-bad" /> : <Info className="h-3.5 w-3.5 text-info" />}
-        <span className="font-medium">Continuity</span>
-        <span className="text-muted">{problems ? `${problems} problem${problems > 1 ? "s" : ""}` : ""}{problems && list.length > problems ? " and " : ""}{list.length > problems ? `${list.length - problems} thing${list.length - problems > 1 ? "s" : ""} to look at` : ""} so the clips feel like one video.</span>
-        <span className="ml-auto text-brand">Read and fix</span>
-      </button>
+      <div className="flex items-center gap-2 border-b border-line bg-panel px-4 py-1 text-xs">
+        {list.length > 0 ? (
+          <button data-help="continuity-bar" type="button" onClick={() => setOpen(true)} className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-0.5 text-left hover:bg-sunken">
+            {problems ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-bad" /> : <Info className="h-3.5 w-3.5 shrink-0 text-info" />}
+            <span className="font-medium">Continuity</span>
+            <span className="truncate text-muted">{problems ? `${problems} problem${problems > 1 ? "s" : ""}` : ""}{problems && list.length > problems ? " and " : ""}{list.length > problems ? `${list.length - problems} thing${list.length - problems > 1 ? "s" : ""} to look at` : ""} so the clips feel like one video.</span>
+            <span className="ml-auto shrink-0 text-brand">Read and fix</span>
+          </button>
+        ) : <span className="flex-1 text-muted">Make it shorter or cheaper, with every change shown first:</span>}
+        <OptimizeButton scope="" label="Optimize the video…" size="sm" />
+      </div>
       <ContinuityDialog open={open} onOpenChange={setOpen} list={list} />
     </>
   );

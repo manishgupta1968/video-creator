@@ -12,6 +12,7 @@ import NextStep from "./NextStep";
 import { JoinProvider } from "./JoinDialog";
 import SummaryStrip from "./SummaryStrip";
 import ContinuityBar from "./ContinuityDialog";
+import OptimizeHost from "./OptimizeDialog";
 import BudgetDialog from "./BudgetDialog";
 import ContextLibrary from "./ContextLibrary";
 import HelpDrawer from "./HelpDrawer";
@@ -109,6 +110,7 @@ function Shell({ onHome }: { onHome: () => void }) {
 
       <SummaryStrip />
       <ContinuityBar />
+      <OptimizeHost />
       <ActivityBar />
       <PreviewBanner />
       <NextStep />

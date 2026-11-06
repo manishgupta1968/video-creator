@@ -450,6 +450,70 @@ def join(node: str = typer.Argument(..., help="clip number, for example 1.2"),
 
 
 @app.command()
+def optimize(scope: str = typer.Option("", "--scope", help="a part number such as 2 (default: the whole video)"),
+             length: Optional[float] = typer.Option(None, "--length", help="the length you want, in seconds"),
+             cost: Optional[float] = typer.Option(None, "--cost", help="the most you want to still spend, in dollars"),
+             lowest: bool = typer.Option(False, "--lowest", help="as short and cheap as possible without losing quality"),
+             max_level: Optional[int] = typer.Option(None, "--max-level", help="the deepest level it may use: 1 no visible change, 2 small, 3 noticeable"),
+             ai: bool = typer.Option(False, "--ai", help="also ask the AI to tighten the script (it shows the cost first)"),
+             apply_it: bool = typer.Option(False, "--apply", help="apply the proposal (otherwise it only shows it)"),
+             yes: bool = typer.Option(False, "--yes", "-y", help="do not ask before spending on the AI or applying"),
+             project: Optional[str] = typer.Option(None, "-p")):
+    """Propose a shorter and cheaper video (nothing changes until --apply). Levels: 1 no visible change, 2 small change, 3 noticeable, 4 AI script change."""
+    svc = _svc()
+    pid = _pid(project)
+    body = {"scope": _node(svc, pid, scope) if scope else None, "length": length, "cost": cost, "lowest": lowest, "max_level": max_level}
+    try:
+        prop = svc.optimize_propose(pid, body)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc))
+    if ai:
+        info = prop["ai"]
+        if not info["available"]:
+            con.print(info["why"])
+        else:
+            con.print(f"Asking the AI to tighten {info['clips']} clip(s) costs about ${info['cost_low']:.2f} to ${info['cost_high']:.2f} ({info['model']}).")
+            if yes or typer.confirm("Ask the AI?"):
+                got = asyncio.run(svc.optimize_ai(pid, body))
+                for why in got["skipped"]:
+                    con.print(f"[yellow]ignored[/] {why}")
+                body["ai_edits"] = got["edits"]
+                prop = svc.optimize_propose(pid, body)
+    _show_proposal(prop)
+    if apply_it:
+        if prop["after"]["seconds"] == prop["before"]["seconds"] and prop["after"]["cost"] == prop["before"]["cost"]:
+            con.print("Nothing to apply.")
+            return
+        if yes or typer.confirm("Apply the ticked changes? (one undo step)"):
+            body["ticked"] = [e["id"] for e in prop["edits"] if e["checked"]]
+            svc.optimize_apply(pid, body)
+            con.print("[green]Applied.[/] Undo with: vg undo")
+
+
+def _show_proposal(prop: dict) -> None:
+    b, a = prop["before"], prop["after"]
+    con.print(f"[bold]{'The whole video' if prop['scope']['is_whole_video'] else 'Part ' + prop['scope']['number']}[/]: "
+              f"length {b['seconds']:.0f} s to {a['seconds']:.0f} s · still to spend ${b['cost']:.2f} to ${a['cost']:.2f} · making time about {b['time_s'] / 60:.0f} to {a['time_s'] / 60:.0f} min")
+    for lv in prop["levels"]:
+        if lv["level"] == 4 and not any(e["level"] == 4 for e in prop["edits"]):
+            continue
+        con.print(f"  level {lv['level']} {lv['name']}: {lv['after']['seconds']:.0f} s, ${lv['after']['cost']:.2f}" + ("  [green]meets the goal[/]" if lv["meets_goal"] else ""))
+    for e in prop["edits"]:
+        con.print(f"   [{'x' if e['checked'] else ' '}] L{e['level']} {e['label']}  ({e['effect']['seconds']:+.1f} s, {e['effect']['cost']:+.2f} $)" + (f"\n        you lose: {e['loses']}" if e["loses"] else ""))
+    j = prop["joins"]
+    if j["of"]:
+        con.print(f"Joins kept: {j['kept']} of {j['of']}")
+        for x in j["broken"]:
+            con.print(f"   [yellow]{x}[/]")
+    for n in prop["notes"]:
+        con.print(f"[dim]{n}[/]")
+    if prop["reason"]:
+        con.print(f"[yellow]The goal cannot be met.[/] {prop['reason']}")
+    elif prop["met"]:
+        con.print("[green]The goal is met.[/]")
+
+
+@app.command()
 def continuity(project: Optional[str] = typer.Option(None, "-p")):
     """List what would make the clips feel like different videos (plain rules, no AI, no cost)."""
     svc = _svc()

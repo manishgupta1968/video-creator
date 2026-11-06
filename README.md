@@ -137,6 +137,15 @@ Keyboard shortcuts:
 
 **Background music is made once.** The first time it is needed, one track is made for the whole video and saved (`output/music.mp3` and `music.json`). Joining again, and every part you download, reuse it for free. New music is made only if the music mood or example changed, or the video became much longer than the track (`music_reuse_tolerance` in `vg policy`). Before it spends, the *Join* button and *Download part* tell you what the music would cost.
 
+**Make it shorter and cheaper (Optimize).** Press *Optimize the video…* under the numbers strip, or *Optimize this part…* in a part's header. It works in three steps and changes nothing until the last one. (1) *Goal*: "as short and cheap as possible, without losing quality", or a number for the length and/or for what is still to spend. (2) *Proposal*: Before and After for length, cost and making time; a ladder of levels, each with its own tick boxes, what it saves and what you would lose; and "Joins kept: 5 of 5". It stops at the first level that gets you to your number and says so; if the number cannot be reached it says why and what would be needed. (3) *Apply* the ticked changes as ONE change: one Undo (Ctrl/⌘ Z) takes it all back, and the lengths at the top follow what you chose.
+- **Level 1, no visible change:** each clip is cut to what its words and action need (no empty time). Every word and action step stays.
+- **Level 2, small change:** one step cheaper quality for the scope (never a model that is weak for that kind of shot), one take fewer for people clips, action at the fastest honest pace.
+- **Level 3, noticeable:** natural sound off, the Review Agent off, and (whole video only) music off. Music is one track for the whole video, so a single part cannot switch it off; every second removed also lowers the music cost, and a track already made is reused at no cost.
+- **Level 4, script change (AI):** shorter lines, or clips dropped or merged. You press *Ask AI to tighten the script*; the cost is shown on the button first (it uses the cheaper AI for simple jobs, see Settings → AI brain). The tool checks every suggestion before you see it: a line marked *exact* is never changed, no more than `max_cut_ratio` of a clip's words or of a part's clips may go, every part keeps a clip, and a merge is allowed only inside one scene. Each suggestion shows the reason and what meaning is kept; you tick what you want.
+- **Never touched:** clips already made, clips marked *Keep as it is*, clips you protect in step 1, and lines marked *exact*.
+- **Joins:** resizing never changes a join. Dropping a clip turns the join after it into a cut; merging two clips keeps the first start and the last end and the join to the next clip. Every proposal shows which joins survive.
+- In the terminal: `vg optimize --length 50` (or `--cost 10`, or `--lowest`; add `--scope 2` for one part, `--ai` to ask the AI after seeing its cost, `--apply` to apply). Without `--apply` it only shows the proposal.
+
 **Quality for one part.** Open a part and choose *Quality for this part*: Best, Balanced, Budget or Free preview, or "Same as above". The price of each choice is shown beside it (worked out on a copy; nothing is saved or spent until you choose). A clip uses its own choice, else its part's, else the whole video's. Only the video, picture and natural-sound models change. **Voices, the narrator and the music are chosen once for the whole video**, so a character never gets a different voice in a cheaper part.
 
 **Change a length and everything follows.** Type a new length for a part or the whole video and the clips under it are resized in proportion, never below what each clip needs (its speech, its action steps, the shortest clip the chosen model can make, `min_clip_s`). A message says which clips moved, and why it could not go lower. Clips already made, clips you marked *Keep as it is*, and clips of your own footage are never changed silently. A spoken line marked *exact* (the plan marks text you gave in your goal) is never shortened, reworded or dropped. After you edit a part's goal, the tool offers (never forces) to rewrite the clip scripts under it, and shows the AI cost first.
@@ -227,6 +236,13 @@ Saves the finished video of part 2 (or a clip such as `2.1`). Every clip under i
 vg join 1.2 continues
 vg continuity
 ```
+
+```bash
+vg optimize --length 50
+vg optimize --cost 10 --scope 2 --ai --apply
+```
+
+`vg optimize` proposes a shorter and cheaper video and changes nothing until you add `--apply`. Give a goal with `--length` (seconds), `--cost` (dollars still to spend) or `--lowest` (as low as possible without losing quality); `--scope 2` limits it to part 2, `--max-level 2` stops before the noticeable changes, `--ai` asks the AI to tighten the script after showing what that costs. Apply is one change: `vg undo` takes it back.
 
 `vg join` says how a clip joins the clip before it: `continues` (starts on its last picture), `same_scene` (same place, new angle) or `cut` (new place or time). `vg continuity` lists what would make the clips feel like different videos, and the fix for each (plain rules, no AI, no cost).
 

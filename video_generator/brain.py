@@ -110,6 +110,20 @@ class ChildDraft(PlannedContinuity):
     kind: Literal["clip", "goal"] = "clip"
 
 
+class TightenEdit(BaseModel):
+    clip: str                                       # the clip number as shown (for example 2.1)
+    action: Literal["shorten", "drop", "merge_with_next"] = "shorten"
+    dialogue: list[str] = Field(default_factory=list)   # for shorten: the new text of every spoken line, same order and count
+    narration: Optional[str] = None
+    reason: str = ""
+    kept: str = ""                                  # what meaning is kept
+
+
+class Tightening(BaseModel):
+    edits: list[TightenEdit] = Field(default_factory=list)
+    note: str = ""
+
+
 class Decomposition(BaseModel):
     children: list[ChildDraft]
     note: str = ""
@@ -406,6 +420,26 @@ class Brain:
         return await self.ask("decompose", prompt, Decomposition,
                               {"goal": node.goal, "title": node.title,
                                "seconds": node.duration.likely_s or node.target_seconds or 20})
+
+    async def tighten(self, project: Project, scope_label: str, goal_text: str, clips: list[Node]) -> Tightening:
+        """Ask the AI for shorter lines, or clips to drop or merge, for these clips (the tool checks every suggestion afterwards)."""
+        from . import policy as policy_mod
+        nums = numbering(project)
+        order = [n for n, _ in walk(project.root) if n.is_leaf]
+        lines = []
+        for c in clips:
+            nxt = order[order.index(c) + 1] if c in order and order.index(c) + 1 < len(order) else None
+            join = (nxt.continuity.join or "cut") if nxt and nxt.continuity else "cut"
+            s = c.script
+            said = [f"    {'EXACT ' if d.fixed else ''}[{d.speaker}] {d.text}" for d in s.dialogue if d.text.strip()]
+            if s.narration.strip():
+                said.append(f"    {'EXACT ' if s.narration_fixed else ''}[narration] {s.narration}")
+            lines.append(f"- clip {nums.get(c.id, '')} · {c.title or c.goal[:40]} · {c.duration.likely_s:.0f} s · join with the next clip: {join}\n" + ("\n".join(said) or "    (nothing is said)"))
+        pol = policy_mod.current()
+        prompt = render("optimize", outline=outline(project), scope=scope_label, goal=goal_text, clips="\n".join(lines) or "(none)", max_cut=f"{pol.max_cut_ratio:.0%}")
+        meta_clips = [{"number": nums.get(c.id, ""), "dialogue": [{"text": d.text, "fixed": d.fixed} for d in c.script.dialogue if d.text.strip()],
+                       "narration": c.script.narration, "narration_fixed": c.script.narration_fixed} for c in clips]
+        return await self.ask("optimize", prompt, Tightening, {"clips": meta_clips, "goal": goal_text})
 
     async def split_clip(self, project: Project, node: Node) -> ClipSplit:
         """Split one clip into consecutive clips that each need only what ONE route can do (the rule comes from the catalogue)."""

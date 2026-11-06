@@ -19,7 +19,7 @@ STATES = ("done", "current", "attention", "todo")      # attention = not finishe
 
 def _act(kind: str, label: str, **kw: Any) -> dict:
     """An action the screen can run. kind: settings | select | context | budget | run | scripts | assemble | final |
-    resume | show | split | unpin.  `help` names a control the screen can highlight with 'Show me'."""
+    resume | show | split | unpin | optimize.  `help` names a control the screen can highlight with 'Show me'."""
     return {"kind": kind, "label": label, **kw}
 
 
@@ -109,7 +109,9 @@ def compute(svc, project: Project, summary: dict) -> dict:
         step("cost", "Check cost and time", "current",
              f"Still to spend about {_money(cost)} on top of {_money(spent)} already spent: that is over your budget of {_money(budget)}. "
              "Raise the budget, shorten the video, or choose a cheaper quality.",
-             _act("budget", "See where the money goes", help="budget"))
+             _act("budget", "See where the money goes", help="budget"),
+             [{"text": "Or let the Optimizer propose a shorter, cheaper version: you see what it changes and what you lose, and tick what you accept.",
+               "action": _act("optimize", "Optimize the video…", node=project.root.id, help="optimize-open")}])
     else:
         left = max(budget - spent - cost, 0)
         step("cost", "Check cost and time", "done",

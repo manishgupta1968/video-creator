@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import functools
 import math
 import re
 import shutil
@@ -306,7 +307,10 @@ def silence(out: Path, seconds: float) -> Path:
     return out
 
 
+@functools.lru_cache(maxsize=1)
 def flite_available() -> bool:
+    """Does this ffmpeg have the flite (free local voice) filter? Asked once per run: the ffmpeg on your machine does not change while the tool runs,
+    and every estimate asks this for every candidate model (without the cache a 30-clip project spent seconds in a sub-process on each refresh)."""
     try:
         out = subprocess.run([FFMPEG, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=30).stdout
         return " flite " in out

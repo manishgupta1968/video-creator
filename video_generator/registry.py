@@ -82,7 +82,7 @@ def plugin_classes() -> dict[str, type]:
     return classes
 
 
-SIMPLE_TASKS = ("photo_query", "pick_photo", "explain", "command", "suggest_dependencies")      # brain tasks a cheaper AI can do
+SIMPLE_TASKS = ("photo_query", "pick_photo", "explain", "command", "suggest_dependencies", "optimize")      # brain tasks a cheaper AI can do
 
 MOTION_LEVELS = ("face", "body", "scene")      # what a model can animate, from least to most; a higher level covers a lower one
 

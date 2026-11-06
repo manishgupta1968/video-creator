@@ -7,6 +7,7 @@ import { useRun } from "./ConfirmRun";
 import DownloadButton from "./Download";
 import ModelPicker from "./ModelPicker";
 import QualityForPart from "./QualityForPart";
+import { OptimizeButton } from "./OptimizeDialog";
 import { useQuery } from "@tanstack/react-query";
 import { FinalVideoDialog, PreviewBadge } from "./Banners";
 import { commandBus, finalPlayer } from "../lib";
@@ -87,6 +88,7 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
         {clipsBelow.length > 0 && <Button help="generate-part" onClick={() => run({ mode: "clip", targets: clipsBelow.filter((c) => c.status !== "done").map((c) => c.id), title: `Make the clips in ${isRoot ? "the video" : `part ${P.numbers[node.id]}`}` })}>
           <Play className="h-3.5 w-3.5" />Generate this part</Button>}
         {!isRoot && clipsBelow.length > 0 && <DownloadButton node={node} />}
+        {clipsBelow.some((c) => c.kind === "clip" && c.script) && <OptimizeButton scope={node.id} label={isRoot ? "Optimize the video…" : "Optimize this part…"} />}
       </div>
       <div>
         <div className="field-label mb-2">Inside ({node.children.length})</div>

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import continuity as continuity_mod
+from . import optimizer as optimizer_mod
 from . import deps as deps_mod
 from . import guide as guide_mod
 from . import languages, models_list, musictrack, scaling
@@ -1352,6 +1353,52 @@ class Service:
             parent_mode = chain[-1].quality_mode if chain else p.settings.quality_mode
         return {"current": "" if is_root else (node.quality_mode or ""), "effective": est.mode_for(p, node), "inherits": parent_mode,
                 "is_whole_video": is_root, "modes": modes}
+
+    # ================================================================ the optimizer (see optimizer.py)
+    @staticmethod
+    def _optimize_goal(body: dict) -> "optimizer_mod.Goal":
+        def num(v):
+            return float(v) if v not in (None, "") else None
+        return optimizer_mod.Goal(length=num(body.get("length")), cost=num(body.get("cost")), lowest=bool(body.get("lowest")))
+
+    def optimize_propose(self, pid: str, body: dict) -> dict:
+        """A proposal for a length and/or cost goal on a scope (the whole video or one part). Nothing is saved or spent."""
+        p = self.load(pid)
+        self.refresh(p)
+        return optimizer_mod.propose(self, p, body.get("scope") or p.root.id, self._optimize_goal(body), body.get("max_level"),
+                                     body.get("ticked"), body.get("protect") or [], body.get("ai_edits") or [])
+
+    def optimize_apply(self, pid: str, body: dict) -> Project:
+        """Apply the edits you ticked as ONE saved change, so a single undo takes it all back."""
+        p = self.load(pid)
+        self.refresh(p)
+        optimizer_mod.apply(self, p, body.get("scope") or p.root.id, self._optimize_goal(body), body.get("ticked"), body.get("protect") or [],
+                            body.get("ai_edits") or [])
+        return self.save(p)
+
+    async def optimize_ai(self, pid: str, body: dict) -> dict:
+        """Ask the AI to tighten the scripts in this scope. This SPENDS a little (the proposal showed the cost first). Returns the AI's suggestions,
+        which you then tick; the tool checks every one against its rules before showing it."""
+        p = self.load(pid)
+        self.refresh(p)
+        scope = body.get("scope") or p.root.id
+        extra = frozenset(body.get("protect") or [])
+        info = optimizer_mod.ai_estimate(self, p, scope, extra)
+        if not info["available"]:
+            raise ValueError(info["why"])
+        goal = self._optimize_goal(body)
+        nums = numbering(p)
+        what = "the whole video" if scope == p.root.id else f"part {nums.get(scope, '')}"
+        want = " and ".join(x for x in (f"a length of about {goal.length:g} seconds" if goal.length else "", f"a cost of about ${goal.cost:g}" if goal.cost else "",
+                                         "as short and cheap as possible without losing meaning" if goal.lowest else "") if x)
+        clips = optimizer_mod._free_clips(p, scope, extra)
+        tight = await self.brain.tighten(p, what, want or "shorter and cheaper", clips)
+        spent_before = p.run.spent_usd
+        self._ledger_llm(p, "optimize")
+        ProjectStore.save(p, snapshot=False)
+        raw = [e.model_dump() for e in tight.edits]
+        edits, skipped = optimizer_mod.validate_ai(self, p, scope, extra, raw)
+        return {"edits": raw, "valid": [e.model_dump() for e in edits], "skipped": skipped, "note": tight.note, "cost_usd": round(p.run.spent_usd - spent_before, 4)}
 
     def music_status(self, pid: str) -> dict:
         """What the Join button needs to say about the music BEFORE it spends: is there a saved track that can be reused (cost 0),

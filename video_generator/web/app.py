@@ -488,6 +488,25 @@ async def mode_costs(pid: str, nid: str):
     return await guard(svc.mode_costs)(pid, nid)
 
 
+@app.post("/api/projects/{pid}/optimize/propose")
+async def optimize_propose(pid: str, body: dict = Body(...)):
+    """A proposal for a length and/or cost goal on a scope. Nothing is saved or spent. body: scope, length, cost, lowest, max_level, ticked, protect, ai_edits."""
+    return await guard(svc.optimize_propose)(pid, body)
+
+
+@app.post("/api/projects/{pid}/optimize/ai")
+async def optimize_ai(pid: str, body: dict = Body(...)):
+    """Ask the AI to tighten the scripts in the scope (spends a little; the proposal showed the cost first)."""
+    return await guard(svc.optimize_ai)(pid, body)
+
+
+@app.post("/api/projects/{pid}/optimize/apply")
+async def optimize_apply(pid: str, body: dict = Body(...)):
+    """Apply the ticked edits as one saved change (one undo step)."""
+    await guard(svc.optimize_apply)(pid, body)
+    return with_scale(pid)
+
+
 @app.get("/api/projects/{pid}/nodes/{nid}/rewrite-offer")
 async def rewrite_offer(pid: str, nid: str):
     """What updating the clip scripts under this part to match its goal would do and cost (nothing is changed or spent)."""

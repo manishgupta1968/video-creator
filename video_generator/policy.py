@@ -48,6 +48,13 @@ class Policy(BaseModel):
     join_max_difference: float = Field(0.15, description="How different the first picture of a clip may be from the last picture of the clip it continues from "
                                                           "(0 = identical, 1 = opposite). Above this the clip is flagged: it does not start where the one before ended.")
 
+    # ---- the optimizer
+    max_cut_ratio: float = Field(0.5, description="The most the AI may cut in one go when it tightens a script: of a clip's spoken words, and of the clips in a part (0.5 = half). "
+                                                    "At least one clip always stays in every part.")
+    optimize_slack_s: float = Field(0.5, description="The optimizer trims a clip only when it is longer than its content needs by at least this many seconds.")
+    optimize_goal_tolerance: float = Field(0.02, description="A length or cost goal counts as met when it is within this share of the number you gave (0.02 = 2 %).")
+    optimize_ai_cost_range: list[float] = Field([0.6, 1.6], description="The low and high guess, as a share of the estimate, shown for what asking the AI to tighten a script would cost.")
+
     # ---- choosing models
     budget_min_strength: int = Field(3, description="Budget quality picks the cheapest model, but never one that scores below this (1 = poor, 5 = best) for the kind of shot.")
 
