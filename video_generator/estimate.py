@@ -27,7 +27,7 @@ from .tree import ancestors, find, leaves, numbering, walk
 PEOPLE_SHOTS = {ShotType.talking_head, ShotType.dialogue_scene, ShotType.human_motion}
 SECONDS_PER_SLIDE = 5.0
 SCRIPT_TOKENS = (6000, 2500)       # in, out per clip script
-REVIEW_TOKENS = (26000, 1800)      # per take review (frames + context)
+REVIEW_TOKENS = (29000, 1800)      # per take review (frames + context + the two pictures of the join with the clip before)
 PLAN_TOKENS = (8000, 6000)
 
 

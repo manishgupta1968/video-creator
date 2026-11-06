@@ -319,7 +319,7 @@ class FakeLLM(LLM):
     def _review(self, m: dict) -> dict:
         issues, suggestions = [], []
         scores = {"goal": 4, "script": 4, "actors": 4, "behaviour": 4, "realism": 0, "motion": 0, "consistency": 0,
-                  "fidelity": 0, "audio": 0, "continuity": 4, "timing": 4, "lipsync": 5}   # 0 = the offline brain cannot see or hear
+                  "fidelity": 0, "audio": 0, "continuity": 4, "join": 0, "timing": 4, "lipsync": 5}   # 0 = the offline brain cannot see or hear
         if m.get("node_review"):
             target, actual = float(m.get("target") or 0), float(m.get("actual") or 0)
             if target and abs(actual - target) / target > 0.15:
@@ -339,6 +339,10 @@ class FakeLLM(LLM):
                 issues.append({"check": "script", "text": f'line not clearly heard: "{line[:60]}"', "severity": "major"})
                 suggestions.append(f'make sure the line "{line[:40]}…" is spoken clearly')
         meas = m.get("measurements") or {}
+        join = m.get("join") or {}
+        if join.get("judged"):          # the offline brain cannot see the pictures: it scores the stitch from the number the tool measured
+            over = join.get("kind") == "continues" and join.get("difference") is not None and join["difference"] > float(join.get("limit") or 0.15)
+            scores["join"] = 2 if over else 4
         if meas.get("flicker", 0) > 0.05:
             scores["consistency"] = 2
             issues.append({"check": "consistency", "text": "visible flicker between frames", "severity": "minor"})

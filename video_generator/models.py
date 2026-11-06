@@ -222,6 +222,20 @@ class ReviewSuggestion(BaseModel):
     accepted: bool = True
 
 
+class ReviewJoin(BaseModel):
+    """What the Review Agent was shown about how this clip is stitched to the clip before it (kept so the screen can show the same two pictures)."""
+    judged: bool = False            # False = the stitch could not be judged (first clip, the clip before is not made or only a placeholder)
+    why_not: str = ""               # the plain reason when it was not judged
+    previous: str = ""              # number of the clip before it, for example 1.1
+    kind: str = ""                  # continues | same_scene | cut: what the plan says about this join
+    reason: str = ""                # the plan's reason for it
+    transition: str = ""            # the planned transition into this clip
+    previous_frame: Optional[str] = None      # the last picture of the clip before it (project-relative)
+    this_frame: Optional[str] = None          # the first picture of this take (project-relative)
+    difference: Optional[float] = None        # measured, 0 = the same picture, 1 = opposite
+    limit: float = 0.0                        # the limit that was applied (policy.join_max_difference)
+
+
 class Review(BaseModel):
     id: str = Field(default_factory=lambda: new_id("rv_"))
     target: str                        # take id or node id
@@ -233,6 +247,7 @@ class Review(BaseModel):
     reviewer_model: str = ""
     cost_usd: float = 0
     measurements: dict[str, float] = Field(default_factory=dict)
+    join: Optional[ReviewJoin] = None      # the stitch with the clip before (per take reviews)
     created_at: str = Field(default_factory=now_iso)
 
 

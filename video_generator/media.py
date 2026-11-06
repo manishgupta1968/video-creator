@@ -248,9 +248,15 @@ def clean_voice_sample(src: Path, out: Path) -> Path:
 
 # ----------------------------------------------------------------- frames
 def extract_frame(video: Path, out: Path, at: float = 0.0) -> Path:
+    """One picture of a video at a time. ffmpeg exits with success but writes nothing when the time is past the last picture (a container can be
+    a little longer than its video), so the file is checked: it tries a little earlier once, then says so instead of handing back a missing file."""
     out.parent.mkdir(parents=True, exist_ok=True)
-    ff("-ss", f"{max(at, 0):.3f}", "-i", str(video), "-frames:v", "1", "-q:v", "2", str(out))
-    return out
+    for t in (max(at, 0.0), max(at - 0.3, 0.0)):
+        out.unlink(missing_ok=True)
+        ff("-ss", f"{t:.3f}", "-i", str(video), "-frames:v", "1", "-q:v", "2", str(out))
+        if out.exists() and out.stat().st_size > 0:
+            return out
+    raise MediaError(f"no picture could be read from {Path(video).name} at {at:.2f} s")
 
 
 def last_frame(video: Path, out: Path) -> Path:
@@ -665,6 +671,12 @@ def freeze_stats(video: Path, min_s: float = 0.3) -> dict:
 XFADE = {"crossfade": "fade", "fade_black": "fadeblack", "whip": "slideleft", "dissolve": "dissolve", "wipe": "wipeleft"}
 
 
+def cut_fade(fps: float) -> float:
+    """How long the fade of a hard cut is when other transitions force a filter chain. It must last at least one picture (1 / fps): shorter
+    than that and ffmpeg drops the clip after the cut (a video with a cut and a crossfade in it lost whole clips)."""
+    return max(0.05, 1.5 / max(fps, 1.0))
+
+
 def join_clips(clips: list[Path], transitions: list[str], out: Path, size: tuple[int, int], fps: int,
                tdur: float = 0.5) -> Path:
     """Join normalized clips; transitions[i] is the transition INTO clip i (i>=1)."""
@@ -689,7 +701,7 @@ def join_clips(clips: list[Path], transitions: list[str], out: Path, size: tuple
     offset = 0.0
     for i in range(1, len(clips)):
         t = transitions[i] if i < len(transitions) else "cut"
-        d = tdur if t not in ("cut", "", None) else 0.04
+        d = tdur if t not in ("cut", "", None) else cut_fade(fps)
         kind = XFADE.get(t, "fade")
         offset += durs[i - 1] - d
         offset = max(offset, 0.01)
@@ -699,6 +711,26 @@ def join_clips(clips: list[Path], transitions: list[str], out: Path, size: tuple
     ff(*inputs, "-filter_complex", ";".join(filters), "-map", vprev, "-map", aprev,
        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-r", str(fps), "-pix_fmt", "yuv420p",
        "-c:a", "aac", "-ar", "44100", "-ac", "2", str(out))
+    return out
+
+
+def seam_times(durations: list[float], transitions: list[str], tdur: float = 0.5, fps: float = 24) -> list[tuple[float, float]]:
+    """Where each clip after the first meets the one before it in the joined video: [(seam time, transition length)] for clips 1, 2, …
+    Uses exactly the arithmetic of join_clips: a hard cut joins at the sum of the clip lengths before it; any other transition starts
+    `tdur` before the end of the clip before and the seam is the middle of it."""
+    out: list[tuple[float, float]] = []
+    if all(t in ("cut", "", None) for t in transitions[1:]):
+        total = 0.0
+        for i in range(1, len(durations)):
+            total += durations[i - 1]
+            out.append((round(total, 3), 0.0))
+        return out
+    offset = 0.0
+    for i in range(1, len(durations)):
+        t = transitions[i] if i < len(transitions) else "cut"
+        d = tdur if t not in ("cut", "", None) else cut_fade(fps)
+        offset = max(offset + durations[i - 1] - d, 0.01)
+        out.append((round(offset + d / 2, 3), d if t not in ("cut", "", None) else 0.0))
     return out
 
 

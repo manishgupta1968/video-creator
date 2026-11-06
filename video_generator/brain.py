@@ -245,6 +245,7 @@ class Scores(BaseModel):
     fidelity: int = 0         # sharp, no blur / banding / compression blocks
     audio: int = 0            # voice natural, clear, right level, matches the mouth
     continuity: int = 3
+    join: int = 0             # the stitch with the clip before it (0 = no evidence: the first clip, or the clip before is not made or only a placeholder)
     timing: int = 3
     lipsync: int = 3
 
@@ -517,20 +518,23 @@ class Brain:
 
     async def review_take(self, project: Project, node: Node, frames: list[tuple[float, Path]],
                           transcript: str, measurements: dict, take_seconds: float,
-                          video: Optional[Path] = None, history: str = "", pair_times: Optional[list[float]] = None) -> ReviewDraft:
+                          video: Optional[Path] = None, history: str = "", pair_times: Optional[list[float]] = None,
+                          join_text: str = "", join: Optional[dict] = None, join_images: Optional[list[Path]] = None) -> ReviewDraft:
         nums = numbering(project)
         script = node.script.model_dump_json(indent=1) if node.script else "{}"
+        pics = list(join_images or [])
         prompt = render("review", number=nums.get(node.id, ""), title=node.title, goal=node.goal,
                         parents=" > ".join(a.goal for a in ancestors(project, node.id) if a.id != project.root.id),
                         script=script, context=self._context_block(project, node.id),
                         transcript=transcript or "(no speech detected)", measurements=json.dumps(measurements),
                         target=node.duration.likely_s, actual=take_seconds,
-                        frame_times=_frame_description(frames, pair_times or []), history=history or "(first review)")
+                        frame_times=_frame_description(frames, pair_times or []), history=history or "(first review)",
+                        join=join_text or "(there is no clip before this one to compare with: give join 0)")
         return await self.ask("review", prompt, ReviewDraft,
                               {"script": node.script.model_dump() if node.script else {}, "transcript": transcript,
                                "measurements": measurements, "target": node.duration.likely_s,
-                               "actual": take_seconds},
-                              images=[p for _, p in frames], video=video)
+                               "actual": take_seconds, "join": join or {}, "keep_images": len(pics)},
+                              images=[p for _, p in frames] + pics, video=video)
 
     async def review_node(self, project: Project, node: Node, summaries: str, actual_seconds: float,
                           frames: list[tuple[float, Path]], boundaries: str = "", boundary_images: Optional[list[Path]] = None) -> ReviewDraft:
@@ -542,6 +546,35 @@ class Brain:
                               {"node_review": True, "target": node.target_seconds or node.duration.likely_s,
                                "actual": actual_seconds, "summaries": summaries, "boundaries": boundaries},
                               images=[p for _, p in frames] + list(boundary_images or []))
+
+
+JOIN_RULES = {
+    "continues": ("The plan says this clip CONTINUES the same shot: it must begin on the very picture the clip before ended on (the same place, people, pose, "
+                  "clothing, light and framing), so the two clips look like one unbroken shot. A jump in any of these is a stitching problem."),
+    "same_scene": ("The plan says this clip is in the SAME SCENE as the clip before: the same place, people, clothing, light and props, with a new angle or a "
+                   "later moment. A new angle is fine; a different place, light, outfit or prop is a stitching problem."),
+    "cut": ("The plan says this clip is a deliberate CUT (a new place or time). Do not mark a different place as a problem. Judge only whether the cut looks like "
+            "an ACCIDENT: a jump cut (almost the same picture, shifted), an abrupt change of light, colour or size that looks like a mistake, or a picture that "
+            "does not fit what the story needs here."),
+}
+
+
+def join_block(previous: str, kind: str, reason: str, transition: str, difference: Optional[float], limit: float, prev_end: str, this_start: str) -> str:
+    """The words the Review Agent reads about the join with the clip before it (the two pictures are the LAST TWO attached images)."""
+    lines = [f"Clip {previous} is the clip before this one. Join kind: {kind or 'not decided'}" + (f" ({reason})" if reason else "")
+             + (f". Planned transition into this clip: {transition}." if transition and transition != "cut" else ". It is a hard cut (no transition)."),
+             f"The LAST TWO attached images are the evidence: the second-to-last is the LAST picture of clip {previous}; the last is the FIRST picture of this take."]
+    if difference is not None:
+        lines.append(f"Measured by the tool: difference {difference:.2f} (0 = the same picture, 1 = opposite)"
+                     + (f"; the limit for a continuing shot is {limit:.2f}." if kind == "continues" else "."))
+    if prev_end:
+        lines.append(f"The clip before ends: {prev_end}")
+    if this_start:
+        lines.append(f"This clip begins: {this_start}")
+    lines.append(JOIN_RULES.get(kind, "Judge whether the two pictures look stitched together sensibly, without a jump that looks like a mistake."))
+    if transition and transition != "cut" and kind == "continues":
+        lines.append("A continuing shot should not dissolve or fade: that shows two pictures at once.")
+    return "\n".join(lines)
 
 
 def _frame_description(frames: list[tuple[float, Path]], pair_times: list[float]) -> str:

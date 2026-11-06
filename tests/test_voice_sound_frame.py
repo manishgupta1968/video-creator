@@ -289,8 +289,8 @@ def test_review_sees_the_clip_joins_the_plan_says_must_flow(svc, monkeypatch, tm
     p = svc.load(p.id)
     from video_generator.tree import numbering
     text, images = Reviewer(svc)._boundaries(p, p.root, numbering(p), tmp_path / "rv")
-    assert "clip 1.2 continues the same shot as clip 1.1" in text and len(images) == 2         # only the linked pair; the cut is not checked
-    assert "1.3" not in text
+    assert "clip 1.2 continues the same shot (after clip 1.1" in text                         # the linked pair is shown first
+    assert "clip 1.3 is a deliberate cut (after clip 1.2" in text and len(images) == 4          # a cut is shown too, so an accidental-looking one can be flagged
 
 
 @requires_ffmpeg
