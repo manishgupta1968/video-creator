@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from . import deps as deps_mod
 from . import guide as guide_mod
-from . import languages
+from . import languages, models_list
 from . import policy as policy_mod
 from . import estimate as est
 from . import media
@@ -1066,8 +1066,8 @@ class Service:
         remaining = round(sum(l.cost.likely_usd for l in todo), 2)
         budget = p.settings.budget_usd
         brain = self.reg.llm_plugin_name("default")
-        brain_model = self.config.llm.models.get(brain, "")
-        brain_entry = next((e for e in self.catalog.for_job("llm") if e.plugin == brain), None)
+        brain_model = self.reg.llm_model("default", brain)
+        brain_entry = self.reg.llm_entry("default")
         return {
             "budget": budget, "spent": spent, "ledger_total": total, "remaining_estimate": remaining,
             "left_in_budget": round(budget - spent - remaining, 2),
@@ -1127,6 +1127,65 @@ class Service:
         configured = [v["name"] for v in self.vendors_status() if v["configured"]]
         L.append("CONNECTED SERVICES: " + (", ".join(configured) or "none (free local tools only)"))
         return "\n".join(L)[:16000]
+
+    # ================================================================ every model, in plain words
+    def model_rows(self) -> list[dict]:
+        """EVERY catalogue model as a row for a list of choices: price in words, what it can do, whether it can be used and,
+        if not, exactly why. Brain models also carry what one plan draft would cost with them."""
+        rows = []
+        for e in self.catalog.entries:
+            why = self.reg.unusable_reason(e)
+            rows.append(models_list.row(e, not why, why, est._llm_cost(e, est.PLAN_TOKENS) if e.job == "llm" else None))
+        return rows
+
+    async def discover_models(self) -> dict:
+        """Ask each connected vendor which AI models your key can use (free, read-only). Models that are not in the catalogue yet
+        come back with in_catalogue = False: the screen offers them with a box for their price. Never raises: problems are returned."""
+        import os
+        from .catalog import load_vendors
+        specs = {v["id"]: v for v in load_vendors() if v.get("models_list")}
+        plugin_of = {e.vendor: e.plugin for e in self.catalog.for_job("llm") if e.vendor in specs}
+        known = {(e.plugin, e.model) for e in self.catalog.for_job("llm")}
+        found: list[dict] = []
+        errors: dict[str, str] = {}
+        skipped: list[str] = []
+        for vid, v in specs.items():
+            key = next((os.environ.get(k) for k in v.get("env", []) if os.environ.get(k)), "")
+            if not key:
+                skipped.append(v["name"])
+                continue
+            try:
+                got = await models_list.fetch(v["models_list"], key)
+            except models_list.ListError as exc:
+                errors[v["name"]] = str(exc)
+                continue
+            plugin = plugin_of.get(vid)
+            for m in got:
+                found.append({"id": m["id"], "name": m["name"], "vendor": vid, "plugin": plugin, "in_catalogue": (plugin, m["id"]) in known})
+        return {"models": found, "errors": errors, "skipped": skipped}
+
+    def add_model(self, plugin: str, model: str, usd_in: float, usd_out: float, note: str = "") -> dict:
+        """Put an AI model found at the vendor into your catalogue with the price you read on the vendor's page. If it is already
+        there, only its price is updated. The price matters: it is how every AI call and every estimate is counted."""
+        import re
+        from datetime import date
+        from .catalog import CatalogEntry, Price, Timing
+        if usd_in < 0 or usd_out < 0:
+            raise ValueError("a price cannot be negative")
+        rows = [e for e in self.catalog.for_job("llm") if e.plugin == plugin]
+        if not rows:
+            raise ValueError(f"unknown AI vendor: {plugin}")
+        same = next((e for e in rows if e.model == model), None)
+        base = same or rows[0]
+        entry = (same or CatalogEntry(id=re.sub(r"[^a-z0-9]+", "_", f"{plugin}_{model}".lower()).strip("_"), job="llm", plugin=plugin,
+                                      model=model, vendor=base.vendor, capabilities=dict(base.capabilities), quality=3,
+                                      time=Timing(queue_s=0, per_output_s=15), pricing_url=base.pricing_url,
+                                      note=note or "Found at the vendor; price entered by you")).model_copy(deep=True)
+        entry.price = Price(unit="1m_tokens", usd_in=usd_in, usd_out=usd_out)
+        entry.last_checked = date.today().isoformat()
+        self.catalog.save_user_override(entry)
+        self.reload()
+        return next(r for r in self.model_rows() if r["id"] == entry.id)
 
     def vendors_status(self) -> list[dict]:
         import os

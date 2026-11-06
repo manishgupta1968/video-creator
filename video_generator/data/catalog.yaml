@@ -408,9 +408,46 @@ llm:
     quality: 5
     price: {unit: 1m_tokens, usd_in: 4.0, usd_out: 20.0}
     time: {queue_s: 0, per_output_s: 20}
+    note: Strong all-round Claude for planning, scripts and reviewing clips.
     licence: commercial
     pricing_url: https://www.anthropic.com/pricing
     last_checked: "2026-11-04"
+  - id: claude_fable
+    plugin: anthropic
+    model: claude-fable-5-1
+    vendor: anthropic
+    capabilities: {vision: true, video: false}
+    quality: 5
+    price: {unit: 1m_tokens, usd_in: 10.0, usd_out: 50.0}
+    time: {queue_s: 0, per_output_s: 30}
+    note: Most capable Claude. Best for demanding planning; also the dearest.
+    licence: commercial
+    pricing_url: https://www.anthropic.com/pricing
+    last_checked: "2026-10-06"
+  - id: claude_sonnet
+    plugin: anthropic
+    model: claude-sonnet-5-5
+    vendor: anthropic
+    capabilities: {vision: true, video: false}
+    quality: 4
+    price: {unit: 1m_tokens, usd_in: 2.0, usd_out: 10.0}
+    time: {queue_s: 0, per_output_s: 15}
+    note: Fast and capable for everyday planning and scripts, at half the price of Opus.
+    licence: commercial
+    pricing_url: https://www.anthropic.com/pricing
+    last_checked: "2026-10-06"
+  - id: claude_haiku
+    plugin: anthropic
+    model: claude-haiku-5-5
+    vendor: anthropic
+    capabilities: {vision: true, video: false}
+    quality: 3
+    price: {unit: 1m_tokens, usd_in: 0.10, usd_out: 0.50}
+    time: {queue_s: 0, per_output_s: 8}
+    note: Very cheap and quick. Good for simple jobs; plans and scripts may be less rich.
+    licence: commercial
+    pricing_url: https://www.anthropic.com/pricing
+    last_checked: "2026-10-06"
   - id: gpt
     plugin: openai
     model: gpt-5
@@ -419,9 +456,22 @@ llm:
     quality: 5
     price: {unit: 1m_tokens, usd_in: 1.25, usd_out: 10.0}
     time: {queue_s: 0, per_output_s: 20}
+    note: OpenAI's main model for planning and scripts.
     licence: commercial
     pricing_url: https://openai.com/api/pricing
     last_checked: "2026-11-04"
+  - id: gpt_mini
+    plugin: openai
+    model: gpt-5-mini
+    vendor: openai
+    capabilities: {vision: true, video: false}
+    quality: 4
+    price: {unit: 1m_tokens, usd_in: 0.25, usd_out: 2.0}
+    time: {queue_s: 0, per_output_s: 10}
+    note: Smaller and much cheaper than gpt-5. Good for simple jobs.
+    licence: commercial
+    pricing_url: https://openai.com/api/pricing
+    last_checked: ""          # price taken from memory of the vendor's page: check it (Settings > Model catalogue)
   - id: gemini
     plugin: gemini
     model: gemini-2.5-pro
@@ -430,9 +480,22 @@ llm:
     quality: 4
     price: {unit: 1m_tokens, usd_in: 1.25, usd_out: 10.0}
     time: {queue_s: 0, per_output_s: 20}
+    note: Google's main model. It can watch whole clips, so it is the best Review Agent.
     licence: commercial
     pricing_url: https://ai.google.dev/gemini-api/docs/pricing
     last_checked: "2026-11-04"
+  - id: gemini_flash
+    plugin: gemini
+    model: gemini-2.5-flash
+    vendor: google
+    capabilities: {vision: true, video: true}
+    quality: 3
+    price: {unit: 1m_tokens, usd_in: 0.30, usd_out: 2.50}
+    time: {queue_s: 0, per_output_s: 8}
+    note: Quick and cheap, and it can still watch whole clips.
+    licence: commercial
+    pricing_url: https://ai.google.dev/gemini-api/docs/pricing
+    last_checked: ""          # price taken from memory of the vendor's page: check it (Settings > Model catalogue)
   - id: offline_brain
     plugin: fake_llm
     model: rules

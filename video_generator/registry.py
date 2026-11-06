@@ -81,6 +81,8 @@ def plugin_classes() -> dict[str, type]:
     return classes
 
 
+SIMPLE_TASKS = ("photo_query", "pick_photo", "explain", "command", "suggest_dependencies")      # brain tasks a cheaper AI can do
+
 MOTION_LEVELS = ("face", "body", "scene")      # what a model can animate, from least to most; a higher level covers a lower one
 
 
@@ -220,8 +222,32 @@ class Registry:
         except OSError:
             pass
 
+    # ------------------------------------------------------------ why a model cannot be used (shown in every list of choices)
+    def unusable_reason(self, e: CatalogEntry) -> str:
+        """'' when the model can be used; otherwise the exact cause in plain words."""
+        if not e.enabled or e.id in self.config.disabled_models:
+            return "switched off (Settings > Model catalogue)"
+        try:
+            ok, why = self.plugin(e.plugin).is_configured()
+        except KeyError:
+            return f"the {e.plugin} plugin is not installed"
+        return "" if ok else why
+
     # ------------------------------------------------------------ AI brain
+    def llm_group(self, task: str) -> str:
+        """The kind of work a brain task belongs to: review | simple | default (planning and scripts)."""
+        return "review" if task == "review" else "simple" if task in SIMPLE_TASKS else "default"
+
+    def _picked(self, task: str) -> Optional[tuple[str, str]]:
+        """The (plugin, model) chosen in Settings for this kind of work, when that plugin is connected."""
+        key = self.config.llm.per_task_model.get(self.llm_group(task), "")
+        plugin, _, model = key.partition(":")
+        return (plugin, model) if plugin and model and self.configured(plugin) else None
+
     def llm_plugin_name(self, task: str = "default") -> str:
+        picked = self._picked(task)
+        if picked:
+            return picked[0]
         llm = self.config.llm
         if task == "review" and llm.reviewer not in ("", "same"):
             name = llm.reviewer
@@ -234,10 +260,24 @@ class Registry:
                 return candidate
         return "fake_llm"
 
+    def llm_model(self, task: str, plugin_name: str) -> str:
+        """The model id to use on `plugin_name` for this task: the one chosen for this kind of work, else the plugin's usual."""
+        picked = self._picked(task)
+        if picked and picked[0] == plugin_name:
+            return picked[1]
+        return self.config.llm.models.get(plugin_name, "")
+
     def llm(self, task: str = "default") -> tuple[Plugin, str]:
         name = self.llm_plugin_name(task)
-        model = self.config.llm.models.get(name, "")
-        return self.plugin(name), model
+        return self.plugin(name), self.llm_model(task, name)
+
+    def llm_entry(self, task: str = "default", plugin_name: Optional[str] = None) -> Optional[CatalogEntry]:
+        """The catalogue row (price!) of the AI model a task really uses: matched by plugin AND model id, so two models of one
+        vendor are priced separately. Falls back to the plugin's first row when the model id is not in the catalogue."""
+        name = plugin_name or self.llm_plugin_name(task)
+        model = self.llm_model(task, name)
+        rows = [e for e in self.catalog.for_job("llm") if e.plugin == name]
+        return next((e for e in rows if e.model == model), None) or (rows[0] if rows else None)
 
     def llm_fallback_order(self, task: str) -> list[str]:
         first = self.llm_plugin_name(task)

@@ -7,6 +7,13 @@
   signup_url: https://console.anthropic.com
   pricing_url: https://www.anthropic.com/pricing
   need: One of Anthropic / OpenAI required (or use the free offline brain)
+  # how to ask this vendor which models your key can use (free, read-only). Used by Settings > AI brain > "Refresh from vendor".
+  models_list:
+    url: https://api.anthropic.com/v1/models?limit=100
+    headers: {x-api-key: "{key}", anthropic-version: "2023-06-01"}
+    items: data
+    id: id
+    name: display_name
 - id: openai
   name: OpenAI API
   env: [OPENAI_API_KEY]
@@ -14,6 +21,14 @@
   signup_url: https://platform.openai.com
   pricing_url: https://openai.com/api/pricing
   need: One of Anthropic / OpenAI required (or use the free offline brain)
+  models_list:
+    url: https://api.openai.com/v1/models
+    headers: {Authorization: "Bearer {key}"}
+    items: data
+    id: id
+    # the vendor lists every kind of model; keep the chat models (edit these two lines if the vendor renames them)
+    include: "^(gpt|o[0-9]|chatgpt)"
+    exclude: "(embedding|whisper|tts|dall-e|image|audio|realtime|transcribe|moderation|search|instruct|codex)"
 - id: fal
   name: fal.ai (aggregator)
   env: [FAL_KEY]
@@ -35,6 +50,15 @@
   signup_url: https://aistudio.google.com
   pricing_url: https://ai.google.dev/gemini-api/docs/pricing
   need: Recommended for people speaking in scenes and for images
+  models_list:
+    url: https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key={key}
+    items: models
+    id: name
+    strip_prefix: "models/"
+    name: displayName
+    include: "^gemini"
+    exclude: "(embedding|image|tts|live|audio|robotics|computer-use)"
+    require: {field: supportedGenerationMethods, contains: generateContent}
 - id: heygen
   name: HeyGen API
   env: [HEYGEN_API_KEY]

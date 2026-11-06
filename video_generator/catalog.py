@@ -38,6 +38,7 @@ class CatalogEntry(BaseModel):
     price: Price = Field(default_factory=Price)
     time: Timing = Field(default_factory=Timing)
     licence: str = ""
+    note: str = ""                          # one line shown beside the model in a list of choices
     pricing_url: str = ""
     last_checked: str = ""
     live_price: Optional[float] = None     # filled by price_lookup when available

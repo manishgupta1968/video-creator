@@ -345,11 +345,7 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
 
 # --------------------------------------------------------------------- cost & time
 def _llm_entry(reg: Registry, task: str) -> Optional[CatalogEntry]:
-    name = reg.llm_plugin_name(task)
-    for e in reg.catalog.for_job("llm"):
-        if e.plugin == name:
-            return e
-    return None
+    return reg.llm_entry(task)
 
 
 def _llm_cost(e: Optional[CatalogEntry], tokens: tuple[int, int]) -> float:

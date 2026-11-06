@@ -35,6 +35,9 @@ class LLMConfig(BaseModel):
         "fake_llm": "rules",
     })
     per_task: dict[str, str] = Field(default_factory=dict)  # task -> plugin
+    # the model chosen for a KIND of work, as "plugin:model" (for example "openai:gpt-5-mini"). Kinds: default (planning and
+    # scripts), review (the Review Agent), simple (explain, photo choice, commands). Empty = the plugin's usual model.
+    per_task_model: dict[str, str] = Field(default_factory=dict)
     reviewer: str = "same"                # same | anthropic | openai | gemini | fake_llm
     anthropic_effort: str = "medium"
     anthropic_fallbacks: bool = True

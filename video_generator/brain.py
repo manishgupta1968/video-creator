@@ -239,11 +239,11 @@ class Brain:
         errors = []
         for name in self.reg.llm_fallback_order(task):
             plugin = self.reg.plugin(name)
-            model = self.reg.config.llm.models.get(name, "")
+            model = self.reg.llm_model(task, name)
             try:
                 result, usage = await plugin.generate_json(system=system_prompt(), user=prompt, schema=schema,
                                                            model=model, images=images, video=video, meta={"task": task, **meta})
-                usage.cost_usd = self._cost(name, usage)
+                usage.cost_usd = self._cost(task, name, usage)
                 usage.raw["plugin"] = name
                 usage.raw["model"] = model
                 self.last_usage = usage
@@ -253,10 +253,11 @@ class Brain:
                 continue
         raise PluginError("AI brain failed: " + " | ".join(errors))
 
-    def _cost(self, plugin: str, usage: Usage) -> float:
-        for e in self.reg.catalog.for_job("llm"):
-            if e.plugin == plugin:
-                return usage.input_tokens / 1e6 * e.price.usd_in + usage.output_tokens / 1e6 * e.price.usd_out
+    def _cost(self, task: str, plugin: str, usage: Usage) -> float:
+        """What this call cost: the tokens the vendor reported times the price of the model that really answered."""
+        e = self.reg.llm_entry(task, plugin_name=plugin)
+        if e:
+            return usage.input_tokens / 1e6 * e.price.usd_in + usage.output_tokens / 1e6 * e.price.usd_out
         return 0.0
 
     # ------------------------------------------------------------- helpers

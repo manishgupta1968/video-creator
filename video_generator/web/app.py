@@ -605,8 +605,7 @@ def settings_view() -> dict:
         keys = [{"name": k, "set": bool(os.environ.get(k)), "from_file": k in ENV_FILE_KEYS} for k in v.get("env", [])]
         vendors.append({**v, "keys": keys, "configured": all(k["set"] for k in keys)})
     return {"config": cfg.model_dump(), "plugins": plugins, "vendors": vendors,
-            "catalog": [e.model_dump() | {"usable": svc.reg.entry_usable(e), "days_old": e.days_since_checked()}
-                        for e in svc.catalog.entries],
+            "catalog": svc.model_rows(),
             "brain": svc.reg.llm_plugin_name("default"), "reviewer": svc.reg.llm_plugin_name("review")}
 
 
@@ -626,6 +625,23 @@ async def patch_settings(patch: dict = Body(...)):
             data[k] = v
     Config.model_validate(data).save()
     svc.reload()
+    engine.svc = svc
+    return settings_view()
+
+
+@app.post("/api/models/llm/refresh")
+async def refresh_llm_models():
+    """Ask each connected AI vendor which models your key can use (free). Returns models, errors and skipped vendors."""
+    return await svc.discover_models()
+
+
+@app.post("/api/catalog/llm")
+async def add_llm_model(body: dict = Body(...)):
+    """Add an AI model found at the vendor to the catalogue, with its price per 1M tokens."""
+    try:
+        svc.add_model(body["plugin"], body["model"], float(body.get("usd_in", 0)), float(body.get("usd_out", 0)), body.get("note", ""))
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(400, str(exc))
     engine.svc = svc
     return settings_view()
 
@@ -656,7 +672,7 @@ async def test_plugin(body: dict = Body(...)):
 
         try:
             res, usage = await plugin.generate_json(system="Reply in JSON.", user='Say "ready".', schema=Ping,
-                                                    model=svc.config.llm.models.get(name, ""), max_tokens=2000,
+                                                    model=svc.reg.llm_model("default", name), max_tokens=2000,
                                                     meta={"task": "ping"})
             return {"ok": True, "message": f"connected — replied “{getattr(res, 'reply', '')}”"}
         except Exception as exc:
