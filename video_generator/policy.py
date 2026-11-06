@@ -24,6 +24,10 @@ class Policy(BaseModel):
     line_pause: float = Field(0.6, description="Pause between two spoken lines, in seconds.")
     edge_pad: float = Field(0.5, description="Quiet before the first and after the last spoken word, in seconds.")
 
+    # ---- music (made once for the whole video, then reused)
+    music_reuse_tolerance: float = Field(0.2, description="How much longer than the saved music track a video may get before new music is made (0.2 = 20%). A shorter video simply uses less of the track, and a slightly longer one repeats it.")
+    music_part_fade_s: float = Field(1.0, description="Fade in and out at the two ends of the music in a downloaded part, in seconds.")
+
     # ---- price ballpark (shown before any plan exists)
     ballpark_clip_seconds: float = Field(6.0, description="Typical length of one clip, in seconds. Used only for the rough price shown on the Start screen, before a plan exists.")
     ballpark_speech_share: list[float] = Field(default_factory=lambda: [0.3, 0.8], description="Low and high guess of how much of a video is spoken (0.3 = 30%). Used only for the rough price shown on the Start screen.")

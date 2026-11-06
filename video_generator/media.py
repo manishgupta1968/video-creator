@@ -686,6 +686,16 @@ def add_music(video: Path, music: Path, out: Path, music_volume: float = 0.18) -
     return out
 
 
+def music_slice(music: Path, out: Path, start: float, length: float, fade: float = 1.0) -> Path:
+    """The part of a music track that plays from `start` for `length` seconds, with a short fade at each end. A track shorter than
+    start + length repeats, so a slice always has the full length."""
+    fade = max(0.0, min(fade, length / 2))
+    af = f"afade=t=in:d={fade:.2f},afade=t=out:st={max(length - fade, 0):.2f}:d={fade:.2f}" if fade else "anull"
+    ff("-stream_loop", "-1", "-i", str(music), "-ss", f"{max(start, 0):.3f}", "-t", f"{length:.3f}", "-af", af,
+       "-ar", "44100", "-ac", "2", str(out))
+    return out
+
+
 def loudnorm(video: Path, out: Path) -> Path:
     ff("-i", str(video), "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-c:v", "copy", "-c:a", "aac", str(out))
     return out

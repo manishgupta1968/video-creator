@@ -18,6 +18,7 @@ from .context import effective_context
 from .deps import downstream, topo_order, upstream
 from .models import (ContextItem, ContextRole, ContextType, CostEstimate, CostLine, DependencyType,
                      DurationEstimate, EstimateBasis, Node, NodeKind, Project, Settings, ShotType, TimeEstimate)
+from . import musictrack
 from . import policy as policy_mod
 from .registry import MOTION_LEVELS, Registry
 from .tree import find, leaves, walk
@@ -364,7 +365,8 @@ def _music_entry(reg: Registry, project: Project) -> Optional[CatalogEntry]:
 
 
 def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Optional[ClipPlan] = None,
-                       total_seconds: float = 0, new_sheets: Optional[list[str]] = None) -> tuple[CostEstimate, TimeEstimate]:
+                       total_seconds: float = 0, new_sheets: Optional[list[str]] = None,
+                       music_saved: bool = False) -> tuple[CostEstimate, TimeEstimate]:
     plan = plan or plan_clip(project, node, reg)
     d = node.duration
     lines: list[CostLine] = []
@@ -428,7 +430,9 @@ def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Option
         step_times.append(25)
 
     m = _music_entry(reg, project)
-    if m and total_seconds > 0 and secs > 0:
+    if m and music_saved and secs > 0:
+        add("Music (saved track, reused)", "the music was already made once; every join and part reuses it", 0.0)
+    elif m and total_seconds > 0 and secs > 0:
         if m.price.unit == "minute":
             share = secs / 60 * m.unit_price
         else:
@@ -490,6 +494,10 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
 
     clip_time: dict[str, float] = {}
     seen_sheets: set[str] = set()
+    music_saved = False
+    if project.settings.music and _music_entry(reg, project):          # music already made once costs nothing more
+        real_possible = any(not e.is_free and reg.entry_usable(e) for e in reg.catalog.for_job("music"))
+        music_saved = musictrack.status(project, total, real_possible)["reusable"]
     for leaf in leaves(project):
         plan = plan_clip(project, leaf, reg)
         new_sheets: list[str] = []
@@ -522,7 +530,7 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
         for item in effective_context(project, leaf.id):
             if item.item.needs_consent and not item.item.consent.confirmed:
                 leaf.warnings.append(f"consent needed for {item.item.title or 'an actor'} before this clip can be made")
-        leaf.cost, leaf.time = estimate_clip_cost(project, leaf, reg, plan, total, new_sheets)
+        leaf.cost, leaf.time = estimate_clip_cost(project, leaf, reg, plan, total, new_sheets, music_saved)
         if leaf.status.value == "done":
             leaf.time = TimeEstimate(likely_s=0, explain="already made")
         clip_time[leaf.id] = leaf.time.likely_s

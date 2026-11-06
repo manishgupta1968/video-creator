@@ -435,6 +435,40 @@ def render(clip: Optional[str] = typer.Argument(None, help="clip number to make 
 
 
 @app.command()
+def export(node: str = typer.Argument(..., help="clip or part number, for example 2 or 2.1"),
+           output: Optional[Path] = typer.Option(None, "-o", help="where to save the video (default: the current folder)"),
+           music: str = typer.Option("auto", help="auto | new | none: auto uses the saved music and asks before a new track is paid for"),
+           yes: bool = typer.Option(False, "--yes", "-y", help="do not ask before paying for new music"),
+           project: Optional[str] = typer.Option(None, "-p")):
+    """Save the finished video of one clip or part (every clip under it must be made)."""
+    import shutil
+    from .runner import Engine
+    svc = _svc()
+    pid = _pid(project)
+    nid = _node(svc, pid, node)
+    eng = Engine(svc)
+    res = asyncio.run(eng.export_node(pid, nid, music))
+    if res.get("needs_music_choice"):
+        con.print(f"This part would need new background music for the whole video: ≈ ${res['cost_usd']:.2f} ({res['model']}); every part and "
+                  "the final video then reuse it.")
+        if yes or typer.confirm("Make the music now?"):
+            res = asyncio.run(eng.export_node(pid, nid, "new"))
+        else:
+            res = asyncio.run(eng.export_node(pid, nid, "none"))
+    src = ProjectStore.path_for(pid) / res["path"]
+    dest = (output or Path.cwd() / res["filename"])
+    if dest.is_dir():
+        dest = dest / res["filename"]
+    shutil.copy(src, dest)
+    con.print(f"Saved {dest} ({res['seconds']:.0f} s{', with music' if res['with_music'] else ', no music'})")
+    if res.get("srt"):
+        shutil.copy(ProjectStore.path_for(pid) / res["srt"], dest.with_suffix(".srt"))
+        con.print(f"Subtitles: {dest.with_suffix('.srt')}")
+    for note in res.get("notes", []):
+        con.print(f"[dim]{note}[/]")
+
+
+@app.command()
 def pick(clip: str, take: int, project: Optional[str] = typer.Option(None, "-p")):
     """Choose a take for a clip (1, 2, 3 …)."""
     from .runner import Engine

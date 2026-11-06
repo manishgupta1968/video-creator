@@ -8,6 +8,7 @@ import json
 import math
 import shutil
 import dataclasses
+import hashlib
 import tempfile
 import time
 import traceback
@@ -20,11 +21,12 @@ from . import policy as policy_mod
 from . import deps as deps_mod
 from . import estimate as est
 from . import media
+from . import musictrack
 from .context import effective_context, item_by_id
 from .models import (ActorDetails, ContextItem, ContextRole, ContextType, DependencyType, EstimateBasis, Node, NodeKind,
                      NodeStatus, Project, ShotType, Take, now_iso)
 from .plugins.base import (AvatarRequest, ImageRequest, PluginError, Usage, VideoRequest, VoiceSpec)
-from .project import ProjectStore
+from .project import ProjectStore, slug
 from .reviewer import Reviewer
 from .tree import effective_style, find, leaves, numbering, walk
 
@@ -1302,16 +1304,35 @@ class Engine:
         await self._finalize_clip(pid, nid, take.id)
 
     # ================================================================ assembly
-    async def assemble(self, pid: str) -> Optional[str]:
-        """Join the finished clips into the final video (transitions, music, subtitles, export)."""
+    async def assemble(self, pid: str, music: str = "auto") -> Optional[str]:
+        """Join the finished clips into the final video (transitions, music, subtitles, export).
+        music: auto = reuse the saved track while it still fits, else make one | reuse = only the saved track |
+        new = make a new track | none = no music this time."""
         self.step(pid, "final", "Joining the clips into one video", 30)
         try:
-            return await self._assemble(pid)
+            return await self._assemble(pid, music)
         finally:
             self.end_step(pid, "final")
             self.emit(pid, {"type": "project"})
 
-    async def _assemble(self, pid: str) -> Optional[str]:
+    def _join_node(self, pid: str, node: Node, size: tuple[int, int], fps: int) -> Path:
+        """Join everything under a node into ONE video file, bottom up, each part with its own transitions (blocking: run in a thread)."""
+        if node.is_leaf:
+            return self.abs(pid, node.output)
+        kids = [self._join_node(pid, c, size, fps) for c in node.children]
+        out = self.cdir(pid, node.id) / "part.mp4"
+        trans = [c.transition_in for c in node.children]
+        fitted = []
+        for i, k in enumerate(kids):
+            f = self.cdir(pid, node.id) / f"in_{i:02d}.mp4"
+            media.normalize_clip(k, f, size, fps)
+            fitted.append(f)
+        media.join_clips(fitted, trans, out, size, fps)
+        for f in fitted:
+            f.unlink(missing_ok=True)
+        return out
+
+    async def _assemble(self, pid: str, music: str = "auto") -> Optional[str]:
         p = self.svc.load(pid)
         if not all(n.status == NodeStatus.done for n in leaves(p)):
             await self.message(pid, "Some clips are not made yet")
@@ -1320,23 +1341,7 @@ class Engine:
         size = media.frame_size(p.settings.aspect, p.settings.resolution)
         fps = p.settings.fps
 
-        def build(node: Node) -> Path:
-            if node.is_leaf:
-                return self.abs(pid, node.output)
-            kids = [build(c) for c in node.children]
-            out = self.cdir(pid, node.id) / "part.mp4"
-            trans = [c.transition_in for c in node.children]
-            fitted = []
-            for i, k in enumerate(kids):
-                f = self.cdir(pid, node.id) / f"in_{i:02d}.mp4"
-                media.normalize_clip(k, f, size, fps)
-                fitted.append(f)
-            media.join_clips(fitted, trans, out, size, fps)
-            for f in fitted:
-                f.unlink(missing_ok=True)
-            return out
-
-        root_out = await asyncio.to_thread(build, p.root)
+        root_out = await asyncio.to_thread(self._join_node, pid, p.root, size, fps)
 
         def mark_parts(pr: Project):
             for n, _ in walk(pr.root):
@@ -1353,34 +1358,14 @@ class Engine:
         current = root_out
         p = self.svc.load(pid)
         notes: list[str] = []
-        if p.settings.music:
+        if p.settings.music and music != "none":
             self.step(pid, "final", "Making and mixing the background music", 30)
             try:
-                reg = self.svc.reg
-                mode = p.settings.quality_mode
-                ref = None
-                for c in p.context:
-                    if c.role in (ContextRole.music_reference, ContextRole.sound) and c.scope == "project":
-                        files = [self.abs(pid, f) for f in c.files]
-                        ref = files[0] if files else None
-                mood = f"{p.music_advice or ''} {p.style.mood} {p.style.look} music for: {p.goal}".strip()
-                music = out_dir / "music.mp3"
-                first = reg.choose("music", mode=mode)
-                rest = reg.candidates("music", mode=mode)
-
-                async def call_music(e):
-                    target = music.with_suffix(".wav") if e.is_free else music
-                    _, u = await reg.plugin(e.plugin).generate(mood, total, target, e.model, ref)
-                    return u
-                used, _ = await self._with_fallback(
-                    pid, first, rest, call_music, "music", "music bed",
-                    cost_of=lambda e: (total / 60 * e.unit_price) if e.price.unit == "minute" else e.unit_price,
-                    expected_of=lambda e: e.time.queue_s + e.time.per_output_s * total, nid="final", any_error=True)
-                if used.is_free:
-                    music = music.with_suffix(".wav")
-                with_music = out_dir / "with_music.mp4"
-                media.add_music(current, music, with_music)
-                current = with_music
+                track = await self._ensure_music(pid, total, music)
+                if track:
+                    with_music = out_dir / "with_music.mp4"
+                    media.add_music(current, track, with_music)
+                    current = with_music
             except Exception as exc:
                 traceback.print_exc()
                 why = str(exc)
@@ -1424,6 +1409,137 @@ class Engine:
                 traceback.print_exc()
         return str(final)
 
+    async def _ensure_music(self, pid: str, total: float, mode: str = "auto") -> Optional[Path]:
+        """The background music for the WHOLE video. It is made once and saved (see musictrack), so joining again and every
+        downloaded part reuse it. mode: auto = reuse the saved track while it still fits, else make one | reuse = the saved
+        track whatever its age (None when there is none) | new = make a new track now."""
+        p = self.svc.load(pid)
+        reg = self.svc.reg
+        qmode = p.settings.quality_mode
+        saved = musictrack.status(p, total, any(not e.is_free and reg.entry_usable(e) for e in reg.catalog.for_job("music")))
+        if mode == "reuse":
+            return musictrack.path(pid) if saved["exists"] else None
+        if mode == "auto" and saved["reusable"]:
+            return musictrack.path(pid)
+        out_dir = musictrack.folder(pid)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ref = musictrack.reference(p)
+        mood = musictrack.mood_for(p)
+        music = out_dir / "music.mp3"
+        first = reg.choose("music", mode=qmode)
+        rest = reg.candidates("music", mode=qmode)
+
+        async def call_music(e):
+            target = music.with_suffix(".wav") if e.is_free else music
+            _, u = await reg.plugin(e.plugin).generate(mood, total, target, e.model, ref)
+            return u
+        used, _ = await self._with_fallback(
+            pid, first, rest, call_music, "music", "music bed",
+            cost_of=lambda e: musictrack.cost(e, total),
+            expected_of=lambda e: e.time.queue_s + e.time.per_output_s * total, nid="final", any_error=True)
+        made = music.with_suffix(".wav") if used.is_free else music
+        (music if used.is_free else music.with_suffix(".wav")).unlink(missing_ok=True)       # only ONE saved track
+        musictrack.save(self.svc.load(pid), made, total, used.id, used.is_free, musictrack.cost(used, total))
+        return made
+
+    def _timeline_starts(self, p: Project) -> dict[str, float]:
+        """Where each clip starts in the joined whole video (seconds), allowing for the overlap of its transition."""
+        starts: dict[str, float] = {}
+        t = 0.0
+        for i, leaf in enumerate(leaves(p)):
+            if i and leaf.transition_in not in ("cut", "", None):
+                t = max(t - 0.5, 0.0)
+            starts[leaf.id] = t
+            out = self.abs(p.id, leaf.output)
+            t += media.probe_duration(out) if out and out.exists() else leaf.duration.likely_s
+        return starts
+
+    async def export_node(self, pid: str, nid: str, music: str = "auto") -> dict:
+        """A finished video of ONE clip or part, ready to download. A clip is its finished file. A part is its clips joined with
+        their transitions, with the SAME music as the final video (a free slice of the saved track) and a subtitle file.
+        music: auto = use the saved track if there is one; if there is none and a new one would cost money, answer
+        {needs_music_choice} and spend nothing | new = make the music for the whole video now (every part and the final video then
+        reuse it) | none = no music."""
+        p = self.svc.load(pid)
+        self.svc.refresh(p)
+        n = find(p, nid)
+        nums = numbering(p)
+        below = [x for x, _ in walk(n) if x.is_leaf]
+        missing = [x for x in below if x.status != NodeStatus.done or not (x.output and self.abs(pid, x.output) and self.abs(pid, x.output).exists())]
+        if missing:
+            raise ValueError(f"{len(missing)} of {len(below)} clip(s) are still to make, so this {'clip' if n.is_leaf else 'part'} cannot be "
+                             "downloaded yet.")
+        fmt = p.settings.format
+        label = "-".join(x for x in (slug(p.name), (nums.get(nid) or "video").replace(".", "-"), slug(n.title or n.goal)) if x)[:90]
+        result = {"filename": f"{label}.{fmt}", "srt": None, "srt_filename": f"{label}.srt", "with_music": False, "notes": []}
+        parts_dir = self.pdir(pid) / "output" / "parts"
+        parts_dir.mkdir(parents=True, exist_ok=True)
+
+        def stamp(x: Node) -> str:
+            f = self.abs(pid, x.output)
+            return f"{x.id}:{x.output}:{f.stat().st_mtime_ns}:{f.stat().st_size}:{x.transition_in}"
+
+        if n.id == p.root.id and p.final_output and ProjectStore.final_signature(p) == p.final_hash and self.abs(pid, p.final_output).exists():
+            return {**result, "path": p.final_output, "srt": self.rel(pid, self.pdir(pid) / "output" / "final.srt")
+                    if (self.pdir(pid) / "output" / "final.srt").exists() else None, "with_music": bool(p.settings.music),
+                    "seconds": round(media.probe_duration(self.abs(pid, p.final_output)), 1)}
+
+        track: Optional[Path] = None
+        if not n.is_leaf and p.settings.music and music != "none":
+            track = musictrack.path(pid)
+            if not track:
+                total_est = p.root.duration.likely_s
+                try:
+                    entry = self.svc.reg.choose("music", mode=p.settings.quality_mode)
+                except LookupError:
+                    entry = None
+                price = musictrack.cost(entry, total_est)
+                if entry and price > 0 and music != "new":
+                    return {"needs_music_choice": True, "cost_usd": round(price, 2), "model": entry.id, "seconds": round(total_est, 1)}
+                if entry:
+                    self.step(pid, nid, "Making the background music (kept for every part and the final video)", 30)
+                    try:
+                        track = await self._ensure_music(pid, total_est, "new")
+                    finally:
+                        self.end_step(pid, nid)
+            else:
+                saved = musictrack.status(p, p.root.duration.likely_s, False)
+                if not saved["reusable"] and saved["why"]:
+                    result["notes"].append(f"The music is from the saved track ({saved['why']}).")
+        track_stamp = f"{track.name}:{track.stat().st_mtime_ns}" if track else "no-music"
+        sig = hashlib.sha1(("|".join(stamp(x) for x in below) + f"|{fmt}|{track_stamp}|{n.is_leaf}").encode()).hexdigest()[:12]
+        out = parts_dir / f"{nid}_{sig}.{fmt}"
+        srt = parts_dir / f"{nid}_{sig}.srt"
+        size = media.frame_size(p.settings.aspect, p.settings.resolution)
+        starts = self._timeline_starts(p)
+        entries = self._subtitle_entries(p, below)
+
+        def build() -> float:
+            if not out.exists():
+                if n.is_leaf:
+                    current = self.abs(pid, n.output)
+                else:
+                    current = self._join_node(pid, n, size, p.settings.fps)
+                    if track:
+                        length = media.probe_duration(current)
+                        piece = parts_dir / f"{nid}_music.wav"
+                        media.music_slice(track, piece, starts.get(below[0].id, 0.0), length, policy_mod.current().music_part_fade_s)
+                        mixed = parts_dir / f"{nid}_with_music.mp4"
+                        media.add_music(current, piece, mixed)
+                        current = mixed
+                media.to_format(current, out, fmt)
+            if entries:
+                media.write_srt(entries, srt)                  # times are counted from 0 at the first clip of this part
+            return media.probe_duration(out)
+
+        self.step(pid, nid, "Joining the clips of this part" if not n.is_leaf else "Preparing this clip for download", 20)
+        try:
+            seconds = await asyncio.to_thread(build)
+        finally:
+            self.end_step(pid, nid)
+        return {**result, "path": self.rel(pid, out), "srt": self.rel(pid, srt) if entries else None, "with_music": bool(track),
+                "seconds": round(seconds, 1)}
+
     def _write_credits(self, p: Project, out_dir: Path) -> None:
         """Credits for stock photos the user chose (many licences require attribution)."""
         lines = []
@@ -1436,10 +1552,11 @@ class Engine:
         elif path.exists():
             path.unlink()
 
-    def _subtitle_entries(self, p: Project) -> list[tuple[float, float, str]]:
+    def _subtitle_entries(self, p: Project, only: Optional[list[Node]] = None) -> list[tuple[float, float, str]]:
+        """Subtitle lines with their times. `only` = just these clips (a part), counted from 0 at the first of them."""
         entries = []
         offset = 0.0
-        for leaf in leaves(p):
+        for leaf in (only if only is not None else leaves(p)):
             out = self.abs(p.id, leaf.output)
             dur = media.probe_duration(out) if out and out.exists() else leaf.duration.likely_s
             meta = self.cdir(p.id, leaf.id) / "voice_lines.json"

@@ -521,9 +521,35 @@ async def stop(pid: str):
 
 
 @app.post("/api/projects/{pid}/assemble")
-async def assemble(pid: str):
-    bg(engine.assemble(pid), pid, "Stitching the final video")
+async def assemble(pid: str, body: dict = Body(default={})):
+    """Join the clips into the final video. body.music: auto | reuse | new | none (see Engine.assemble)."""
+    music = body.get("music", "auto")
+    if music not in ("auto", "reuse", "new", "none"):
+        raise HTTPException(400, "music must be auto, reuse, new or none")
+    bg(engine.assemble(pid, music), pid, "Stitching the final video")
     return {"ok": True}
+
+
+@app.get("/api/projects/{pid}/music")
+async def music_status(pid: str):
+    """The saved music track, and what joining would cost for music (0 when the saved track is reused)."""
+    return await guard(svc.music_status)(pid)
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/export")
+async def export_node(pid: str, nid: str, body: dict = Body(default={})):
+    """A finished video of one clip or part, ready to download. body.music: auto | new | none. When a new music track would cost
+    money and you have not said so, the answer is {needs_music_choice: true, cost_usd, ...} and nothing is spent."""
+    music = body.get("music", "auto")
+    if music not in ("auto", "new", "none"):
+        raise HTTPException(400, "music must be auto, new or none")
+    res = await guard(engine.export_node)(pid, nid, music)
+    if res.get("path"):
+        from urllib.parse import quote
+        res["url"] = f"/files/{pid}/{res['path']}?download={quote(res['filename'])}"
+        if res.get("srt"):
+            res["srt_url"] = f"/files/{pid}/{res['srt']}?download={quote(res['srt_filename'])}"
+    return res
 
 
 @app.post("/api/projects/{pid}/nodes/{nid}/pick")
@@ -576,7 +602,7 @@ async def revert(pid: str, nid: str, body: dict = Body(...)):
 
 # ===================================================================== files
 @app.get("/files/{pid}/{path:path}")
-async def files(pid: str, path: str):
+async def files(pid: str, path: str, download: str = ""):
     try:
         base = ProjectStore.path_for(pid).resolve()
     except FileNotFoundError:
@@ -586,6 +612,8 @@ async def files(pid: str, path: str):
         raise HTTPException(403, "outside project")
     if not target.exists() or not target.is_file():
         raise HTTPException(404, "not found")
+    if download:                                      # save under a friendly name instead of the file's own
+        return FileResponse(target, filename=Path(download).name or target.name)
     return FileResponse(target)
 
 

@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from . import deps as deps_mod
 from . import guide as guide_mod
-from . import languages, models_list
+from . import languages, models_list, musictrack
 from . import policy as policy_mod
 from . import estimate as est
 from . import media
@@ -1127,6 +1127,25 @@ class Service:
         configured = [v["name"] for v in self.vendors_status() if v["configured"]]
         L.append("CONNECTED SERVICES: " + (", ".join(configured) or "none (free local tools only)"))
         return "\n".join(L)[:16000]
+
+    def music_status(self, pid: str) -> dict:
+        """What the Join button needs to say about the music BEFORE it spends: is there a saved track that can be reused (cost 0),
+        or would a new one be made, with which model, for how much."""
+        p = self.load(pid)
+        self.refresh(p)
+        total = p.root.duration.likely_s
+        entry = None
+        if p.settings.music:
+            try:
+                entry = self.reg.choose("music", mode=p.settings.quality_mode)
+            except LookupError:
+                entry = None
+        real_possible = any(not e.is_free and self.reg.entry_usable(e) for e in self.catalog.for_job("music"))
+        st = musictrack.status(p, total, real_possible)
+        new_cost = round(musictrack.cost(entry, total), 2)
+        return {"enabled": bool(entry), "total_s": round(total, 1), "saved": st["exists"], "reusable": st["reusable"], "why": st["why"],
+                "made_for_s": st["made_for_s"], "model": entry.id if entry else "", "free": bool(entry and entry.is_free),
+                "cost_new_usd": new_cost, "cost_usd": 0.0 if (st["reusable"] or not entry) else new_cost}
 
     # ================================================================ every model, in plain words
     def model_rows(self) -> list[dict]:
