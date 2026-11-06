@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from . import media
+from . import languages, media
 from . import policy as policy_mod
 from .models import ContextItem, Project
 from .plugins.base import VoiceChoice, VoiceSpec
@@ -71,7 +71,7 @@ class Profile:
 
 def profile_for(actor: Optional[ContextItem], project: Project) -> Profile:
     """The speaker's profile: what the planner/user set, completed from the words in the description."""
-    lang = project.settings.language
+    lang = languages.effective(project.settings.language)
     if not actor or not actor.actor:
         return Profile(language=lang, description="warm clear narrator")
     a = actor.actor

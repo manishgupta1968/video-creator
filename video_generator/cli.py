@@ -94,11 +94,14 @@ def new(goal: str, length: float = typer.Option(60, help="target length in secon
         aspect: str = "16:9", format: str = typer.Option("mp4", help="mp4 or mov"),
         add: List[Path] = typer.Option([], "--add", help="slides, clips, photos, voice samples, notes"),
         budget: Optional[float] = None, mode: str = typer.Option("", help="best | balanced | budget | free"),
+        auto_length: bool = typer.Option(False, "--auto-length", help="no length asked for: as short as the story allows"),
+        language: str = typer.Option("", help="spoken language code (en, hi …), or auto = the plan decides from the goal; default en"),
         no_draft: bool = typer.Option(False, help="create without the AI first draft")):
     """Create a project from a goal and draft the whole plan."""
     svc = _svc()
     p = svc.new_project(goal, seconds=length, aspect=aspect, fmt=format, files=add, budget=budget,
-                        quality_mode=mode or None)
+                        quality_mode=mode or None, length_mode="auto" if auto_length else None,
+                        language=language or None)
     if not no_draft:
         with con.status("Drafting the plan…"):
             asyncio.run(svc.draft(p.id))

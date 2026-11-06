@@ -24,6 +24,10 @@ class Policy(BaseModel):
     line_pause: float = Field(0.6, description="Pause between two spoken lines, in seconds.")
     edge_pad: float = Field(0.5, description="Quiet before the first and after the last spoken word, in seconds.")
 
+    # ---- price ballpark (shown before any plan exists)
+    ballpark_clip_seconds: float = Field(6.0, description="Typical length of one clip, in seconds. Used only for the rough price shown on the Start screen, before a plan exists.")
+    ballpark_speech_share: list[float] = Field(default_factory=lambda: [0.3, 0.8], description="Low and high guess of how much of a video is spoken (0.3 = 30%). Used only for the rough price shown on the Start screen.")
+
     # ---- picture integrity
     max_freeze_s: float = Field(0.5, description="The longest a picture may stay frozen at the end of a clip before it counts as a defect, in seconds.")
     max_freeze_ratio: float = Field(0.15, description="The largest share of a clip that may be frozen (0.15 = 15%).")

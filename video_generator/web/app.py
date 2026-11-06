@@ -115,7 +115,21 @@ def guard(fn):
 # ===================================================================== projects
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "ffmpeg": media.have_ffmpeg(), "brain": svc.reg.llm_plugin_name("default")}
+    return {"ok": True, "ffmpeg": media.have_ffmpeg(), "brain": svc.reg.llm_plugin_name("default"),
+            "default_budget": svc.config.budget_usd, "default_quality": svc.config.quality_mode}
+
+
+@app.get("/api/languages")
+async def get_languages():
+    """The languages offered on the Start screen (data/languages.yaml)."""
+    from .. import languages
+    return [{"code": c, "name": n} for c, n in languages.names().items()]
+
+
+@app.get("/api/ballpark")
+async def get_ballpark(seconds: float = 0, quality: str = ""):
+    """A rough price before any plan exists, from the catalogue prices of the models this quality would pick."""
+    return svc.ballpark(seconds or None, quality or None)
 
 
 @app.get("/api/projects")
@@ -126,6 +140,7 @@ async def list_projects():
 @app.post("/api/projects")
 async def create_project(goal: str = Form(...), seconds: float = Form(60), aspect: str = Form("16:9"),
                          format: str = Form("mp4"), quality_mode: str = Form(""), budget: float = Form(0),
+                         length_mode: str = Form(""), language: str = Form(""),
                          files: list[UploadFile] = File(default=[])):
     tmp = Path(tempfile.mkdtemp())
     paths = []
@@ -137,7 +152,8 @@ async def create_project(goal: str = Form(...), seconds: float = Form(60), aspec
             shutil.copyfileobj(f.file, out)
         paths.append(dest)
     p = svc.new_project(goal, seconds=seconds, aspect=aspect, fmt=format, files=paths,
-                        budget=budget or None, quality_mode=quality_mode or None)
+                        budget=budget or None, quality_mode=quality_mode or None,
+                        length_mode=length_mode or None, language=language or None)
     shutil.rmtree(tmp, ignore_errors=True)
     bg(svc.draft(p.id), p.id, "Drafting your plan")
     return {"id": p.id}
@@ -454,6 +470,13 @@ async def delete_dep(pid: str, did: str):
 @app.post("/api/projects/{pid}/deps/suggest")
 async def suggest_deps(pid: str):
     await guard(svc.suggest_dependencies)(pid)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/unpin")
+async def unpin(pid: str, body: dict = Body(default={})):
+    """Clear the model chosen on clips (all clips pinned to a free model when no ids are given): the tool picks the best again."""
+    await guard(svc.unpin)(pid, body.get("ids"))
     return view(pid)
 
 

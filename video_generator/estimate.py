@@ -17,7 +17,7 @@ from .catalog import CatalogEntry
 from .context import effective_context
 from .deps import downstream, topo_order, upstream
 from .models import (ContextItem, ContextRole, ContextType, CostEstimate, CostLine, DependencyType,
-                     DurationEstimate, EstimateBasis, Node, NodeKind, Project, ShotType, TimeEstimate)
+                     DurationEstimate, EstimateBasis, Node, NodeKind, Project, Settings, ShotType, TimeEstimate)
 from . import policy as policy_mod
 from .registry import MOTION_LEVELS, Registry
 from .tree import find, leaves, walk
@@ -565,7 +565,7 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
     project.root.time = TimeEstimate(likely_s=round(wall), explain=f"{len(order)} clip(s), up to {parallel} at the same time")
 
     target = project.settings.target_seconds
-    if target and total:
+    if target and total and project.settings.length_mode != "auto":      # auto = no length was asked for: nothing to compare with
         diff = (total - target) / target
         if abs(diff) > 0.10:
             biggest = max(project.root.children, key=lambda c: c.duration.likely_s, default=None)
@@ -601,6 +601,62 @@ def estimate_targets(project: Project, reg: Registry, targets: list[str]) -> dic
     return {"clips": todo, "extra_upstream": extra, "cost_usd": round(cost, 2), "time_s": round(wall),
             "spent_usd": project.run.spent_usd, "budget_usd": project.settings.budget_usd,
             "over_budget": project.run.spent_usd + cost > project.settings.budget_usd}
+
+
+WORDS_PER_MIN, CHARS_PER_WORD = 150, 6.2       # for the price ballpark: a spoken minute is about 930 characters
+
+
+def ballpark(reg: Registry, config, mode: str, seconds: Optional[float] = None) -> dict:
+    """A rough price BEFORE any plan exists: what a typical minute of video costs with the models this quality mode would pick,
+    from the catalogue prices. A low and a high guess (one take or the usual number for people; less or more speech).
+    Exact numbers come from the plan; this only tells you the size of the bill."""
+    pol = policy_mod.current()
+    clip_s = max(pol.ballpark_clip_seconds, 1.0)
+    clips = 60.0 / clip_s
+    speech_lo, speech_hi = (list(pol.ballpark_speech_share) + [0.3, 0.8])[:2]
+    takes_hi = max(Settings().takes_people, 1)
+    lines: list[dict] = []
+    models: dict[str, str] = {}
+
+    def pick(job: str, shot: str = "other") -> Optional[CatalogEntry]:
+        try:
+            e = reg.choose(job, shot, mode=mode)
+        except LookupError:
+            return None
+        models[job] = e.id
+        return e
+
+    def add(item: str, lo: float, hi: float) -> None:
+        lines.append({"item": item, "low": round(lo, 2), "high": round(hi, 2)})
+
+    v, img, voice, sfx, music = pick("video"), pick("image"), pick("voice"), pick("sfx"), pick("music")
+    if v:
+        billed = clips * v.billed_seconds(clip_s)
+        add(f"Video ({v.id})", billed * v.unit_price, billed * v.unit_price * takes_hi)
+    if img:
+        add(f"Keyframe pictures ({img.id})", clips * img.unit_price, clips * img.unit_price * takes_hi)
+    if voice:
+        chars = WORDS_PER_MIN * CHARS_PER_WORD
+        add(f"Voice ({voice.id})", chars * speech_lo / 1000 * voice.unit_price, chars * speech_hi / 1000 * voice.unit_price)
+    if sfx:
+        add(f"Natural sound ({sfx.id})", 60 * sfx.unit_price, 60 * sfx.unit_price * takes_hi)
+    review = _llm_entry(reg, "review")
+    if review:
+        add("Review agent", clips * _llm_cost(review, REVIEW_TOKENS), clips * _llm_cost(review, REVIEW_TOKENS) * takes_hi)
+    if music:
+        # a price per minute is for one minute of music; any other unit (per request) is one flat price for the whole track
+        add(f"Music ({music.id})", music.unit_price, music.unit_price)
+    brain = _llm_entry(reg, "draft")
+    if brain:
+        one = _llm_cost(brain, PLAN_TOKENS) + clips * _llm_cost(brain, SCRIPT_TOKENS)
+        add("AI brain (plan and scripts)", one, one)
+    low, high = round(sum(l["low"] for l in lines), 2), round(sum(l["high"] for l in lines), 2)
+    real = bool(v and not v.is_free)
+    out = {"mode": mode, "real": real, "per_minute": {"low": low, "high": high}, "lines": lines, "models": models, "seconds": seconds,
+           "total": None}
+    if seconds:
+        out["total"] = {"low": round(low * seconds / 60, 2), "high": round(high * seconds / 60, 2)}
+    return out
 
 
 def _fmt(s: float) -> str:

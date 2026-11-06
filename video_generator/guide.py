@@ -19,7 +19,7 @@ STATES = ("done", "current", "attention", "todo")      # attention = not finishe
 
 def _act(kind: str, label: str, **kw: Any) -> dict:
     """An action the screen can run. kind: settings | select | context | budget | run | scripts | assemble | final |
-    resume | show.  `help` names a control the screen can highlight with 'Show me'."""
+    resume | show | split | unpin.  `help` names a control the screen can highlight with 'Show me'."""
     return {"kind": kind, "label": label, **kw}
 
 
@@ -46,7 +46,9 @@ def compute(svc, project: Project, summary: dict) -> dict:
     # ---- 1. services
     brain_offline = summary.get("brain", "fake_llm") == "fake_llm"
     prev = summary.get("preview", {})
-    previews = (bool(prev.get("clips")) or bool(prev.get("all_preview"))) and not prev.get("chosen_free_mode")
+    # only a REAL missing key asks you to connect something; `jobs` lists the kinds of work with no real model connected.
+    # A clip you pinned to a free model, or free preview quality, is not a missing key (see Service.preview_info causes)
+    previews = bool(prev.get("jobs")) and not prev.get("chosen_free_mode")
     missing = []
     if brain_offline:
         missing.append("an AI brain (OpenAI, Anthropic or Gemini) to plan and review")
@@ -175,6 +177,12 @@ def compute(svc, project: Project, summary: dict) -> dict:
         step("finish", "Watch it, then download", "todo", "The last step: watch the whole video, then download the file.")
 
     # ---- things that do not block the path
+    pinned = [x for x in prev.get("pinned", []) if x in numbers]
+    if pinned:
+        names = ", ".join(_num(numbers, x) for x in pinned[:4]) + ("…" if len(pinned) > 4 else "")
+        issues.append({"text": f"{len(pinned)} clip(s) ({names}) are set to the free preview model, so they will only be placeholders. "
+                               "This is a choice made on the clip, not a missing key.",
+                       "action": _act("unpin", "Use the best model", ids=pinned, help="unpin")})
     for note in project.final_notes[:2]:
         issues.append({"text": note[:260], "action": _act("settings", "Open Settings", help="settings")})
     flagged = [r for r in project.reviews if r.verdict == "does_not_meet_goal" and r.target]

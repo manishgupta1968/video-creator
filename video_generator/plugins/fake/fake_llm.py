@@ -104,6 +104,8 @@ class FakeLLM(LLM):
     def _draft(self, m: dict) -> dict:
         goal = m.get("goal", "").strip()
         secs = float(m.get("seconds") or 60)
+        if m.get("auto_length"):
+            secs = 24.0                       # no length asked for: the offline planner keeps it short, one clip per part
         g = goal.lower()
         actors = []
         existing = [c for c in m.get("context", []) if c.get("type") == "actor"]

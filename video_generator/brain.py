@@ -13,6 +13,7 @@ from typing import Literal, Optional, Type
 
 from pydantic import BaseModel, Field
 
+from . import languages
 from .context import effective_context, summarize_for_llm
 from .models import (ActorInShot, ClipScript, ContextType, DialogueLine, Node, Project, ShotType)
 from .plugins.base import PluginError, Usage
@@ -60,6 +61,7 @@ class StyleDraft(BaseModel):
 
 class ProjectDraft(BaseModel):
     title: str
+    language: str = ""                # the language spoken in the video, a short code (en, hi …); "" = not decided
     style: StyleDraft = Field(default_factory=StyleDraft)
     actors: list[ActorDraft] = Field(default_factory=list)
     parts: list[PartDraft] = Field(default_factory=list)
@@ -277,11 +279,40 @@ class Brain:
         return "\n".join(lines) or "(no actors yet)"
 
     # ------------------------------------------------------------- tasks
+    @staticmethod
+    def length_blocks(project: Project) -> tuple[str, str]:
+        """(the LENGTH line, the length rules) for the draft prompt. Auto = no length was asked for."""
+        s = project.settings
+        if s.length_mode == "auto":
+            return ("LENGTH: none was given. Make the video as short as the story allows without losing its meaning or quality.",
+                    "every spoken line is heard in full and at a natural pace, every clip is only as long as its speech and action need, "
+                    "and there is no filler. The video's length is the sum of the clip seconds you give.")
+        return (f"TARGET LENGTH: {s.target_seconds:g} seconds",
+                "the clip seconds MUST add up to TARGET LENGTH (do not plan more).")
+
+    @staticmethod
+    def language_block(project: Project) -> str:
+        code = languages.normalise(project.settings.language)
+        if not code:
+            return ("LANGUAGE: not set. Decide from the goal which language the people in this video speak, and return it as `language` "
+                    "(a short code such as en, hi, ta).")
+        return (f"LANGUAGE: the people in this video speak {languages.name_of(code)} ({code}). Write every spoken line and narration in "
+                f"it, in the language's own script. Return `language` as {code}.")
+
+    @staticmethod
+    def language_line(project: Project) -> str:
+        code = languages.normalise(project.settings.language)
+        return (f"{languages.name_of(code)} ({code}): write dialogue and narration in it, in its own script." if code
+                else "decided by the plan: use the language the goal and the actors' voice profiles imply.")
+
     async def draft_project(self, project: Project) -> ProjectDraft:
-        prompt = render("draft", goal=project.goal, seconds=project.settings.target_seconds, routes=routes_mod.describe(self.reg),
+        length_block, length_rules = self.length_blocks(project)
+        prompt = render("draft", goal=project.goal, length_block=length_block, length_rules=length_rules,
+                        language_block=self.language_block(project), routes=routes_mod.describe(self.reg),
                         aspect=project.settings.aspect, context=summarize_for_llm(effective_context(project, project.root.id)))
         return await self.ask("draft", prompt, ProjectDraft,
                               {"goal": project.goal, "seconds": project.settings.target_seconds,
+                               "auto_length": project.settings.length_mode == "auto",
                                "context": [c.model_dump() for c in project.context]})
 
     async def decompose(self, project: Project, node: Node) -> Decomposition:
@@ -317,7 +348,7 @@ class Brain:
                                   + (f" | IT ENDS: {prev.script.end_state}" if prev and prev.script and prev.script.end_state else "")
                                   if prev else "(first clip)"),
                         current=current, feedback=feedback or "(none)", shot_types=", ".join(SHOT_TYPES),
-                        style=json.dumps(_style(project, node)))
+                        style=json.dumps(_style(project, node)), language_line=self.language_line(project))
         return await self.ask("write_clip_script", prompt, ClipScriptDraft,
                               {"goal": node.goal, "title": node.title, "seconds": secs,
                                "actors": [a.model_dump() for a in project.context if a.type == ContextType.actor],

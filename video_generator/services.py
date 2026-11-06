@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from . import deps as deps_mod
 from . import guide as guide_mod
+from . import languages
 from . import policy as policy_mod
 from . import estimate as est
 from . import media
@@ -65,9 +66,37 @@ class Service:
                 "warnings": e.warnings, "waiting_picks": waiting, "review_flags": review_flags,
                 "clips": len(leaves(project)), "done": sum(1 for l in leaves(project) if l.status == NodeStatus.done),
                 "numbers": numbering(project), "brain": self.reg.llm_plugin_name("default"),
+                "length_mode": project.settings.length_mode, "language": project.settings.language,
+                "quality_mode": project.settings.quality_mode, "parts": self.parts_table(project),
                 "preview": self.preview_info(project), **self.final_info(project)}
         out["guide"] = guide_mod.compute(self, project, out)
         return out
+
+    def parts_table(self, project: Project) -> list[dict]:
+        """One row per part, sub-part and clip (story order, with depth): the numbers behind "Cost by part".
+        Call after `refresh` (every node's length, cost and time are then current)."""
+        nums = numbering(project)
+        rows: list[dict] = []
+
+        def add(node: Node, depth: int) -> None:
+            for c in node.children:
+                below = [x for x, _ in walk(c) if x.is_leaf]
+                models: list[str] = []
+                for x in below:
+                    if x.cost.model and x.cost.model not in models:
+                        models.append(x.cost.model)
+                rows.append({"id": c.id, "number": nums.get(c.id, ""), "title": c.title or c.goal[:40], "kind": c.kind.value, "depth": depth,
+                             "seconds": c.duration.likely_s, "cost": c.cost.likely_usd, "cost_min": c.cost.min_usd, "cost_max": c.cost.max_usd,
+                             "time_s": c.time.likely_s, "quality": project.settings.quality_mode, "models": models,
+                             "clips": len(below), "done": sum(1 for x in below if x.status == NodeStatus.done)})
+                if c.kind == NodeKind.goal:
+                    add(c, depth + 1)
+        add(project.root, 0)
+        return rows
+
+    def ballpark(self, seconds: Optional[float] = None, quality: Optional[str] = None) -> dict:
+        """A rough price BEFORE any plan exists, from the catalogue prices (see estimate.ballpark)."""
+        return est.ballpark(self.reg, self.config, quality or self.config.quality_mode, seconds)
 
     HINTS = {
         "video": "Add FAL_KEY (Kling, Seedance, Wan) or GEMINI_API_KEY (Veo) to get real video.",
@@ -76,10 +105,34 @@ class Service:
         "voice": "Add ELEVENLABS_API_KEY or CARTESIA_API_KEY to get natural voices (and to copy a voice).",
     }
 
+    def _real_usable(self, job: str) -> bool:
+        """Is at least one paid (real) model of this kind connected and switched on?"""
+        return any(not e.is_free and self.reg.entry_usable(e) for e in self.catalog.for_job(job))
+
+    def _placeholder_cause(self, project: Project, leaf: Node, job: str, plan: "est.ClipPlan") -> str:
+        """WHY a clip only gets a free placeholder, so the screen never blames a missing key when the cause is something else.
+        free_mode: you chose free preview quality | pinned: you chose a free model for this very clip |
+        no_key: no real model of this kind is connected | not_covered: real models exist but none fits what the clip needs."""
+        if project.settings.quality_mode == "free":
+            return "free_mode"
+        if job in ("video", "avatar") and leaf.provider_override and plan.video:
+            try:
+                pinned = self.catalog.get(leaf.provider_override)
+            except KeyError:
+                pinned = None
+            if pinned and pinned.is_free and plan.video.id == pinned.id:
+                return "pinned"
+        if not self._real_usable(job):
+            return "no_key"
+        return "not_covered"
+
     def preview_info(self, project: Project) -> dict:
-        """Which clips will only get free placeholder output, and what to add to fix that."""
+        """Which clips will only get free placeholder output, WHY (`causes`), and what to do about it.
+        `jobs` carries the "add a key" hints and lists only kinds of work where no real model is connected."""
         clips: dict[str, list[str]] = {}
+        causes: dict[str, dict[str, str]] = {}
         jobs: dict[str, str] = {}
+        pinned: list[str] = []
         unused: list[str] = []
         for leaf in leaves(project):
             if leaf.kind != NodeKind.clip:
@@ -94,13 +147,40 @@ class Service:
                 reasons.append("voice")
             if reasons:
                 clips[leaf.id] = reasons
-                for r in reasons:
-                    jobs[r] = self.HINTS[r]
+                causes[leaf.id] = {r: self._placeholder_cause(project, leaf, r, plan) for r in reasons}
+                for r, why in causes[leaf.id].items():
+                    if why == "no_key":
+                        jobs[r] = self.HINTS[r]
+                    elif why == "pinned" and leaf.id not in pinned:
+                        pinned.append(leaf.id)
             unused += [w for w in plan.warnings if w.startswith("The voice sample")]
         needs_media = [l for l in leaves(project) if l.kind == NodeKind.clip]
-        all_preview = bool(needs_media) and all(any(r in ("video", "avatar") for r in clips.get(l.id, [])) for l in needs_media)
-        return {"clips": clips, "jobs": jobs, "all_preview": all_preview, "chosen_free_mode": project.settings.quality_mode == "free",
-                "voice_sample_unused": sorted(set(unused))}
+        all_preview = bool(needs_media) and all(
+            any(r in ("video", "avatar") and causes.get(l.id, {}).get(r) == "no_key" for r in clips.get(l.id, [])) for l in needs_media)
+        return {"clips": clips, "causes": causes, "pinned": pinned, "jobs": jobs, "all_preview": all_preview,
+                "chosen_free_mode": project.settings.quality_mode == "free", "voice_sample_unused": sorted(set(unused))}
+
+    def unpin(self, pid: str, ids: Optional[list[str]] = None) -> Project:
+        """Clear the model you chose for clips, so the tool picks the best model again. With no ids: every clip pinned to a
+        free (placeholder) model. A clip that was already made as a placeholder is marked out of date so it can be made for real."""
+        p = self.load(pid)
+        if ids is None:
+            ids = list(self.preview_info(p)["pinned"])
+        for nid in ids:
+            n = find(p, nid)
+            if not n.provider_override:
+                continue
+            n.provider_override = None
+            if n.status in (NodeStatus.done, NodeStatus.needs_pick):
+                take = next((t for t in n.takes if t.id == n.chosen_take), None) or (n.takes[0] if n.takes else None)
+                try:
+                    placeholder = bool(take and self.catalog.get(take.model).is_free)
+                except KeyError:
+                    placeholder = False
+                if placeholder:
+                    n.status = NodeStatus.stale
+                    deps_mod.mark_downstream_stale(p, nid)
+        return self.save(p)
 
     def final_info(self, project: Project) -> dict:
         path = ProjectStore.path_for(project.id) / project.final_output if project.final_output else None
@@ -111,10 +191,15 @@ class Service:
 
     def new_project(self, goal: str, seconds: float = 60, aspect: str = "16:9", fmt: str = "mp4",
                     files: Optional[list[Path]] = None, name: str = "", budget: Optional[float] = None,
-                    quality_mode: Optional[str] = None) -> Project:
+                    quality_mode: Optional[str] = None, length_mode: Optional[str] = None,
+                    language: Optional[str] = None) -> Project:
+        """length_mode "auto" = no length was asked for (the plan is as short as the story allows); language "auto" = the planner
+        decides from the goal (it is replaced by a real code when the first draft is made)."""
         settings = Settings(target_seconds=seconds, aspect=aspect, format=fmt,
                             budget_usd=budget if budget is not None else self.config.budget_usd,
-                            quality_mode=quality_mode or self.config.quality_mode)
+                            quality_mode=quality_mode or self.config.quality_mode,
+                            length_mode="auto" if length_mode == "auto" else "fixed",
+                            language=(language or "en"))
         p = Project(name=name or (goal[:60] or "New video"), goal=goal, settings=settings)
         p.root.goal = goal
         p.root.title = p.name
@@ -132,6 +217,8 @@ class Service:
         self._ledger_llm(p, "draft plan")
         p.name = d.title or p.name
         p.root.title = p.name
+        if not languages.normalise(p.settings.language):               # "auto": the planner decided from the goal
+            p.settings.language = languages.normalise(d.language) or "en"
         p.style = Style(look=d.style.look, colour=d.style.colour, mood=d.style.mood, notes=p.style.notes)
         existing = {c.title.lower(): c for c in p.context if c.type == ContextType.actor}
         for a in d.actors:
@@ -158,7 +245,14 @@ class Service:
             if not g.children:
                 g.kind = NodeKind.clip
             p.root.children.append(g)
-        self._fit_to_target(p)
+        if p.settings.length_mode == "auto":
+            self._roll_targets(p)                                      # no length asked for: the plan's own total IS the length
+            clips_total = sum((n.target_seconds or 0) for n, _ in walk(p.root) if n.kind == NodeKind.clip)
+            if clips_total > 0:
+                p.settings.target_seconds = round(clips_total, 1)
+                p.root.target_seconds = p.settings.target_seconds
+        else:
+            self._fit_to_target(p)
         self._attach_media_context(p)
         self.save(p)
         try:
@@ -179,7 +273,10 @@ class Service:
         f = target / total
         for n in clips:
             n.target_seconds = max(2.0, min(round((n.target_seconds or 6.0) * f * 2) / 2, 15.0))
+        self._roll_targets(p)
 
+    def _roll_targets(self, p: Project) -> None:
+        """Every part's length = the sum of what is inside it (the root is set by the caller)."""
         def roll(node: Node) -> None:
             for c in node.children:
                 if c.kind == NodeKind.goal:
@@ -476,6 +573,7 @@ class Service:
                 deps_mod.mark_downstream_stale(p, n.id)
         if n.id == p.root.id and "target_seconds" in patch and patch["target_seconds"]:
             p.settings.target_seconds = float(patch["target_seconds"])
+            p.settings.length_mode = "fixed"                  # you asked for a length: it is no longer "as short as the story allows"
         return self.save(p)
 
     def add_node(self, pid: str, parent_id: str, kind: str = "clip", title: str = "", goal: str = "",
@@ -505,7 +603,10 @@ class Service:
             p.goal = patch["goal"]
             p.root.goal = p.goal
         if "settings" in patch:
-            p.settings = Settings.model_validate({**p.settings.model_dump(), **patch["settings"]})
+            merged = {**p.settings.model_dump(), **patch["settings"]}
+            if "target_seconds" in patch["settings"] and "length_mode" not in patch["settings"]:
+                merged["length_mode"] = "fixed"
+            p.settings = Settings.model_validate(merged)
             p.root.target_seconds = p.settings.target_seconds
         if "style" in patch:
             p.style = Style.model_validate({**p.style.model_dump(), **patch["style"]})

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from . import media
+from . import languages, media
 from . import policy as policy_mod
 from .models import Review, ReviewIssue, ReviewSuggestion
 from .project import ProjectStore
@@ -45,7 +45,7 @@ class Reviewer:
         pairs = media.sample_pairs(video, work / "pairs")        # neighbouring frames expose warping and morphing
         expected = " ".join([l.text for l in n.script.dialogue] + [n.script.narration]) if n.script else ""
         try:
-            segs = await self.transcriber().transcribe(video, p.settings.language, hint=expected)
+            segs = await self.transcriber().transcribe(video, languages.effective(p.settings.language), hint=expected)
             transcript = " ".join(s.text for s in segs).strip()
         except Exception as exc:
             transcript = f"(transcription failed: {exc})"

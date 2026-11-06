@@ -8,6 +8,7 @@ CLIP GOAL: {{goal}}
 PARENT GOALS: {{parents}}
 LENGTH: this clip is exactly {{seconds}} seconds. Use at most {{max_beats}} action steps (about one per 2.5 seconds) and keep any dialogue short enough to say in that time (about 2.5 spoken words per second).
 STYLE: {{style}}
+LANGUAGE: {{language_line}}
 PREVIOUS CLIP: {{previous}}
 
 CONTEXT THAT APPLIES TO THIS CLIP:

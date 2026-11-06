@@ -306,6 +306,9 @@ class Dependency(BaseModel):
 
 # --------------------------------------------------------------------------- project
 class Settings(BaseModel):
+    # auto = no length was asked for: the plan is as short as the story allows (target_seconds then follows the plan);
+    # fixed = target_seconds is the length asked for. Projects made before this setting existed are "fixed".
+    length_mode: Literal["auto", "fixed"] = "fixed"
     target_seconds: float = 60
     aspect: str = "16:9"
     resolution: str = "1080p"
