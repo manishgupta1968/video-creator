@@ -183,6 +183,12 @@ def compute(svc, project: Project, summary: dict) -> dict:
         issues.append({"text": f"{len(pinned)} clip(s) ({names}) are set to the free preview model, so they will only be placeholders. "
                                "This is a choice made on the clip, not a missing key.",
                        "action": _act("unpin", "Use the best model", ids=pinned, help="unpin")})
+    for l in ai_clips:
+        if l.blocked and len(issues) < 4:
+            issues.append({"text": f"Clip {_num(numbers, l.id)} cannot be made yet. {l.blocked[:170]}", "action": _act("select", f"Open clip {_num(numbers, l.id)}", id=l.id)})
+    for f in sorted(summary.get("continuity", []), key=lambda x: x["severity"] != "problem")[:2]:
+        issues.append({"text": f["text"][:240], "action": _act("select", ("Open clip " + f["number"]) if f["number"] else "Open", id=f["node"]) if f["node"]
+                       else _act("show", "Show me", node=project.root.id)})
     for note in project.final_notes[:2]:
         issues.append({"text": note[:260], "action": _act("settings", "Open Settings", help="settings")})
     flagged = [r for r in project.reviews if r.verdict == "does_not_meet_goal" and r.target]

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import languages
 from .context import effective_context, summarize_for_llm
-from .models import (ActorInShot, ClipScript, ContextType, DialogueLine, Node, Project, ShotType)
+from .models import (ActorInShot, ClipScript, Continuity, ContextType, DialogueLine, Node, Project, ShotType)
 from .plugins.base import PluginError, Usage
 from .registry import Registry
 from . import routes as routes_mod
@@ -37,11 +37,45 @@ class ActorDraft(BaseModel):
     voice_age: str = ""               # child | teen | young | adult | older
     voice_pitch: str = ""             # low | medium | high
     voice_pace: str = ""              # slow | normal | fast
-    voice_accent: str = ""
+    voice_accent: str = ""            # decided from who the character is (origin, background); never left empty for a speaker
+    language: str = ""                # the language this character speaks (a short code); "" = the video's language
     speaking_wpm: Optional[int] = None   # words per minute this speaker really speaks (normal speech is about 150; slow delivery far fewer)
 
 
-class ClipDraft(BaseModel):
+class PlannedContinuity(BaseModel):
+    """What the planner decides for a clip before any script exists (copied to Node.continuity)."""
+    join: str = ""                    # continues | same_scene | cut: how it joins the clip BEFORE it ("" only for the very first clip)
+    join_reason: str = ""
+    place: str = ""
+    present: list[str] = Field(default_factory=list)
+    start_state: str = ""
+    end_state: str = ""
+    carry_over: str = ""
+
+
+JOINS = ("continues", "same_scene", "cut")
+
+
+def normalize_join(value: str) -> str:
+    """The planner's word for a join as one of continues | same_scene | cut ('' when unclear)."""
+    v = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if v in JOINS:
+        return v
+    if v in ("continue", "continuous", "continuing", "same_shot", "continues_from"):
+        return "continues"
+    if v in ("same", "same_location", "same_place", "same_scene_new_angle"):
+        return "same_scene"
+    if v in ("new", "new_scene", "jump", "scene_change"):
+        return "cut"
+    return ""
+
+
+def to_continuity(d: PlannedContinuity) -> Continuity:
+    return Continuity(join=normalize_join(d.join), join_reason=d.join_reason.strip(), place=d.place.strip(), present=[x for x in d.present if x.strip()],
+                      start_state=d.start_state.strip(), end_state=d.end_state.strip(), carry_over=d.carry_over.strip())
+
+
+class ClipDraft(PlannedContinuity):
     title: str
     goal: str
     seconds: float = 6
@@ -69,7 +103,7 @@ class ProjectDraft(BaseModel):
     music_advice: str = ""            # "none", "subtle" or "full", then the mood/genre and where it should enter and leave
 
 
-class ChildDraft(BaseModel):
+class ChildDraft(PlannedContinuity):
     title: str
     goal: str
     seconds: float = 6
@@ -277,8 +311,8 @@ class Brain:
             if a.type == ContextType.actor and a.actor:
                 lines.append(f"- {a.title} (id {a.id}, {a.actor.kind}): {a.actor.description}; clothing: {a.actor.clothing}; "
                              f"behaviour: {a.actor.behaviour}; voice: {a.actor.voice_description}"
-                             + (f" [{', '.join(x for x in (a.actor.voice_gender, a.actor.voice_age, a.actor.voice_pitch + ' pitch' if a.actor.voice_pitch else '', a.actor.voice_pace + ' pace' if a.actor.voice_pace else '', a.actor.voice_accent) if x)}]"
-                                if (a.actor.voice_gender or a.actor.voice_age or a.actor.voice_pitch or a.actor.voice_pace or a.actor.voice_accent) else "")
+                             + (f" [{', '.join(x for x in (a.actor.voice_gender, a.actor.voice_age, a.actor.voice_pitch + ' pitch' if a.actor.voice_pitch else '', a.actor.voice_pace + ' pace' if a.actor.voice_pace else '', a.actor.voice_accent + ' accent' if a.actor.voice_accent else '', 'speaks ' + a.actor.language if a.actor.language else '') if x)}]"
+                                if (a.actor.voice_gender or a.actor.voice_age or a.actor.voice_pitch or a.actor.voice_pace or a.actor.voice_accent or a.actor.language) else "")
                              + ("; has photos" if a.files else "") + ("; has voice sample" if a.actor.voice_sample else ""))
         return "\n".join(lines) or "(no actors yet)"
 
@@ -309,6 +343,46 @@ class Brain:
         return (f"{languages.name_of(code)} ({code}): write dialogue and narration in it, in its own script." if code
                 else "decided by the plan: use the language the goal and the actors' voice profiles imply.")
 
+    @staticmethod
+    def contract(project: Project, node: Node) -> str:
+        """What the plan decided for this clip, as fixed text for its script writer (see models.Continuity)."""
+        c = node.continuity
+        prev = _previous_leaf(project, node)
+        how = {"continues": "continues (this clip begins on the very last picture of the previous clip: the same shot goes on)",
+               "same_scene": "same_scene (the same place and people; a new angle or a later moment)", "cut": "cut (a new place or a jump in time)"}
+        lines: list[str] = []
+        if prev is not None and c.join:
+            lines.append(f"- JOIN with the previous clip: {how[c.join]}" + (f". Why: {c.join_reason}" if c.join_reason else ""))
+        prev_end = ""
+        if prev is not None:
+            prev_end = (prev.script.end_state if prev.script and prev.script.end_state.strip() else prev.continuity.end_state).strip()
+        if c.join == "continues" and prev_end:
+            lines.append(f"- START STATE (the previous clip ends like this; use it word for word): {prev_end}")
+        elif c.start_state:
+            lines.append(f"- START STATE (use it word for word): {c.start_state}")
+        if c.place:
+            lines.append(f"- Place and time: {c.place}")
+        if c.present:
+            lines.append(f"- Who is in it: {', '.join(c.present)}")
+        if c.carry_over:
+            lines.append(f"- Must stay exactly as before: {c.carry_over}")
+        if c.end_state:
+            lines.append(f"- END STATE (use it word for word; the next clip starts from it): {c.end_state}")
+        return "\n".join(lines) or "(none planned: decide them yourself)"
+
+    @staticmethod
+    def so_far(project: Project, node: Node) -> str:
+        """What the clips before this one established, in a line each (the last eight)."""
+        nums = numbering(project)
+        out: list[str] = []
+        for n, _ in walk(project.root):
+            if n.id == node.id:
+                break
+            if n.is_leaf:
+                end = (n.script.end_state if n.script and n.script.end_state.strip() else n.continuity.end_state).strip() or n.goal
+                out.append(f"{nums.get(n.id, '')} {n.title}: ends with {end}")
+        return "\n".join(out[-8:]) or "(this is the first clip)"
+
     async def draft_project(self, project: Project) -> ProjectDraft:
         length_block, length_rules = self.length_blocks(project)
         prompt = render("draft", goal=project.goal, length_block=length_block, length_rules=length_rules,
@@ -317,11 +391,16 @@ class Brain:
         return await self.ask("draft", prompt, ProjectDraft,
                               {"goal": project.goal, "seconds": project.settings.target_seconds,
                                "auto_length": project.settings.length_mode == "auto",
+                               "language": project.settings.language,
                                "context": [c.model_dump() for c in project.context]})
 
     async def decompose(self, project: Project, node: Node) -> Decomposition:
         nums = numbering(project)
+        before = _previous_leaf(project, node)
+        prev_end = ((before.script.end_state if before and before.script and before.script.end_state.strip() else before.continuity.end_state).strip()
+                    if before else "") or "(there is no clip before this one)"
         prompt = render("decompose", outline=outline(project), number=nums.get(node.id, ""), title=node.title, routes=routes_mod.describe(self.reg),
+                        prev_end=prev_end,
                         goal=node.goal, seconds=node.duration.likely_s or node.target_seconds or 20,
                         context=self._context_block(project, node.id), actors=self._actor_list(project, node.id))
         return await self.ask("decompose", prompt, Decomposition,
@@ -352,7 +431,8 @@ class Brain:
                                   + (f" | IT ENDS: {prev.script.end_state}" if prev and prev.script and prev.script.end_state else "")
                                   if prev else "(first clip)"),
                         current=current, feedback=feedback or "(none)", shot_types=", ".join(SHOT_TYPES),
-                        style=json.dumps(_style(project, node)), language_line=self.language_line(project))
+                        style=json.dumps(_style(project, node)), language_line=self.language_line(project),
+                        so_far=self.so_far(project, node), contract=self.contract(project, node))
         return await self.ask("write_clip_script", prompt, ClipScriptDraft,
                               {"goal": node.goal, "title": node.title, "seconds": secs,
                                "actors": [a.model_dump() for a in project.context if a.type == ContextType.actor],

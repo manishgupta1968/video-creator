@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections import Counter
 from functools import lru_cache
 from importlib import resources
 
@@ -39,3 +41,26 @@ def normalise(value: str) -> str:
 def effective(language: str) -> str:
     """The code the voice and speech-to-text services get: never 'auto' (they cannot use it)."""
     return normalise(language) or "en"
+
+
+@lru_cache(maxsize=1)
+def scripts() -> dict[str, tuple[str, ...]]:
+    """code -> the writing system(s) the language is normally written in, from data/language_scripts.yaml."""
+    data = yaml.safe_load(resources.files("video_generator.data").joinpath("language_scripts.yaml").read_text()) or {}
+    return {str(k): tuple(str(x) for x in (v if isinstance(v, list) else [v])) for k, v in data.items()}
+
+
+def script_of(text: str) -> tuple[str, float, int]:
+    """The writing system most of the letters of `text` are in: (name, share of the letters, number of letters). ('', 0, 0) when there are no letters."""
+    counts: Counter = Counter()
+    for ch in text or "":
+        if ch.isalpha():
+            try:
+                counts[unicodedata.name(ch).split()[0]] += 1
+            except ValueError:
+                continue
+    total = sum(counts.values())
+    if not total:
+        return "", 0.0, 0
+    top, n = counts.most_common(1)[0]
+    return top, n / total, total

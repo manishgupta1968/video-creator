@@ -45,6 +45,12 @@ def describe(reg: Registry) -> str:
         kinds = sorted({k for e in lip for k in ([e.capabilities.get("faces")] if isinstance(e.capabilities.get("faces"), str) else (e.capabilities.get("faces") or []))})
         works = ", ".join(SUBJECT_WORDS.get(k, k) for k in kinds) or "faces"
         lines.append(f"- Lip-sync step (models: {_models(lip)}): puts spoken words onto a face in a video clip; works for {works} only.")
+    voices = rows("voice")
+    if voices:
+        singers = [e for e in voices if e.capabilities.get("sing")]
+        lines.append("- Voices (models: " + _models(voices) + "): " + (
+            "models that can sing: " + _models(singers) + "; the others only speak." if singers else
+            "they only SPEAK; none can sing. Write lines to be recited, spoken or chanted, never 'sung', and do not plan a sung performance."))
     lines.append("HOW TO PLAN: write for every clip what it needs and set `motion`: `face` (only the face and head move: someone speaking to the camera), "
                  "`body` (the subject's body moves) or `scene` (the camera or the scene moves). A clip must need only what ONE route can do. "
                  "Speech on camera together with body or scene movement is one clip only if the video route has a model that speaks the line or a lip-sync step "

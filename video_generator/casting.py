@@ -75,6 +75,7 @@ def profile_for(actor: Optional[ContextItem], project: Project) -> Profile:
     if not actor or not actor.actor:
         return Profile(language=lang, description="warm clear narrator")
     a = actor.actor
+    lang = languages.effective(a.language) if languages.normalise(a.language) else lang        # this character's own language, else the video's
     texts = (a.voice_description, a.behaviour, a.description)
     g = (a.voice_gender or "").lower() or guess_gender(*texts)
     pitch = (a.voice_pitch or "").lower() or ("low" if _first(_LOW, a.voice_description) else "high" if _first(_HIGH, a.voice_description) else "")
@@ -109,7 +110,20 @@ async def choose_voice(plugin, profile: Profile, taken: tuple = ()) -> tuple[lis
         note = f"no {profile.gender} voice was found; check the voice"
     elif cands[0].note:
         note = cands[0].note
+    elif accent_mismatch(cands[0].accent, profile.accent):
+        note = accent_mismatch(cands[0].accent, profile.accent)
     return cands, note
+
+
+def accent_mismatch(label: str, wanted: str) -> str:
+    """A plain sentence when the accent a vendor labels a voice with does not match the accent the plan asks for ('' when it matches, or when either is
+    unknown). The vendor sets the accent through the voice itself, so the result depends on the voice library: this only says so honestly."""
+    words = set(re.findall(r"[a-z]{3,}", (wanted or "").lower()))
+    have = (label or "").strip().lower()
+    if not words or not have or any(w in have for w in words):
+        return ""
+    return (f"this voice is labelled '{label}', but the plan asks for '{wanted}'. Your voice library may have no closer match; "
+            "choose another voice if it sounds wrong.")
 
 
 async def _listen(plugin, cands: list[VoiceChoice], profile: Profile, pol) -> tuple[list[VoiceChoice], int]:

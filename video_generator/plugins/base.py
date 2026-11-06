@@ -171,6 +171,7 @@ class VoiceChoice:
     note: str = ""              # e.g. "stock voice (the voice list could not be read)"
     preview_url: str = ""       # a free sample clip of this voice, when the vendor offers one
     pitch_hz: Optional[float] = None   # the pitch measured from that sample
+    accent: str = ""            # the accent the vendor labels this voice with ("" = no label)
 
 
 class VoiceSynth(Plugin):

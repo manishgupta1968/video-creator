@@ -18,11 +18,11 @@ from .catalog import CatalogEntry
 from .context import effective_context
 from .deps import downstream, topo_order, upstream
 from .models import (ContextItem, ContextRole, ContextType, CostEstimate, CostLine, DependencyType,
-                     DurationEstimate, EstimateBasis, Node, NodeKind, Project, Settings, ShotType, TimeEstimate)
+                     DurationEstimate, EstimateBasis, Node, NodeKind, NodeStatus, Project, Settings, ShotType, TimeEstimate)
 from . import musictrack
 from . import policy as policy_mod
 from .registry import MOTION_LEVELS, Registry
-from .tree import ancestors, find, leaves, walk
+from .tree import ancestors, find, leaves, numbering, walk
 
 PEOPLE_SHOTS = {ShotType.talking_head, ShotType.dialogue_scene, ShotType.human_motion}
 SECONDS_PER_SLIDE = 5.0
@@ -239,6 +239,7 @@ class ClipPlan:
     uncovered: str = ""                    # what the clip needs that no single route can do (empty = covered)
     end_picture: bool = False              # make a picture of the planned ending and give it to the video model
     motion: str = ""                       # what must move: face | body | scene (declared by the plan, or the legacy default)
+    blocked: str = ""                      # why this clip cannot be made at all right now (empty = it can)
 
 
 def wants_ambience(project: Project, node: Node, plan: "ClipPlan") -> bool:
@@ -357,6 +358,75 @@ def sheet_image(reg: Registry, project: Project) -> Optional[CatalogEntry]:
         return None
 
 
+def _real_video_exists(reg: Registry, shot: str) -> bool:
+    """Is any real (not free-preview) video model connected? If none is, every clip is a placeholder anyway and the hand-over rule has nothing to enforce."""
+    return any(not e.is_free for e in reg.candidates("video", shot, None, "best"))
+
+
+def _video_that_starts_from_picture(reg: Registry, node: Node, shot: str, mode: str, end_wanted: bool,
+                                    warnings: list[str]) -> tuple[Optional[CatalogEntry], str]:
+    """The video model for a clip that continues the clip before it. It must be able to start from a picture (the last picture of
+    the clip before). The part's quality still ranks the models that can (cheapest for budget, best for best); when that changes the model the
+    quality would have picked, the screen says so. Returns (model, "") or (None or the pinned model, the plain-words reason the clip is blocked)."""
+    if node.provider_override:
+        try:
+            pinned = reg.catalog.get(node.provider_override)
+        except KeyError:
+            pinned = None
+        if pinned and reg.entry_usable(pinned):
+            if pinned.capabilities.get("start_frame"):
+                return pinned, ""
+            return pinned, (f"This clip continues the clip before it, so it must start from that clip's last picture, but the model you chose for it "
+                            f"({pinned.id}) cannot start from a picture. Choose another model (Auto picks one that can), or change the join to a cut.")
+    wanted = ([{"start_frame": True, "end_frame": True}] if end_wanted else []) + [{"start_frame": True}]
+    for need in wanted:
+        own = [e for e in reg.candidates("video", shot, need, mode) if not e.is_free]
+        if own:
+            ideal = reg.choose("video", shot, mode=mode)             # what this quality would pick if the hand-over did not matter
+            if ideal.id != own[0].id and not ideal.is_free and not ideal.capabilities.get("start_frame"):
+                warnings.append(f"This part's quality would use {ideal.id}, but it cannot start from the last picture of the clip before it, "
+                                f"so {own[0].id} is used for this clip. The look may differ slightly.")
+            return own[0], ""
+    able = [e for e in reg.catalog.for_job("video") if e.capabilities.get("start_frame") and not e.is_free]
+    options = ", ".join(f"{e.id} ({reg.unusable_reason(e) or 'ready'})" for e in able[:4]) or "none in the catalogue"
+    return None, ("This clip continues the clip before it, so it must start from that clip's last picture, but no connected video model can do that. "
+                  f"Models that can: {options}. Connect one of them, or pick another model for this clip, or change the join to a cut.")
+
+
+def placeholder_before(project: Project, node: Node, reg: Registry) -> Optional[Node]:
+    """The clip this one continues from, when that clip is only a free-preview placeholder: it has no real last picture to start from."""
+    for d in upstream(project, node.id):
+        if d.type != DependencyType.continues_from:
+            continue
+        up = find(project, d.from_id)
+        if up.kind != NodeKind.clip:
+            continue
+        chosen = next((t for t in up.takes if t.id == up.chosen_take), None)
+        if up.status == NodeStatus.done and chosen:
+            try:
+                free = reg.catalog.get(chosen.model).is_free
+            except KeyError:
+                free = False
+        else:
+            try:
+                free = reg.choose("video", up.script.shot_type.value if up.script else "other", override=up.provider_override,
+                                  mode=mode_for(project, up)).is_free
+            except LookupError:
+                free = True
+        if free:
+            return up
+    return None
+
+
+def _placeholder_block(project: Project, node: Node, reg: Registry) -> str:
+    """The plain-words reason a clip that continues another cannot be made yet because that other clip is only a placeholder ('' when it can)."""
+    before = placeholder_before(project, node, reg)
+    if not before:
+        return ""
+    return (f"This clip continues clip {numbering(project).get(before.id, '')}, which is only a free placeholder and has no real last picture "
+            "to start from. Make that clip with a real model first (Use the best model on the clip before), or change this join to a cut.")
+
+
 def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     warnings: list[str] = []
     if node.kind in (NodeKind.slides, NodeKind.user_clip):
@@ -401,6 +471,8 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
             takes = 1          # free previews are identical; one take is enough
         plan_a = ClipPlan("avatar", avatar_entry, image, voice, None, takes, False, ref_images, False, warnings)
         plan_a.motion = motion
+        if needs_start and not avatar_entry.is_free:                 # the speaking picture is the last picture of the clip before: it must be a real one
+            plan_a.blocked = _placeholder_block(project, node, reg)
         plan_a.sfx = _sfx_for(reg, mode, project, node, plan_a)
         return plan_a
 
@@ -410,8 +482,17 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     end_wanted = wants_end_picture(project, node)
     if end_wanted:
         need["end_frame"] = True
-    video = reg.choose("video", shot, need=need, override=node.provider_override, mode=mode,
-                       strict=end_wanted and policy_mod.current().precise_endings == "on")
+    blocked = ""
+    if needs_start and mode != "free" and _real_video_exists(reg, shot):
+        # the hand-over rule: a clip that continues the one before MUST start from that clip's last picture
+        video, blocked = _video_that_starts_from_picture(reg, node, shot, mode, end_wanted, warnings)
+        if video is None:
+            video = reg.choose("video", shot, need=need, mode=mode)          # only so the price can still be shown
+    else:
+        video = reg.choose("video", shot, need=need, override=node.provider_override, mode=mode,
+                           strict=end_wanted and policy_mod.current().precise_endings == "on")
+    if needs_start and not blocked and not video.is_free:
+        blocked = _placeholder_block(project, node, reg)
     end_pic = bool(end_wanted and video.capabilities.get("end_frame"))
     if end_wanted and not end_pic:
         warnings.append("This clip should end in a planned way (the next clip continues from it), but no usable video model accepts an end "
@@ -423,7 +504,7 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     if ref_images > max(max_refs, 0) and ref_images > 0 and not picture_carries_refs:
         # normally the picture model (or the previous clip's last frame) carries the actors' looks into the video
         warnings.append(f"{ref_images} reference image(s) but {video.id} accepts {max_refs}; the most relevant will be used")
-    if needs_start and not video.capabilities.get("start_frame"):
+    if needs_start and not video.capabilities.get("start_frame") and not blocked:
         warnings.append(f"{video.id} cannot start from the previous clip's last frame")
     lip = bool(s and s.on_camera_speech)
     lipsync = None
@@ -444,6 +525,7 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     plan_v = ClipPlan("video", video, image, voice, lipsync, takes, needs_start, ref_images, lip, warnings)
     plan_v.motion = motion
     plan_v.uncovered = uncovered
+    plan_v.blocked = blocked
     plan_v.end_picture = end_pic
     plan_v.sfx = _sfx_for(reg, mode, project, node, plan_v)
     return plan_v
@@ -570,6 +652,23 @@ class ProjectEstimate:
     cost_total: float = 0.0
 
 
+def join_miss(project: Project, node: Node) -> str:
+    """The measured hand-over check, in words: '' when the clip starts where the clip before it ended (or nothing was measured), else what is wrong.
+    The limit is the named setting join_max_difference, read now, so changing it changes the flag at once."""
+    c = node.continuity
+    if node.status != NodeStatus.done:
+        return ""                                   # a clip waiting to be made again has no picture to judge yet (an old measurement is not shown)
+    if c.join != "continues" and not any(d.type == DependencyType.continues_from for d in upstream(project, node.id)):
+        return ""
+    limit = policy_mod.current().join_max_difference
+    if c.difference is None or c.difference <= limit:
+        return ""
+    nums = numbering(project)
+    before = next((nums.get(d.from_id, "") for d in upstream(project, node.id) if d.type == DependencyType.continues_from), "")
+    return (f"Clip {nums.get(node.id, '')} does not start where clip {before} ended (difference {c.difference:.2f}, limit {limit:.2f}). "
+            "Re-make it from the hand-over picture, or change this join to a cut.")
+
+
 def refresh(project: Project, reg: Registry) -> ProjectEstimate:
     """Recompute every node's length, cost and time (cheap; call on every edit)."""
     warnings: list[str] = []
@@ -619,6 +718,10 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
         kept = [w for w in leaf.warnings if (leaf.status.value == "failed" and w.startswith(("failed:", "compare failed:")))
                 or w.startswith(("Made ", "Softer than"))]
         leaf.warnings = kept + list(plan.warnings)
+        leaf.blocked = plan.blocked if leaf.status != NodeStatus.done else ""         # shown as its own banner, not as one more warning
+        miss = join_miss(project, leaf)
+        if miss:
+            leaf.warnings.append(miss)
         leaf.needs_split = bool(plan.uncovered)
         if leaf.script and plan.video and plan.route == "video":
             max_s = float(plan.video.capabilities.get("max_seconds", 10) or 10)
@@ -709,9 +812,11 @@ def estimate_targets(project: Project, reg: Registry, targets: list[str]) -> dic
     parallel = max(reg.config.max_parallel_jobs, 1)
     wall = max(max(times or [0]), sum(times) / parallel)
     extra = [t for t in todo if t not in targets]
+    nums = numbering(project)
+    blocked = [{"id": t, "number": nums.get(t, ""), "why": find(project, t).blocked} for t in todo if find(project, t).blocked]
     return {"clips": todo, "extra_upstream": extra, "cost_usd": round(cost, 2), "time_s": round(wall),
             "spent_usd": project.run.spent_usd, "budget_usd": project.settings.budget_usd,
-            "over_budget": project.run.spent_usd + cost > project.settings.budget_usd}
+            "over_budget": project.run.spent_usd + cost > project.settings.budget_usd, "blocked": blocked}
 
 
 WORDS_PER_MIN, CHARS_PER_WORD = 150, 6.2       # for the price ballpark: a spoken minute is about 930 characters

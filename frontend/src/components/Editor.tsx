@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clapperboard, Film, Mic, Play, Plus, RefreshCw, Sparkles, Trash2, User, Wand2, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clapperboard, Film, Lock, LockOpen, Mic, Play, Plus, RefreshCw, Sparkles, Trash2, User, Wand2, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, fileUrl, Line, Node, Review, Script, Take } from "../api";
 import { fmtRange, fmtSec, fmtTime, fmtUsd, leaves, SHOT_TYPES, STATUS, useP, useSettings } from "../lib";
@@ -6,6 +6,8 @@ import { Badge, Button, Card, cn, Dialog, Editable, Empty, HelpTip, Select, Swit
 import { useRun } from "./ConfirmRun";
 import DownloadButton from "./Download";
 import ModelPicker from "./ModelPicker";
+import QualityForPart from "./QualityForPart";
+import { useQuery } from "@tanstack/react-query";
 import { FinalVideoDialog, PreviewBadge } from "./Banners";
 import { commandBus, finalPlayer } from "../lib";
 
@@ -35,6 +37,7 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
   const unscripted = clipsBelow.filter((c) => c.kind === "clip" && !c.script).length;
   const sum = P.view!.summary;
   const breaking = P.busy.includes("Breaking down");
+  const [goalEdited, setGoalEdited] = useState(false);
   return (
     <div className="space-y-5">
       <div>
@@ -43,13 +46,15 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
       </div>
       <Card className="p-4">
         <div className="field-label mb-1">Goal</div>
-        <Editable value={isRoot ? p.goal : node.goal} onSave={(goal) => save({ goal })} multiline placeholder="What should this part achieve?" className="text-[14px]" />
+        <Editable value={isRoot ? p.goal : node.goal} onSave={(goal) => { setGoalEdited(true); return save({ goal }); }} multiline placeholder="What should this part achieve?" className="text-[14px]" />
         <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
           <LengthEditor node={node} onSave={(v) => save({ target_seconds: v })} isRoot={isRoot} />
           <span className="text-muted">Cost {fmtRange(node.cost.min_usd, node.cost.max_usd)}</span>
           <span className="text-muted">· ~{fmtTime(node.time.likely_s)} to make</span>
         </div>
       </Card>
+      {goalEdited && clipsBelow.some((c) => c.kind === "clip" && c.script) && <RewriteOffer node={node} onDone={() => setGoalEdited(false)} />}
+      <QualityForPart node={node} isRoot={isRoot} />
       {isRoot && p.music_advice && (
         <Card className="flex flex-wrap items-center gap-3 p-3 text-xs">
           <div className="min-w-0 flex-1"><span className="font-semibold">Music suggestion from the plan:</span> <span className="text-muted">{p.music_advice}</span></div>
@@ -159,6 +164,29 @@ function NodeReview({ node }: { node: Node }) {
   );
 }
 
+/** After you edit a goal: offers (never forces) to update the clip scripts under it to match. Clips already made or kept are left alone. Shows the AI cost first. */
+function RewriteOffer({ node, onDone }: { node: Node; onDone: () => void }) {
+  const P = useP();
+  const q = useQuery({ queryKey: ["rewrite-offer", P.pid, node.id, node.goal], queryFn: () => api.rewriteOffer(P.pid, node.id), staleTime: 0 });
+  const d = q.data;
+  if (d && d.clips === 0) return null;
+  return (
+    <Card className="flex flex-wrap items-center gap-3 border-brand/40 bg-brand/5 p-3 text-xs">
+      <Sparkles className="h-4 w-4 shrink-0 text-brand" />
+      <div className="min-w-0 flex-1">
+        <div className="font-medium">You changed the goal. Update the clip scripts to match?</div>
+        <div className="text-muted">
+          {d ? `The AI rewrites ${d.clips} clip script${d.clips > 1 ? "s" : ""} (${d.numbers.join(", ")}) for about ${fmtUsd(d.cost_usd)}.` : "Working out the cost…"}
+          {d && d.kept.length > 0 ? ` Clips ${d.kept.join(", ")} are made or kept, so they are left as they are.` : ""} Lines marked “say exactly this” are never changed.
+        </div>
+      </div>
+      <Button size="sm" variant="primary" disabled={!d} loading={P.busy.includes("Rewriting scripts")}
+        onClick={async () => { await P.act("Rewriting scripts", () => api.writeScripts(P.pid, node.id, true), "Scripts updated. Ctrl+Z undoes it."); onDone(); }}>Update the scripts</Button>
+      <Button size="sm" variant="ghost" onClick={onDone}>Not now</Button>
+    </Card>
+  );
+}
+
 function LengthEditor({ node, onSave, isRoot }: { node: Node; onSave: (v: number | null) => void; isRoot?: boolean }) {
   const P = useP();
   const target = isRoot ? P.view!.project.settings.target_seconds : node.target_seconds;
@@ -207,6 +235,8 @@ function ClipEditor({ node }: { node: Node }) {
   const actors = p.context.filter((c) => c.type === "actor");
   const saveScript = (patch: Partial<Script>) => P.act("Save", () => api.patchNode(P.pid, node.id, { script: patch }));
   const saveNode = (patch: any) => P.act("Save", () => api.patchNode(P.pid, node.id, patch));
+  const beforeDep = P.view!.project.dependencies.find((d) => d.to_id === node.id && d.type === "continues_from");
+  const before = beforeDep ? leaves(P.view!.project).find((l) => l.id === beforeDep.from_id) : undefined;
   const versionTakes = node.takes.filter((t) => t.version === node.version);
   const shownTakes = versionTakes.length ? versionTakes : node.takes;
   const chosen = node.takes.find((t) => t.id === node.chosen_take);
@@ -231,6 +261,19 @@ function ClipEditor({ node }: { node: Node }) {
           <Badge tone={st.tone}>{st.icon}{st.label}</Badge>
         </div>
       </div>
+
+      {node.blocked && node.status !== "done" && (
+        <Card className="space-y-2 border-bad/40 bg-bad/5 p-3 text-xs">
+          <div className="flex items-center gap-1.5 font-semibold text-bad"><AlertTriangle className="h-3.5 w-3.5" />This clip cannot be made yet</div>
+          <div>{node.blocked}</div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => P.act("Save", () => api.setJoin(P.pid, node.id, "cut"), "Joined as a cut")}>Change the join to a cut</Button>
+            {node.provider_override && <Button size="sm" variant="outline" onClick={() => saveNode({ provider_override: null })}>Use the best model</Button>}
+            {before?.provider_override && <Button size="sm" variant="outline" onClick={() => P.act("Save", () => api.unpin(P.pid, [before.id]), "The clip before now uses the best model")}>Use the best model on clip {P.numbers[before.id]}</Button>}
+            <Button size="sm" variant="ghost" onClick={() => P.openSettings("keys")}>Open Settings</Button>
+          </div>
+        </Card>
+      )}
 
       {node.warnings.map((w, i) => (
         <div key={i} className="flex items-start gap-2 rounded-lg bg-warn/10 px-3 py-2 text-xs text-warn"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span className="flex-1">{w}</span></div>
@@ -268,6 +311,7 @@ function ClipEditor({ node }: { node: Node }) {
           </Tip>
           <Tip content={node.time.explain}><span className="cursor-help text-muted">~{fmtTime(node.time.likely_s)} to make</span></Tip>
           <div className="flex-1" />
+          {node.kind === "clip" && <Switch help="keep-clip" checked={!!node.locked} onChange={(locked) => saveNode({ locked })} label="Keep as it is" />}
           {node.kind === "clip" && (
             <ModelPicker jobs={["video", "avatar"]} help="model-select" showDetail={false} shot={s?.shot_type} value={node.provider_override || ""}
               autoLabel={`Auto (${node.cost.model || "best fit"}${autoRow ? ` · ${autoRow.price_text}` : ""})`}
@@ -336,7 +380,8 @@ function ClipEditor({ node }: { node: Node }) {
             <Dialogue lines={s.dialogue} actors={actors.map((a) => ({ id: a.id, title: a.title }))} onSave={(dialogue) => saveScript({ dialogue })} />
           </div>
           <div className="p-4">
-            <div className="field-label mb-1">Narration (voice-over)</div>
+            <div className="field-label mb-1 flex items-center gap-2">Narration (voice-over)
+              {s.narration.trim() && <ExactToggle on={!!s.narration_fixed} onChange={(narration_fixed) => saveScript({ narration_fixed })} />}</div>
             <Editable value={s.narration} onSave={(narration) => saveScript({ narration })} multiline placeholder="Optional voice-over" />
           </div>
           <div className="grid gap-4 p-4 sm:grid-cols-2">
@@ -406,6 +451,18 @@ function ActorsInShot({ node }: { node: Node }) {
   );
 }
 
+/** "Say exactly this": a line marked this way is never shortened, reworded or dropped, whatever the AI or the length change does. */
+function ExactToggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <Tip content={on ? "Said exactly as written. It is never shortened, reworded or dropped. Click to allow changes." : "Click to say this exactly as written: it is then never shortened, reworded or dropped."}>
+      <button type="button" aria-pressed={on} aria-label="Say exactly this" data-help="say-exactly" onClick={() => onChange(!on)}
+        className={cn("mt-1 inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[10px]", on ? "border-brand/50 bg-brand/10 text-brand" : "border-line text-muted hover:border-brand/40")}>
+        {on ? <Lock className="h-2.5 w-2.5" /> : <LockOpen className="h-2.5 w-2.5" />}{on ? "exact" : "exact?"}
+      </button>
+    </Tip>
+  );
+}
+
 function Dialogue({ lines, actors, onSave }: { lines: Line[]; actors: { id: string; title: string }[]; onSave: (l: Line[]) => void }) {
   const speakers = [{ value: "narrator", label: "Narrator" }, ...actors.map((a) => ({ value: a.id, label: a.title }))];
   return (
@@ -415,6 +472,7 @@ function Dialogue({ lines, actors, onSave }: { lines: Line[]; actors: { id: stri
           <Select value={l.speaker} onChange={(speaker) => onSave(lines.map((x, j) => (j === i ? { ...x, speaker } : x)))}
             options={speakers.some((s) => s.value === l.speaker) ? speakers : [...speakers, { value: l.speaker, label: l.speaker }]} className="w-32 shrink-0" />
           <div className="flex-1"><Editable value={l.text} onSave={(text) => onSave(lines.map((x, j) => (j === i ? { ...x, text } : x)))} multiline /></div>
+          <ExactToggle on={!!l.fixed} onChange={(fixed) => onSave(lines.map((x, j) => (j === i ? { ...x, fixed } : x)))} />
           <button aria-label="Remove line" className="mt-1 opacity-0 group-hover:opacity-100 text-muted hover:text-bad" onClick={() => onSave(lines.filter((_, j) => j !== i))}><Trash2 className="h-3 w-3" /></button>
         </div>
       ))}

@@ -124,6 +124,12 @@ class FakeLLM(LLM):
             if re.search(r"narrat|voice.?over|explain", g) and not any(a["name"] == "Narrator" for a in actors):
                 actors.append({"name": "Narrator", "kind": "ai_person", "description": "the voice-over narrator (never seen)",
                                "voice_description": "warm, clear, natural narrator", **_profile_for(g)})
+        from ... import languages
+        spoken = languages.normalise(m.get("language") or "")
+        if spoken:                       # offline, the planner cannot know where a character is from: the accent is the language they speak
+            for a in actors:
+                a.setdefault("voice_accent", languages.name_of(spoken))
+                a.setdefault("language", spoken)
         topic = topic_of(goal)
         n_parts = 3 if secs >= 30 else 2
         names = [("Opening", "Hook: set the scene — "), ("Main", "Main moment — "),
@@ -136,8 +142,17 @@ class FakeLLM(LLM):
             psecs = round(secs * share, 1)
             n_clips = max(1, min(4, round(psecs / 7)))
             beats = ["establishing view", "closer detail", "reaction", "key action"]
-            clips = [{"title": f"{title}: {beats[i % 4]}", "goal": f"{prefix}{topic} ({beats[i % 4]})",
-                      "seconds": round(psecs / n_clips, 1)} for i in range(n_clips)]
+            clips = []
+            for i in range(n_clips):
+                cgoal = f"{prefix}{topic} ({beats[i % 4]})"
+                first_of_video = not parts and i == 0
+                continuing = i > 0 and any(w in cgoal.lower() for w in ("continues", "then", "same moment"))
+                join = "" if first_of_video else "continues" if continuing else "same_scene" if i > 0 else "cut"
+                reason = ("" if first_of_video else "the same shot goes on" if continuing
+                          else "same place and people, a new angle" if i > 0 else "a new part of the story")
+                clips.append({"title": f"{title}: {beats[i % 4]}", "goal": cgoal, "seconds": round(psecs / n_clips, 1),
+                              "join": join, "join_reason": reason, "place": topic[:60], "present": [a["name"] for a in actors],
+                              "start_state": f"Opening of '{beats[i % 4]}': {topic[:50]}", "end_state": f"End of '{beats[i % 4]}': {topic[:50]}, the subject in frame"})
             parts.append({"title": title, "goal": prefix + topic, "seconds": psecs, "clips": clips})
         mood = "tense" if any(w in g for w in ("chase", "danger", "fight", "escape")) else "uplifting"
         title = topic if len(topic) <= 50 else topic[:50].rsplit(" ", 1)[0] + "…"
@@ -172,8 +187,12 @@ class FakeLLM(LLM):
         n = max(2, min(4, round(secs / 7)))
         labels = ["Set up", "Develop", "Turn", "Pay off"][:n]
         goal = topic_of(goal)
-        return {"children": [{"title": f"{l}", "goal": f"{l} — {goal}", "seconds": round(secs / n, 1), "kind": "clip"}
-                             for l in labels], "note": "offline brain: simple split"}
+        has_before = bool(m.get("has_previous") or m.get("prev_end"))
+        return {"children": [{"title": f"{l}", "goal": f"{l} — {goal}", "seconds": round(secs / n, 1), "kind": "clip",
+                              "join": "same_scene" if i else ("cut" if has_before else ""),
+                              "join_reason": "same place and people, a later moment" if i else ("a new part of the story" if has_before else ""),
+                              "place": goal[:60], "start_state": f"{l}: {goal[:50]}", "end_state": f"End of '{l}': {goal[:50]}"}
+                             for i, l in enumerate(labels)], "note": "offline brain: simple split"}
 
     def _split_clip(self, m: dict) -> dict:
         """Offline fallback: split at the script's own structure. The spoken part (all dialogue) becomes a face-only clip about as long

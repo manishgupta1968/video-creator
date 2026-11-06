@@ -435,6 +435,36 @@ def render(clip: Optional[str] = typer.Argument(None, help="clip number to make 
 
 
 @app.command()
+def join(node: str = typer.Argument(..., help="clip number, for example 1.2"),
+         how: str = typer.Argument(..., help="continues | same_scene | cut: how this clip joins the clip before it"),
+         project: Optional[str] = typer.Option(None, "-p")):
+    """Say how a clip joins the one before it. continues = starts on its last picture; same_scene = same place, new angle; cut = new place or time."""
+    svc = _svc()
+    pid = _pid(project)
+    try:
+        p = svc.set_join(pid, _node(svc, pid, node), how)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc))
+    c = find(p, _node(svc, pid, node)).continuity
+    con.print(f"Clip {node} now joins the clip before it as: [bold]{c.join}[/] ({c.join_reason}).")
+
+
+@app.command()
+def continuity(project: Optional[str] = typer.Option(None, "-p")):
+    """List what would make the clips feel like different videos (plain rules, no AI, no cost)."""
+    svc = _svc()
+    pid = _pid(project)
+    found = svc.summary(svc.load(pid))["continuity"]
+    if not found:
+        con.print("Everything fits together.")
+    for f in found:
+        con.print(f"[{'red' if f['severity'] == 'problem' else 'yellow'}]{f['severity'].upper()}[/] {('clip ' + f['number'] + ': ') if f['number'] else ''}{f['text']}")
+        for fx in f["fixes"]:
+            if fx["action"] in ("copy_start", "set_join", "joins_as_cuts"):
+                con.print(f"    fix: {fx['label']}" + (f"  (vg join {f['number']} {fx['join']})" if fx["action"] == "set_join" else ""))
+
+
+@app.command()
 def export(node: str = typer.Argument(..., help="clip or part number, for example 2 or 2.1"),
            output: Optional[Path] = typer.Option(None, "-o", help="where to save the video (default: the current folder)"),
            music: str = typer.Option("auto", help="auto | new | none: auto uses the saved music and asks before a new track is paid for"),

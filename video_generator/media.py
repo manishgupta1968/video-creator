@@ -261,6 +261,28 @@ def last_frame(video: Path, out: Path) -> Path:
     return out
 
 
+def _small_grey(path: Path, side: int = 32, last: bool = False) -> bytes:
+    """A picture (or the first or last frame of a video) as side x side grey pixels, to compare two pictures cheaply."""
+    seek = ["-sseof", "-0.25"] if last else []
+    out = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", *seek, "-i", str(path), "-frames:v", "1", "-vf",
+                          f"scale={side}:{side}:flags=area,format=gray", "-f", "rawvideo", "-"],
+                         capture_output=True, timeout=120).stdout
+    if len(out) < side * side and last:                       # a clip too short to seek from the end: take the picture at its end
+        out = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-ss", f"{max(probe_duration(path) - 0.1, 0):.3f}", "-i", str(path),
+                              "-frames:v", "1", "-vf", f"scale={side}:{side}:flags=area,format=gray", "-f", "rawvideo", "-"],
+                             capture_output=True, timeout=120).stdout
+    if len(out) < side * side:
+        raise MediaError(f"could not read a picture from {Path(path).name}")
+    return out[: side * side]
+
+
+def frame_difference(a: Path, b: Path, a_last: bool = False, b_last: bool = False) -> float:
+    """How different two pictures look: 0 = the same, 1 = opposite (black against white). Each picture is a still image, or the first
+    frame of a video (or its last frame when a_last / b_last is set). Both are shrunk to a small grey picture and compared pixel by pixel."""
+    pa, pb = _small_grey(a, last=a_last), _small_grey(b, last=b_last)
+    return round(sum(abs(x - y) for x, y in zip(pa, pb)) / (255.0 * len(pa)), 4)
+
+
 def sample_frames(video: Path, out_dir: Path, every: float = 1.0, max_frames: int = 12) -> list[tuple[float, Path]]:
     dur = probe_duration(video)
     if dur <= 0:

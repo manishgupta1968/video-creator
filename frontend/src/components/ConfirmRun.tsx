@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock, Coins, Film, Play } from "lucide-react";
+import { AlertTriangle, Clock, Coins, Film, Link2, Play } from "lucide-react";
 import React, { createContext, useContext, useState } from "react";
 import { api, Estimate } from "../api";
 import { fmtTime, fmtUsd, useP } from "../lib";
@@ -33,6 +33,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
   };
   const nums = P.numbers;
   const free = est && est.cost_usd === 0;
+  const blocked = est?.blocked || [];
   const prev = P.view?.summary.preview;
   const previewClips = est && prev ? est.clips.filter((id) => (prev.clips[id] || []).length > 0) : [];
   return (
@@ -42,7 +43,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
         description={free ? "This uses only free tools." : "Check the cost and time before anything is paid for."}
         footer={<>
           <Button variant="ghost" onClick={() => setReq(null)}>Cancel</Button>
-          <Button help="confirm-spend" variant="primary" onClick={go} loading={loading} disabled={!est}><Play className="h-3.5 w-3.5" />{free ? "Make it" : `Spend ≈ ${fmtUsd(est?.cost_usd)}`}</Button>
+          <Button help="confirm-spend" variant="primary" onClick={go} loading={loading} disabled={!est || blocked.length > 0}><Play className="h-3.5 w-3.5" />{free ? "Make it" : `Spend ≈ ${fmtUsd(est?.cost_usd)}`}</Button>
         </>}>
         {!est ? <div className="skeleton h-24 rounded-lg" /> : (
           <div className="space-y-4">
@@ -51,6 +52,13 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
               <Stat icon={<Coins className="h-4 w-4" />} label="Cost" value={fmtUsd(est.cost_usd)} />
               <Stat icon={<Clock className="h-4 w-4" />} label="Time" value={`~${fmtTime(est.time_s)}`} />
             </div>
+            {blocked.length > 0 && (
+              <div className="rounded-lg bg-bad/10 px-3 py-2 text-xs text-bad">
+                <div className="flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5" />{blocked.length === 1 ? "One clip cannot be made yet" : `${blocked.length} clips cannot be made yet`}</div>
+                {blocked.slice(0, 3).map((b) => <div key={b.id} className="mt-1">Clip {b.number}: {b.why}</div>)}
+                <button className="mt-1 underline" onClick={() => { setReq(null); P.select(blocked[0].id); }}>Open clip {blocked[0].number}</button>
+              </div>
+            )}
             {previewClips.length > 0 && (
               <div className="rounded-lg bg-warn/10 px-3 py-2 text-xs text-warn">
                 <div className="flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5" />{previewClips.length} of these {est.clips.length} clip(s) will only be text-card previews, not real footage.</div>
@@ -61,6 +69,12 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
             {est.extra_upstream.length > 0 && (
               <div className="rounded-lg bg-info/10 px-3 py-2 text-xs text-info">
                 Includes {est.extra_upstream.length} earlier clip(s) this one needs first: {est.extra_upstream.map((i) => nums[i]).join(", ")}
+              </div>
+            )}
+            {(est.reuses || []).length > 0 && (
+              <div className="rounded-lg border border-line px-3 py-2 text-xs">
+                <div className="flex items-center gap-1.5 font-semibold"><Link2 className="h-3.5 w-3.5 text-brand" />Reused from the rest of the video, so everything matches</div>
+                <ul className="mt-1 list-disc pl-5 text-muted">{(est.reuses || []).map((r, i) => <li key={i}>{r}</li>)}</ul>
               </div>
             )}
             <div>

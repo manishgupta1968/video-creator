@@ -69,6 +69,12 @@ export const TRANSITIONS = [
   { value: "dissolve", label: "Dissolve" }, { value: "whip", label: "Whip" }, { value: "wipe", label: "Wipe" },
 ];
 
+/** What a length change did to the clips, in plain words: which clips moved, and why it could not go lower or higher. */
+export function scaleText(sc: { changed: { number: string; from: number; to: number }[]; note: string }) {
+  const moved = sc.changed.length ? `Clip${sc.changed.length > 1 ? "s" : ""} ${sc.changed.map((c) => `${c.number}: ${fmtSec(c.from)} to ${fmtSec(c.to)}`).join(", ")}.` : "";
+  return [moved, sc.note].filter(Boolean).join(" ");
+}
+
 // ------------------------------------------------------------------- toasts
 type Toast = { id: number; text: string; tone: "ok" | "bad" | "info"; action?: { label: string; run: () => void } };
 const ToastCtx = createContext<(t: Omit<Toast, "id">) => void>(() => {});
@@ -148,6 +154,8 @@ export function ProjectProvider({ pid, children }: { pid: string; children: Reac
     try {
       const r = await fn();
       if (r && typeof r === "object" && "project" in (r as any) && "summary" in (r as any)) set(r as any);
+      const sc = r && typeof r === "object" ? (r as any).scale : null;
+      if (sc && ((sc.changed && sc.changed.length) || sc.note)) toast({ text: scaleText(sc), tone: "info", action: { label: "Undo", run: async () => set(await api.undo(pid)) } });
       if (okText) toast({ text: okText, tone: "ok", action: { label: "Undo", run: async () => set(await api.undo(pid)) } });
       return r;
     } catch (e: any) {

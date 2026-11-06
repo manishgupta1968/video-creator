@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
+from . import continuity as continuity_mod
 from . import deps as deps_mod
 from . import guide as guide_mod
 from . import languages, models_list, musictrack, scaling
@@ -14,11 +15,11 @@ from . import policy as policy_mod
 from . import estimate as est
 from . import media
 from . import stock
-from .brain import (Brain, ClipScriptDraft, CommandPlan, Op, ProjectDraft, draft_to_script, preserve_fixed)
+from .brain import (Brain, ClipScriptDraft, CommandPlan, Op, ProjectDraft, draft_to_script, normalize_join, preserve_fixed, to_continuity)
 from .catalog import Catalog
 from .config import Config
 from .context import guess_type_and_role, item_by_id
-from .models import (ActorDetails, ClipScript, ClipVersion, Consent, ContextItem, ContextRole, ContextType,
+from .models import (ActorDetails, ClipScript, ClipVersion, Consent, ContextItem, Continuity, ContextRole, ContextType,
                      Dependency, DependencyType, DialogueLine, Node, NodeKind, NodeStatus, Project, Settings, ShotType, Style, now_iso)
 from .project import ProjectStore
 
@@ -70,8 +71,30 @@ class Service:
                 "length_mode": project.settings.length_mode, "language": project.settings.language,
                 "quality_mode": project.settings.quality_mode, "parts": self.parts_table(project),
                 "preview": self.preview_info(project), **self.final_info(project)}
+        try:
+            out["continuity"] = continuity_mod.check(project, self.reg, ProjectStore.path_for(project.id))
+        except FileNotFoundError:                       # a project that is not saved yet has no folder to look in
+            out["continuity"] = continuity_mod.check(project, self.reg)
         out["guide"] = guide_mod.compute(self, project, out)
         return out
+
+    def fix_continuity(self, pid: str, action: str, node_id: str = "", join: str = "") -> Project:
+        """Run one mechanical fix offered by the continuity check: copy_start | set_join | joins_as_cuts."""
+        if action == "set_join":
+            return self.set_join(pid, node_id, join)
+        p = self.load(pid)
+        if action == "copy_start":
+            self._sync_states(p)
+        elif action == "joins_as_cuts":
+            ls = leaves(p)
+            for a, b in zip(ls, ls[1:]):
+                linked = any(d.from_id == a.id and d.to_id == b.id and d.type in (DependencyType.continues_from, DependencyType.same_location)
+                             for d in p.dependencies)
+                if b.kind == NodeKind.clip and not b.continuity.join and not linked:
+                    b.continuity.join, b.continuity.join_reason = "cut", "marked as a cut by you"
+        else:
+            raise ValueError("That fix is not one the tool can run for you.")
+        return self.save(p)
 
     def parts_table(self, project: Project) -> list[dict]:
         """One row per part, sub-part and clip (story order, with depth): the numbers behind "Cost by part".
@@ -227,7 +250,7 @@ class Service:
                 c = existing[a.name.lower()]
                 if c.actor:
                     for f in ("description", "clothing", "behaviour", "voice_description", "voice_gender", "voice_age",
-                              "voice_pitch", "voice_pace", "voice_accent", "speaking_wpm"):
+                              "voice_pitch", "voice_pace", "voice_accent", "language", "speaking_wpm"):
                         if not getattr(c.actor, f):
                             setattr(c.actor, f, getattr(a, f))
                 continue
@@ -237,13 +260,15 @@ class Service:
                                                             behaviour=a.behaviour, voice_description=a.voice_description,
                                                             voice_gender=a.voice_gender, voice_age=a.voice_age, voice_pitch=a.voice_pitch,
                                                             voice_pace=a.voice_pace, voice_accent=a.voice_accent,
+                                                            language=languages.normalise(a.language) or "",
                                                             speaking_wpm=a.speaking_wpm or None)))
         p.music_advice = d.music_advice or p.music_advice
         p.root.children = []
         for part in d.parts:
             g = Node(kind=NodeKind.goal, title=part.title, goal=part.goal, target_seconds=part.seconds or None)
             for c in part.clips:
-                g.children.append(Node(kind=NodeKind.clip, title=c.title, goal=c.goal, target_seconds=c.seconds or None))
+                g.children.append(Node(kind=NodeKind.clip, title=c.title, goal=c.goal, target_seconds=c.seconds or None,
+                                       continuity=to_continuity(c)))
             if not g.children:
                 g.kind = NodeKind.clip
             p.root.children.append(g)
@@ -256,6 +281,8 @@ class Service:
         else:
             self._fit_to_target(p)
         self._attach_media_context(p)
+        self._apply_joins(p)
+        self._sync_states(p)                                           # a continuing clip starts exactly where the one before it ends
         self.save(p)
         try:
             await self.auto_photos(pid)          # free: real photos for animals/objects the user did not supply
@@ -287,6 +314,105 @@ class Service:
                 node.target_seconds = round(sum((c.target_seconds or 0) for c in node.children), 1) or node.target_seconds
         roll(p.root)
 
+    # ================================================================ how a clip joins the one before it (see models.Continuity)
+    JOIN_LINK = {"continues": DependencyType.continues_from, "same_scene": DependencyType.same_location}
+
+    @staticmethod
+    def _continues_from_previous(p: Project, n: Node) -> bool:
+        return any(d.to_id == n.id and d.type == DependencyType.continues_from for d in p.dependencies)
+
+    def _apply_joins(self, p: Project) -> None:
+        """Make the links between clips say what the plan decided: continues = a "continues from" link, same_scene = a "same location" link,
+        cut = no link. A link you made yourself wins over the plan. A continuing shot is always a hard cut (a dissolve would double-expose it)."""
+        ls = leaves(p)
+        for a, b in zip(ls, ls[1:]):
+            between = [d for d in p.dependencies if d.from_id == a.id and d.to_id == b.id
+                       and d.type in (DependencyType.continues_from, DependencyType.same_location)]
+            mine = [d for d in between if d.source == "user"]
+            if mine:
+                b.continuity.join = "continues" if any(d.type == DependencyType.continues_from for d in mine) else "same_scene"
+                b.continuity.join_reason = b.continuity.join_reason or "set by you"
+            j = b.continuity.join
+            if not j:
+                continue
+            for d in between:
+                if d.source != "user" and (j == "cut" or d.type != self.JOIN_LINK[j]):
+                    p.dependencies.remove(d)
+            if j in self.JOIN_LINK and not any(d.type == self.JOIN_LINK[j] for d in p.dependencies if d.from_id == a.id and d.to_id == b.id):
+                try:
+                    deps_mod.add_dependency(p, Dependency(from_id=a.id, to_id=b.id, type=self.JOIN_LINK[j], source="ai",
+                                                          note=b.continuity.join_reason or "planned join"))
+                except ValueError:
+                    pass
+            if j == "continues":
+                b.transition_in = "cut"
+
+    def _sync_states(self, p: Project) -> list[str]:
+        """A clip that continues the one before it starts exactly where that one ended: the tool COPIES the end state into the start state
+        (it is never left to the AI). Clips already made that change are marked out of date. Returns the ids of clips whose start changed."""
+        changed: list[str] = []
+        ls = leaves(p)
+        for a, b in zip(ls, ls[1:]):
+            if b.continuity.join != "continues" and not (b.continuity.join == "" and self._continues_from_previous(p, b)):
+                continue
+            end = (a.script.end_state if a.script and a.script.end_state.strip() else a.continuity.end_state).strip()
+            if not end:
+                continue
+            a.continuity.end_state = end
+            if a.script and not a.script.end_state.strip():
+                a.script.end_state = end
+            b.continuity.start_state = end
+            if b.script and b.script.start_state.strip() != end:
+                b.script.start_state = end
+                changed.append(b.id)
+                if b.status in (NodeStatus.done, NodeStatus.needs_pick):
+                    b.status = NodeStatus.stale
+                    deps_mod.mark_downstream_stale(p, b.id)
+        return changed
+
+    def _repair_joins(self, p: Project) -> None:
+        """After clips were added, moved or removed: a join that relied on the clip that used to be before this one no longer holds, so it
+        becomes a cut. (Plan-made links to a clip that is no longer next are dropped; your own links stay.)"""
+        ls = leaves(p)
+        for i, b in enumerate(ls):
+            prev = ls[i - 1] if i else None
+            for d in list(p.dependencies):
+                if d.to_id == b.id and d.type in (DependencyType.continues_from, DependencyType.same_location) and d.source != "user" \
+                        and (prev is None or d.from_id != prev.id):
+                    p.dependencies.remove(d)
+            if i == 0:
+                b.continuity.join, b.continuity.join_reason = "", ""
+                continue
+            want = self.JOIN_LINK.get(b.continuity.join)
+            if want and not any(d.from_id == prev.id and d.to_id == b.id and d.type == want for d in p.dependencies):
+                b.continuity.join, b.continuity.join_reason = "cut", "the clip before it changed"
+
+    def set_join(self, pid: str, node_id: str, join: str, reason: str = "set by you") -> Project:
+        """Change how a clip joins the one before it. continues copies the previous end into this start (and a clip already made is marked
+        out of date, because it must be made again from the hand-over picture); the transition becomes a cut."""
+        join = normalize_join(join)
+        if not join:
+            raise ValueError("A join is continues, same_scene or cut.")
+        p = self.load(pid)
+        n = find(p, node_id)
+        ls = leaves(p)
+        if not n.is_leaf or n.id == ls[0].id:
+            raise ValueError("Only a clip that has a clip before it can have a join.")
+        prev = ls[[x.id for x in ls].index(n.id) - 1]
+        was_continuing = n.continuity.join == "continues" or (n.continuity.join == "" and self._continues_from_previous(p, n))
+        n.continuity.join, n.continuity.join_reason = join, reason
+        p.dependencies = [d for d in p.dependencies if not (d.from_id == prev.id and d.to_id == n.id
+                                                            and d.type in (DependencyType.continues_from, DependencyType.same_location))]
+        self._apply_joins(p)
+        for d in p.dependencies:
+            if d.from_id == prev.id and d.to_id == n.id and d.type in (DependencyType.continues_from, DependencyType.same_location):
+                d.source = "user"
+        self._sync_states(p)
+        if join == "continues" and not was_continuing and n.status in (NodeStatus.done, NodeStatus.needs_pick):
+            n.status = NodeStatus.stale
+            deps_mod.mark_downstream_stale(p, n.id)
+        return self.save(p)
+
     def _attach_media_context(self, p: Project) -> None:
         """Slides / footage the user dropped become leaves of their own."""
         for c in p.context:
@@ -302,10 +428,22 @@ class Service:
                 target.children.append(node)
                 c.analysis["placed"] = node.id
 
+    def rewrite_offer(self, pid: str, node_id: str) -> dict:
+        """What 'update the clip scripts to match' would do under this part, and what the AI would cost: {clips, numbers, kept, cost_usd}.
+        Clips that are made or kept are left alone (and counted in `kept`)."""
+        p = self.load(pid)
+        nums = numbering(p)
+        clips = [n for n, _ in walk(find(p, node_id)) if n.kind == NodeKind.clip]
+        todo = [n for n in clips if not scaling.protected(n)]
+        brain = self.reg.llm_entry("default")
+        one = est._llm_cost(brain, est.SCRIPT_TOKENS) if brain else 0.0
+        return {"clips": len(todo), "numbers": [nums.get(n.id, "") for n in todo], "kept": [nums.get(n.id, "") for n in clips if scaling.protected(n)],
+                "cost_usd": round(one * len(todo), 4)}
+
     async def write_all_scripts(self, pid: str, under: Optional[str] = None, overwrite: bool = False) -> Project:
         p = self.load(pid)
         base = find(p, under) if under else p.root
-        targets = [n for n, _ in walk(base) if n.kind == NodeKind.clip and (overwrite or not n.script)]
+        targets = [n for n, _ in walk(base) if n.kind == NodeKind.clip and (not n.script or (overwrite and not scaling.protected(n)))]   # made or kept clips are never rewritten silently
         sem = asyncio.Semaphore(4)
 
         async def one(n: Node):
@@ -327,6 +465,8 @@ class Service:
                 deps_mod.add_dependency(p, dep)
             except ValueError:
                 pass
+        self._apply_joins(p)                                  # the plan's decisions win over rule-based guesses
+        self._sync_states(p)
         self.save(p)
         if errors:
             raise RuntimeError("; ".join(errors[:3]))
@@ -351,13 +491,23 @@ class Service:
             deps_mod.mark_downstream_stale(p, node.id)
         elif node.status in (NodeStatus.draft,):
             node.status = NodeStatus.ready
+        c = node.continuity
+        if feedback.strip():                                  # you asked for a change: the new states are the truth now
+            c.end_state = node.script.end_state.strip() or c.end_state
+            if c.join != "continues":
+                c.start_state = node.script.start_state.strip() or c.start_state
+        else:                                                 # the plan's states are a contract: the script keeps them word for word
+            if c.end_state:
+                node.script.end_state = c.end_state
+            if c.start_state and c.join != "continues":
+                node.script.start_state = c.start_state
         prev = None
         for n, _ in walk(p.root):
             if n.id == node.id:
                 break
             if n.is_leaf:
                 prev = n
-        if prev:
+        if prev and not c.join:                               # only an undecided clip uses the script writer's guess about the join
             for flag, typ in ((draft.continues_from_previous, DependencyType.continues_from),
                               (draft.same_location_as_previous, DependencyType.same_location)):
                 if flag:
@@ -375,6 +525,8 @@ class Service:
         draft = await self.brain.write_clip_script(p, n, feedback)
         p = self.load(pid)
         self._apply_script(p, find(p, node_id), draft, feedback)
+        self._apply_joins(p)
+        self._sync_states(p)
         self._ledger_llm(p, f"script {node_id}")
         return self.save(p)
 
@@ -389,7 +541,10 @@ class Service:
             n.script = None
         for c in dec.children:
             n.children.append(Node(kind=NodeKind.clip if c.kind == "clip" else NodeKind.goal, title=c.title,
-                                   goal=c.goal, target_seconds=c.seconds or None))
+                                   goal=c.goal, target_seconds=c.seconds or None,
+                                   continuity=to_continuity(c) if c.kind == "clip" else Continuity()))
+        self._apply_joins(p)
+        self._sync_states(p)
         self._ledger_llm(p, f"break down {node_id}")
         self.save(p)
         return await self.write_all_scripts(pid, under=node_id)
@@ -424,8 +579,13 @@ class Service:
                 on_camera_speech=bool(part.dialogue) and old.on_camera_speech,
                 sound_notes=part.sound_notes or old.sound_notes, motion=part.motion if part.motion in ("face", "body", "scene") else "",
                 start_state=part.start_state, end_state=part.end_state, negative=old.negative, target_seconds=part.seconds or None)
+            first = not made
+            cont = Continuity(join=n.continuity.join if first else "continues",
+                              join_reason=n.continuity.join_reason if first else "made by splitting one clip: the next part starts where this one ends",
+                              place=n.continuity.place, present=list(n.continuity.present), start_state=script.start_state,
+                              end_state=script.end_state, carry_over=n.continuity.carry_over if first else "everything: it is the same shot")
             made.append(Node(kind=NodeKind.clip, title=part.title or n.title, goal=part.goal or n.goal, target_seconds=part.seconds or None,
-                             script=script, status=NodeStatus.ready, context_add=list(n.context_add), context_off=list(n.context_off),
+                             script=script, status=NodeStatus.ready, continuity=cont, context_add=list(n.context_add), context_off=list(n.context_off),
                              context_override=dict(n.context_override), provider_override=n.provider_override, takes_override=n.takes_override,
                              review_enabled=n.review_enabled))
         made[0].transition_in = n.transition_in
@@ -583,6 +743,13 @@ class Service:
             n.script = new
         if "target_seconds" in patch and n.script:
             n.script.target_seconds = patch["target_seconds"]
+        if "script" in patch and patch["script"] is not None and n.script:
+            if "end_state" in patch["script"]:
+                n.continuity.end_state = n.script.end_state.strip()
+            if "start_state" in patch["script"] and n.continuity.join != "continues":
+                n.continuity.start_state = n.script.start_state.strip()
+        if n.continuity.join == "continues" or self._continues_from_previous(p, n):
+            n.transition_in = "cut"                              # a dissolve would double-expose a continuing shot
         if script_changed:
             n.voice_audio, n.voice_seconds = None, None
             if n.status in (NodeStatus.done, NodeStatus.needs_pick):
@@ -591,6 +758,8 @@ class Service:
         if n.id == p.root.id and "target_seconds" in patch and patch["target_seconds"]:
             p.settings.target_seconds = float(patch["target_seconds"])
             p.settings.length_mode = "fixed"                  # you asked for a length: it is no longer "as short as the story allows"
+        if "script" in patch:
+            self._sync_states(p)                              # a changed end state moves on to the clip that continues from it
         return self.save(p)
 
     def add_node(self, pid: str, parent_id: str, kind: str = "clip", title: str = "", goal: str = "",
@@ -598,17 +767,20 @@ class Service:
         p = self.load(pid)
         n = Node(kind=NodeKind(kind), title=title or "New clip", goal=goal, media=media_path)
         add_child(p, parent_id, n, index)
+        self._repair_joins(p)
         self.save(p)
         return p, n.id
 
     def remove_node(self, pid: str, node_id: str) -> Project:
         p = self.load(pid)
         remove(p, node_id)
+        self._repair_joins(p)
         return self.save(p)
 
     def move_node(self, pid: str, node_id: str, parent_id: str, index: int) -> Project:
         p = self.load(pid)
         move(p, node_id, parent_id, index)
+        self._repair_joins(p)
         return self.save(p)
 
     def update_project(self, pid: str, patch: dict) -> Project:
@@ -1290,4 +1462,6 @@ class Service:
     def estimate_targets(self, pid: str, targets: list[str]) -> dict:
         p = self.load(pid)
         self.refresh(p)
-        return est.estimate_targets(p, self.reg, targets)
+        out = est.estimate_targets(p, self.reg, targets)
+        out["reuses"] = continuity_mod.reuses(p, self.reg, out["clips"])       # what these clips take from the rest of the video
+        return out

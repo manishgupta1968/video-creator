@@ -1,4 +1,5 @@
 import { AudioLines, Box, Building2, FileText, Film, Image as ImageIcon, MapPin, Mic, Palette, Play, Search, ShieldAlert, ShieldCheck, Trash2, User } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, Ctx, fileUrl } from "../api";
 import { CTX_ROLES, CTX_TYPES, useP, useSettings } from "../lib";
@@ -68,6 +69,7 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
   const P = useP();
   const p = P.view!.project;
   const save = (patch: any) => P.act("Save", () => api.patchContext(P.pid, item.id, patch));
+  const langs = useQuery({ queryKey: ["languages"], queryFn: api.languages, staleTime: Infinity });
   const saveActor = (patch: any) => save({ actor: patch });
   const [playing, setPlaying] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
@@ -192,7 +194,12 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
                   <Select value={a?.voice_pace || ""} onChange={(voice_pace) => saveActor({ voice_pace })} className="w-full" options={[
                     { value: "", label: "Pace: decide for me" }, { value: "slow", label: "Slow" }, { value: "normal", label: "Normal" }, { value: "fast", label: "Fast" }]} />
                 </div>
-                <div className="mt-1.5"><Editable value={a?.voice_accent || ""} onSave={(voice_accent) => saveActor({ voice_accent })} placeholder="Accent, e.g. Indian English (optional)" /></div>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  <Editable value={a?.voice_accent || ""} onSave={(voice_accent) => saveActor({ voice_accent })} placeholder="Accent, e.g. Indian English (every speaker needs one)" />
+                  <Select title="The language this character speaks" value={a?.language || ""} onChange={(language) => saveActor({ language })} className="w-full"
+                    options={[{ value: "", label: "Language: same as the video" }, ...(langs.data || []).map((l) => ({ value: l.code, label: `${l.name} (${l.code})` }))]} />
+                </div>
+                {a?.voice_accent_label && <div className="mt-1 text-[11px] text-muted">The chosen voice is labelled “{a.voice_accent_label}” by the voice service.</div>}
                 {a?.voice_name && <div className="mt-1.5 text-[11px] text-muted">Voice chosen: <b>{a.voice_name}</b></div>}
                 {a?.voice_note && <div className="mt-1 rounded-md bg-warn/10 px-2 py-1 text-[11px] text-warn">{a.voice_note}</div>}
                 <div className="mt-1 flex flex-wrap items-center gap-2">

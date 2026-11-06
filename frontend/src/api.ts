@@ -9,12 +9,14 @@ export interface CostLine { item: string; calc: string; cost: number }
 export interface Cost { min_usd: number; likely_usd: number; max_usd: number; lines: CostLine[]; model: string; basis: string; actual_usd: number | null }
 export interface Duration { min_s: number; likely_s: number; max_s: number; basis: "goal" | "script" | "actual"; explain: string }
 export interface ActorInShot { actor_id: string; clothing: string; behaviour: string }
-export interface Line { speaker: string; text: string; emotion: string }
+export interface Line { speaker: string; text: string; emotion: string; fixed?: boolean }
 export interface Script {
   shot_type: string; visual: string; action_beats: string[]; camera: string; actors_in_shot: ActorInShot[];
-  dialogue: Line[]; narration: string; on_camera_speech: boolean; sound_notes: string; start_state: string; end_state: string; negative: string; target_seconds: number | null;
+  dialogue: Line[]; narration: string; narration_fixed?: boolean; on_camera_speech: boolean; sound_notes: string; start_state: string; end_state: string; negative: string; target_seconds: number | null;
 }
 export interface Take { id: string; version: number; index: number; video: string | null; keyframe: string | null; model: string; cost_usd: number; seconds: number; quality: Record<string, number>; review_id: string | null }
+export type Join = "" | "continues" | "same_scene" | "cut";
+export interface Continuity { join: Join; join_reason: string; place: string; present: string[]; start_state: string; end_state: string; carry_over: string; difference: number | null }
 export interface Version { version: number; script: Script; feedback: string; created_at: string }
 export interface Node {
   id: string; kind: NodeKind; title: string; goal: string; children: Node[]; target_seconds: number | null;
@@ -23,8 +25,9 @@ export interface Node {
   status: Status; duration: Duration; cost: Cost; time: { likely_s: number; explain: string }; version: number; versions: Version[];
   takes: Take[]; chosen_take: string | null; voice_audio: string | null; voice_seconds: number | null; output: string | null;
   warnings: string[]; needs_split: boolean; review_enabled: boolean;
+  locked?: boolean; quality_mode?: "best" | "balanced" | "budget" | "free" | null; continuity?: Continuity; blocked?: string;
 }
-export interface Actor { kind: string; description: string; clothing: string; behaviour: string; voice_description: string; voice_gender: string; voice_age: string; voice_pitch: string; voice_pace: string; voice_accent: string; voice_name: string; voice_note: string; voice_sample: string | null; voice_provider: string | null; voice_id: string | null; speaking_wpm: number | null; props: string; reference_sheet: string[]; avatar_id: string | null }
+export interface Actor { kind: string; description: string; clothing: string; behaviour: string; voice_description: string; voice_gender: string; voice_age: string; voice_pitch: string; voice_pace: string; voice_accent: string; voice_accent_label?: string; language?: string; voice_name: string; voice_note: string; voice_sample: string | null; voice_provider: string | null; voice_id: string | null; speaking_wpm: number | null; props: string; reference_sheet: string[]; avatar_id: string | null }
 export interface Ctx {
   id: string; type: CtxType; title: string; text: string; files: string[]; role: CtxRole; scope: string; actor: Actor | null;
   consent: { confirmed: boolean; statement: string; confirmed_by: string; confirmed_at: string; files: string[] }; analysis: Record<string, any>;
@@ -47,10 +50,13 @@ export interface GuideStep { id: string; title: string; state: "done" | "current
 export interface Guide { headline: string; current: string | null; why: string; action: GuideAction | null; steps: GuideStep[]; issues: { text: string; action: GuideAction }[]; progress: { done: number; total: number } }
 export interface PartRow {
   id: string; number: string; title: string; kind: NodeKind; depth: number; seconds: number; cost: number; cost_min: number; cost_max: number;
-  time_s: number; quality: string; models: string[]; clips: number; done: number;
+  time_s: number; quality: string; quality_own?: boolean; models: string[]; clips: number; done: number;
 }
+export interface FixAction { action: string; label: string; node?: string; join?: string; id?: string }
+export interface Finding { code: string; node: string; number: string; severity: "problem" | "note"; text: string; fixes: FixAction[] }
+export interface ScaleResult { requested: number; achieved: number; changed: { id: string; number: string; from: number; to: number }[]; kept: string[]; note: string }
 export interface Summary {
-  guide: Guide;
+  guide: Guide; continuity?: Finding[];
   length_mode: "auto" | "fixed"; language: string; quality_mode: string; parts: PartRow[];
   seconds: number; seconds_min: number; seconds_max: number; target_seconds: number; cost: number; cost_min: number; cost_max: number; cost_total: number;
   time_s: number; spent: number; budget: number; warnings: string[]; waiting_picks: number; review_flags: number; clips: number; done: number;
@@ -59,9 +65,11 @@ export interface Summary {
   final_ready: boolean; final_stale: boolean; all_clips_done: boolean;
 }
 export interface Activity { node: string; step: string; elapsed_s: number; step_elapsed_s: number; started: number; since: number; now: number; expected_s: number }
-export interface View { project: Project; summary: Summary; engine: { active: boolean; running_clips: string[]; activity: Activity[] } }
+export interface View { scale?: ScaleResult; project: Project; summary: Summary; engine: { active: boolean; running_clips: string[]; activity: Activity[] } }
 export interface StockPhoto { source: string; title: string; thumb: string; url: string; width: number; height: number; author: string; license: string; source_url: string }
-export interface Estimate { clips: string[]; extra_upstream: string[]; cost_usd: number; time_s: number; spent_usd: number; budget_usd: number; over_budget: boolean }
+export interface Estimate { clips: string[]; extra_upstream: string[]; cost_usd: number; time_s: number; spent_usd: number; budget_usd: number; over_budget: boolean; blocked?: { id: string; number: string; why: string }[]; reuses?: string[] }
+export interface ModeCost { cost: number; cost_todo: number; cost_min: number; cost_max: number; seconds: number; time_s: number; models: string[]; clips: number; to_make: number }
+export interface ModeCosts { current: string; effective: string; inherits: string; is_whole_video: boolean; modes: Record<string, ModeCost> }
 export interface BudgetRow { at: string; what: string; vendor: string; model: string; how: string; estimated: number; actual: number }
 export interface BudgetGroup { key: string; label: string; calls: number; estimated: number; actual: number; rows: BudgetRow[] }
 export interface BudgetReport {
@@ -176,6 +184,10 @@ export const api = {
   assemble: (pid: string, music: "auto" | "reuse" | "new" | "none" = "auto") => req<any>("POST", `${P(pid)}/assemble`, { music }),
   musicStatus: (pid: string) => req<MusicStatus>("GET", `${P(pid)}/music`),
   exportNode: (pid: string, nid: string, music: "auto" | "new" | "none" = "auto") => req<ExportResult>("POST", `${P(pid)}/nodes/${nid}/export`, { music }),
+  setJoin: (pid: string, nid: string, join: Join, reason = "") => req<View>("POST", `${P(pid)}/nodes/${nid}/join`, { join, reason }),
+  rewriteOffer: (pid: string, nid: string) => req<{ clips: number; numbers: string[]; kept: string[]; cost_usd: number }>("GET", `${P(pid)}/nodes/${nid}/rewrite-offer`),
+  modeCosts: (pid: string, nid: string) => req<ModeCosts>("GET", `${P(pid)}/nodes/${nid}/mode-costs`),
+  fixContinuity: (pid: string, body: { action: string; node?: string; join?: string }) => req<View>("POST", `${P(pid)}/continuity/fix`, body),
   unpin: (pid: string, ids?: string[]) => req<View>("POST", `${P(pid)}/unpin`, ids ? { ids } : {}),
   pick: (pid: string, nid: string, take_id: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/pick`, { take_id }),
   compare: (pid: string, nid: string, models: string[]) => req<any>("POST", `${P(pid)}/nodes/${nid}/compare`, { models }),

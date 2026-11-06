@@ -9,6 +9,7 @@ import re
 
 from ..base import PluginError, Usage, VoiceChoice, VoiceSpec, VoiceSynth, raise_for
 from ... import media
+from ... import policy as policy_mod
 
 API = "https://api.elevenlabs.io/v1"
 DEFAULT_VOICE = "21m00Tcm4TlvDq8ikWAM"   # "Rachel" stock voice (only when nothing is known about the speaker)
@@ -105,7 +106,8 @@ class ElevenLabsVoice(VoiceSynth):
             if spec.age and lab.get("age") == AGE_LABEL.get(spec.age):
                 score += 2
             score += min(sum(1 for w in words if w in text), 3)
-            score += 2 * sum(1 for w in accent if w in lab.get("accent", ""))
+            if accent and any(w in lab.get("accent", "") for w in accent):
+                score += policy_mod.current().voice_accent_weight               # the accent the plan asks for counts strongly
             if spec.pitch == "low" and any(w in text for w in DEEP_WORDS):
                 score += 1.5
             if spec.pitch == "high" and any(w in text for w in HIGH_WORDS):
@@ -114,7 +116,8 @@ class ElevenLabsVoice(VoiceSynth):
                 score += 0.5
             if v.get("voice_id") in taken:
                 score -= 100
-            scored.append(VoiceChoice(v.get("voice_id", ""), v.get("name", ""), self.name, score, g, preview_url=v.get("preview_url") or ""))
+            scored.append(VoiceChoice(v.get("voice_id", ""), v.get("name", ""), self.name, score, g, preview_url=v.get("preview_url") or "",
+                                      accent=lab.get("accent", "")))
         scored = [c for c in scored if c.voice_id]
         scored.sort(key=lambda c: -c.score)
         if not scored and spec.gender in STOCK:

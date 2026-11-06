@@ -45,6 +45,9 @@ class Policy(BaseModel):
     finish_grain: float = Field(4.0, description="Strength of the matching film grain in the finishing pass (0 = off).")
     precise_endings: Literal["auto", "on", "off"] = Field("auto", description="Make an end picture for a clip whose end is planned and which the next clip continues from: auto = when a usable model can use it; on = always ask for it; off = never.")
 
+    join_max_difference: float = Field(0.15, description="How different the first picture of a clip may be from the last picture of the clip it continues from "
+                                                          "(0 = identical, 1 = opposite). Above this the clip is flagged: it does not start where the one before ended.")
+
     # ---- choosing models
     budget_min_strength: int = Field(3, description="Budget quality picks the cheapest model, but never one that scores below this (1 = poor, 5 = best) for the kind of shot.")
 
@@ -56,6 +59,8 @@ class Policy(BaseModel):
     # ---- voices
     pitch_ranges: dict[str, dict[str, list[float]]] = Field(default_factory=_ranges, description="Pitch range in Hz a voice should have, by gender then pitch (low / medium / high).")
     max_pitch_shift_st: float = Field(4.0, description="The most the tool will change a finished voice's pitch, in semitones. More sounds unnatural; the user is told to pick another voice instead.")
+    voice_accent_weight: float = Field(5.0, description="How strongly the accent the plan asks for counts when a voice is chosen (a voice whose accent label matches gets this many points; "
+                                                         "being the right gender is 4, the right age 2). Higher = the accent matters more than the other traits.")
     voice_preview_candidates: int = Field(6, description="How many candidate voices to listen to (free sample clips) before choosing one. 0 = do not listen.")
     slow_tempo: float = Field(0.9, description="Speed of a voice the plan marks slow (1 = normal).")
     fast_tempo: float = Field(1.08, description="Speed of a voice the plan marks fast.")

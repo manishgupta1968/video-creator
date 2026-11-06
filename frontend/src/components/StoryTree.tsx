@@ -1,16 +1,18 @@
-import { ChevronDown, ChevronRight, Download, Film, Pin, Link2, Loader2, MoreHorizontal, Paperclip, Plus, Presentation, Sparkles, Trash2, Video } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Film, Gauge, Lock, Pin, Link2, Loader2, MoreHorizontal, Paperclip, Plus, Presentation, Sparkles, Trash2, Video } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { useState } from "react";
 import { api, Node } from "../api";
-import { fmtRange, fmtSec, fmtUsd, STATUS, useP } from "../lib";
+import { fmtRange, fmtSec, fmtUsd, leaves, STATUS, useP } from "../lib";
 import { Button, cn, DropZone, Tip } from "../ui";
 import { useDownload } from "./Download";
+import JoinMarker from "./JoinMarker";
 
 export default function StoryTree() {
   const P = useP();
   const p = P.view!.project;
   const s = P.view!.summary;
   const [drag, setDrag] = useState<string | null>(null);
+  const firstLeaf = leaves(p)[0]?.id;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-line px-3 py-2.5">
@@ -25,7 +27,7 @@ export default function StoryTree() {
         </button>
       </div>
       <div data-help="story-tree" className="min-h-0 flex-1 overflow-auto scroll-thin px-1.5 py-2" role="tree" aria-label="Goal tree">
-        {p.root.children.map((c) => <Row key={c.id} node={c} depth={0} drag={drag} setDrag={setDrag} parentId={p.root.id} />)}
+        {p.root.children.map((c) => <Row key={c.id} node={c} depth={0} drag={drag} setDrag={setDrag} parentId={p.root.id} firstLeaf={firstLeaf} />)}
         <div className="px-2 pt-2">
           <Button help="add-part" variant="ghost" size="sm" className="w-full justify-start"
             onClick={async () => {
@@ -50,7 +52,7 @@ function kindIcon(n: Node) {
   return null;
 }
 
-function Row({ node, depth, drag, setDrag, parentId }: { node: Node; depth: number; drag: string | null; setDrag: (s: string | null) => void; parentId: string }) {
+function Row({ node, depth, drag, setDrag, parentId, firstLeaf }: { node: Node; depth: number; drag: string | null; setDrag: (s: string | null) => void; parentId: string; firstLeaf?: string }) {
   const P = useP();
   const p = P.view!.project;
   const [open, setOpen] = useState(true);
@@ -79,6 +81,7 @@ function Row({ node, depth, drag, setDrag, parentId }: { node: Node; depth: numb
 
   return (
     <div role="treeitem" aria-expanded={isGoal ? open : undefined} aria-selected={selected}>
+      {node.kind === "clip" && node.id !== firstLeaf && <JoinMarker node={node} depth={depth} />}
       <div
         draggable onDragStart={(e) => { e.dataTransfer.setData("text/node", node.id); setDrag(node.id); }} onDragEnd={() => setDrag(null)}
         onDragOver={(e) => {
@@ -115,6 +118,9 @@ function Row({ node, depth, drag, setDrag, parentId }: { node: Node; depth: numb
         <Tip content={`Estimated cost: ${fmtRange(node.cost.min_usd, node.cost.max_usd)}`}>
           <span className="w-11 shrink-0 text-right text-[11px] tabular-nums text-muted">{fmtUsd(node.cost.likely_usd)}</span>
         </Tip>
+        {node.quality_mode && <Tip content={`This ${isGoal ? "part" : "clip"} uses ${node.quality_mode} quality of its own (the rest of the video may differ)`}><span className="flex items-center gap-0.5 text-[10px] font-medium text-brand"><Gauge className="h-3 w-3" />{node.quality_mode}</span></Tip>}
+        {!isGoal && node.locked && <Tip content="Kept as it is: length changes and rewrites leave this clip alone"><span aria-label="Kept as it is"><Lock className="h-3 w-3 shrink-0 text-muted" /></span></Tip>}
+        {!isGoal && node.blocked && <Tip content={node.blocked}><span className="text-[10px] font-medium text-bad">blocked</span></Tip>}
         {!isGoal && node.provider_override && (
           <Tip content={preview && node.status !== "done" ? "You chose a free model for this clip (its Model box), so only a placeholder will be made. Choose “Auto” there." : "You chose a model for this clip (its Model box). Choose “Auto” there to let the tool pick."}>
             <span aria-label="Model pinned"><Pin className={cn("h-3 w-3 shrink-0", preview && node.status !== "done" ? "text-warn" : "text-info")} /></span>
@@ -130,7 +136,7 @@ function Row({ node, depth, drag, setDrag, parentId }: { node: Node; depth: numb
         ))}
         <RowMenu node={node} parentId={parentId} />
       </div>
-      {isGoal && open && node.children.map((c) => <Row key={c.id} node={c} depth={depth + 1} drag={drag} setDrag={setDrag} parentId={node.id} />)}
+      {isGoal && open && node.children.map((c) => <Row key={c.id} node={c} depth={depth + 1} drag={drag} setDrag={setDrag} parentId={node.id} firstLeaf={firstLeaf} />)}
       {isGoal && open && node.children.length === 0 && (
         <div className="py-1 text-[11px] text-muted" style={{ paddingLeft: 40 + depth * 14 }}>
           <button className="text-brand hover:underline" onClick={() => P.act("Breaking down", () => api.decompose(P.pid, node.id), "Broken down into clips")}>Break down with AI</button>

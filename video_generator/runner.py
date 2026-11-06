@@ -155,6 +155,18 @@ class Engine:
                         chosen.append(u)
                 if t not in chosen:
                     chosen.append(t)
+        asked_again = set(targets or []) if mode == "clip" else set()
+        stuck = []
+        for c in chosen:
+            node = find(p, c)
+            if node.status == NodeStatus.done and c not in asked_again:
+                continue                                  # already made and not asked for again
+            why = est.plan_clip(p, node, self.svc.reg).blocked if node.kind == NodeKind.clip else ""
+            if why:
+                stuck.append((c, why))
+        if stuck:
+            nums = numbering(p)
+            raise ValueError("Cannot start yet. " + " ".join(f"Clip {nums.get(c, '')}: {why}" for c, why in stuck[:3]))
         ctl = self.runs.get(pid)
         if ctl and ctl.task and not ctl.task.done():
             def add(pr: Project):
@@ -399,6 +411,9 @@ class Engine:
             else:
                 if not n.script:
                     await self.svc.write_script(pid, nid)
+                blocked = est.plan_clip(self.svc.load(pid), find(self.svc.load(pid), nid), self.svc.reg).blocked
+                if blocked:
+                    raise ValueError(blocked)           # the hand-over rule: never start a continuing clip fresh
                 await self._check_consent(pid, nid)
                 await self._prepare_actors(pid, nid)
                 await self._make_voice(pid, nid)
@@ -568,6 +583,8 @@ class Engine:
                 item.actor.voice_provider = provider
                 item.actor.voice_name = name
                 item.actor.voice_note = note
+                item.actor.voice_accent_label = next((x.get("accent", "") for x in (alternatives or item.analysis.get("voice_alternatives") or [])
+                                                      if x.get("voice_id") == vid), "")
                 if alternatives is not None:
                     item.analysis["voice_alternatives"] = alternatives
                 item.analysis.pop("voice_shift", None)               # a new voice must be measured again
@@ -1244,7 +1261,47 @@ class Engine:
                 await self._match_neighbours(pid, nid)
         except Exception:                               # the anchor and the matching are bonuses: never fail a finished clip
             traceback.print_exc()
+        try:
+            await self._check_joins(pid, nid)
+        except Exception:                               # a measurement that could not be taken must never fail a finished clip
+            traceback.print_exc()
         self.emit(pid, {"type": "clip", "node": nid, "status": "done"})
+
+    async def _check_joins(self, pid: str, nid: str) -> None:
+        """Measure every hand-over this clip takes part in (the clip before it, and the clips that continue from it): how different the first picture
+        of the later clip is from the last picture of the earlier one. Runs when EITHER clip finishes, so re-making the earlier clip is covered too.
+        Only real clips are compared (a placeholder card has no real picture). The result is stored on the later clip and judged against the
+        named setting join_max_difference (see estimate.join_miss)."""
+        p = self.svc.load(pid)
+        pairs = [(d.from_id, nid) for d in deps_mod.upstream(p, nid) if d.type == DependencyType.continues_from]
+        pairs += [(nid, d.to_id) for d in deps_mod.downstream(p, nid) if d.type == DependencyType.continues_from]
+        found: dict[str, Optional[float]] = {}
+        for first, second in pairs:
+            a, b = find(p, first), find(p, second)
+            if a.status != NodeStatus.done or b.status != NodeStatus.done or not a.output or not b.output:
+                found[second] = None
+                continue
+            src_a, src_b = self.abs(pid, a.output), self.abs(pid, b.output)
+            if not (src_a and src_b and src_a.exists() and src_b.exists()) or not self._real_output(p, a) or not self._real_output(p, b):
+                found[second] = None
+                continue
+            found[second] = media.frame_difference(src_a, src_b, a_last=True)
+
+        def store(pr: Project):
+            for sid, value in found.items():
+                find(pr, sid).continuity.difference = value
+        if found:
+            await self.mutate(pid, store)
+
+    def _real_output(self, p: Project, n: Node) -> bool:
+        """Was this clip made by a real model (not a free placeholder card)?"""
+        take = next((t for t in n.takes if t.id == n.chosen_take), None)
+        if not take:
+            return n.kind in (NodeKind.slides, NodeKind.user_clip)
+        try:
+            return not self.svc.catalog.get(take.model).is_free
+        except KeyError:
+            return True                                 # your own clip, slides …
 
     # ---------------------------------------------------------------- slides & user clips
     async def _make_slides(self, pid: str, nid: str) -> None:

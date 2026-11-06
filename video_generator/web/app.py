@@ -488,6 +488,26 @@ async def mode_costs(pid: str, nid: str):
     return await guard(svc.mode_costs)(pid, nid)
 
 
+@app.get("/api/projects/{pid}/nodes/{nid}/rewrite-offer")
+async def rewrite_offer(pid: str, nid: str):
+    """What updating the clip scripts under this part to match its goal would do and cost (nothing is changed or spent)."""
+    return await guard(svc.rewrite_offer)(pid, nid)
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/join")
+async def set_join(pid: str, nid: str, body: dict = Body(...)):
+    """How this clip joins the clip before it: continues | same_scene | cut. body.reason is optional."""
+    await guard(svc.set_join)(pid, nid, body.get("join", ""), body.get("reason") or "set by you")
+    return with_scale(pid)
+
+
+@app.post("/api/projects/{pid}/continuity/fix")
+async def fix_continuity(pid: str, body: dict = Body(...)):
+    """Run one mechanical fix from the continuity check: action = copy_start | set_join (with node and join) | joins_as_cuts."""
+    await guard(svc.fix_continuity)(pid, body.get("action", ""), body.get("node", ""), body.get("join", ""))
+    return view(pid)
+
+
 @app.post("/api/projects/{pid}/unpin")
 async def unpin(pid: str, body: dict = Body(default={})):
     """Clear the model chosen on clips (all clips pinned to a free model when no ids are given): the tool picks the best again."""

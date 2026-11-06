@@ -110,7 +110,9 @@ class ActorDetails(BaseModel):
     voice_age: str = ""            # child | teen | young | adult | older
     voice_pitch: str = ""          # low | medium | high
     voice_pace: str = ""           # slow | normal | fast
-    voice_accent: str = ""         # e.g. "Indian English"; defaults to the project language
+    voice_accent: str = ""         # e.g. "Indian English"; the planner always decides it from who the character is
+    voice_accent_label: str = ""   # the accent the voice service labels the chosen voice with ("" = no label); compared with voice_accent
+    language: str = ""             # the language this character speaks, a short code (hi, en …); "" = the video's language
     voice_name: str = ""           # the vendor's name for the chosen voice (shown to the user)
     voice_note: str = ""           # why this voice was chosen / a warning when the match is weak
     voice_sample: Optional[str] = None
@@ -255,6 +257,23 @@ class ClipVersion(BaseModel):
     created_at: str = Field(default_factory=now_iso)
 
 
+class Continuity(BaseModel):
+    """What the plan decides about how a clip fits the story, BEFORE any script is written (see services._apply_joins).
+    join is how this clip joins the clip before it, in story order (also across parts):
+      continues   it begins on the very last picture of the clip before (the same shot goes on)
+      same_scene  the same place and people, a new angle or a later moment
+      cut         a new place or time
+    "" = not decided (projects made before joins were planned; then the links between clips say it)."""
+    join: Literal["", "continues", "same_scene", "cut"] = ""
+    join_reason: str = ""
+    place: str = ""                 # where and when: place, time of day, light, weather
+    present: list[str] = Field(default_factory=list)      # names of the characters in it
+    start_state: str = ""           # how it begins (for "continues" this is the previous clip's end state, copied by the tool)
+    end_state: str = ""             # how it ends (the next clip that continues starts here)
+    carry_over: str = ""            # what must stay exactly as it was in the clip before (clothing, props, sound …)
+    difference: Optional[float] = None    # MEASURED after both clips are made: how different this clip's first picture is from the last picture before it (0 same … 1 opposite)
+
+
 # --------------------------------------------------------------------------- tree
 class Node(BaseModel):
     id: str = Field(default_factory=lambda: new_id("n_"))
@@ -289,6 +308,8 @@ class Node(BaseModel):
     review_enabled: bool = True
     locked: bool = False            # "keep this clip as it is": its length is never changed by resizing or optimizing
     quality_mode: Optional[Literal["best", "balanced", "budget", "free"]] = None   # this part's own quality; None = the part above, then the video
+    continuity: Continuity = Field(default_factory=Continuity)
+    blocked: str = ""               # computed: why this clip cannot be made yet (for example it must continue a shot but no model can)
 
     @property
     def is_leaf(self) -> bool:

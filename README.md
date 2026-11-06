@@ -137,6 +137,16 @@ Keyboard shortcuts:
 
 **Background music is made once.** The first time it is needed, one track is made for the whole video and saved (`output/music.mp3` and `music.json`). Joining again, and every part you download, reuse it for free. New music is made only if the music mood or example changed, or the video became much longer than the track (`music_reuse_tolerance` in `vg policy`). Before it spends, the *Join* button and *Download part* tell you what the music would cost.
 
+**Quality for one part.** Open a part and choose *Quality for this part*: Best, Balanced, Budget or Free preview, or "Same as above". The price of each choice is shown beside it (worked out on a copy; nothing is saved or spent until you choose). A clip uses its own choice, else its part's, else the whole video's. Only the video, picture and natural-sound models change. **Voices, the narrator and the music are chosen once for the whole video**, so a character never gets a different voice in a cheaper part.
+
+**Change a length and everything follows.** Type a new length for a part or the whole video and the clips under it are resized in proportion, never below what each clip needs (its speech, its action steps, the shortest clip the chosen model can make, `min_clip_s`). A message says which clips moved, and why it could not go lower. Clips already made, clips you marked *Keep as it is*, and clips of your own footage are never changed silently. A spoken line marked *exact* (the plan marks text you gave in your goal) is never shortened, reworded or dropped. After you edit a part's goal, the tool offers (never forces) to rewrite the clip scripts under it, and shows the AI cost first.
+
+**How a clip joins the clip before it.** The plan decides this for every clip, before any script is written, and says why: *Continues* (starts on the very last picture of the clip before; the same shot goes on), *Same scene* (same place and people, new angle) or *Cut* (new place or time). A small marker between the clips in the story tree shows it; click it to change it. For a *Continues* join the tool: makes the earlier clip first; starts the later clip from the earlier clip's real last frame; **requires** a video model that can start from a picture (it never quietly starts fresh: if none is connected the clip is blocked, with a plain message and ways out); copies the end state of the earlier clip into the start state of the later one itself; makes the cut between them a hard cut; and waits for a real clip when the earlier one is only a placeholder. After both clips are made it **measures** the join: the first picture of the later clip against the last picture of the earlier one (0 = the same, 1 = opposite). Above `join_max_difference` (`vg policy`) the clip is flagged with *Re-make from the hand-over picture* and *Change this join to a cut*. The default limit comes from clips made with ffmpeg; tune it after you see real clips.
+
+**Characters stay the same in every part.** Every speaker has an accent and a language decided by the plan from who the character is (an Indian character speaks with an Indian accent), and you can change both in the character card. The accent the plan asks for counts strongly when a voice is chosen (`voice_accent_weight`); if your voice library has no closer match the card says so plainly (the voice service sets the accent through the voice itself, so the result depends on your voice library). No connected voice can sing yet, so the planner is told to write lines that are recited or chanted.
+
+**Continuity check.** A line under the numbers strip lists what would make the clips feel like different videos, with one-click fixes where the fix is mechanical: a join not decided, a continuing clip that does not start where the one before ends, the same place and people joined as a cut, clothes that change inside one scene, a speaker with no accent or gender, a line written in another script than its speaker's language, a clip made with a voice that has since changed, and neighbouring parts made with different video models. These are plain rules: no AI, no cost. The *Generate* box also lists what a part **reuses** (voices, looks, the last picture of the clip before) and refuses to start a clip that is blocked.
+
 **Preview mode.** Without keys for a video or image service, the tool cannot make real footage. It makes *text-card previews* instead (each card says "PREVIEW — not real footage"). A banner at the top, a "preview" mark on each clip, and the Generate box all tell you this and what to add.
 
 **A talking animal or object** (for example a lion that says "hello how are you"). The tool does it in three steps:
@@ -212,6 +222,13 @@ vg export 2 -o part2.mp4
 ```
 
 Saves the finished video of part 2 (or a clip such as `2.1`). Every clip under it must be made. It uses the saved music; if new music would cost money it asks first (`--yes` agrees, `--music none` leaves it out).
+
+```bash
+vg join 1.2 continues
+vg continuity
+```
+
+`vg join` says how a clip joins the clip before it: `continues` (starts on its last picture), `same_scene` (same place, new angle) or `cut` (new place or time). `vg continuity` lists what would make the clips feel like different videos, and the fix for each (plain rules, no AI, no cost).
 
 ```bash
 vg tree decompose 2

@@ -1,0 +1,29 @@
+# The writing system each language is normally written in (the first word of the Unicode letter name). Used only to warn when a spoken line is
+# written in a different script from its speaker's language. Edit freely; a language that is not listed is never checked.
+en: LATIN
+es: LATIN
+fr: LATIN
+de: LATIN
+it: LATIN
+pt: LATIN
+nl: LATIN
+pl: LATIN
+tr: LATIN
+id: LATIN
+vi: LATIN
+hi: DEVANAGARI
+mr: DEVANAGARI
+bn: BENGALI
+ta: TAMIL
+te: TELUGU
+gu: GUJARATI
+kn: KANNADA
+ml: MALAYALAM
+pa: GURMUKHI
+ur: ARABIC
+ar: ARABIC
+ru: CYRILLIC
+th: THAI
+ja: [CJK, HIRAGANA, KATAKANA]
+ko: HANGUL
+zh: CJK
