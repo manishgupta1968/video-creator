@@ -169,6 +169,8 @@ class Line(BaseModel):
     text: str
     emotion: str = ""
     fixed: bool = False               # true when this line must be spoken exactly as written (given text: a quote, a slogan, a name)
+    language: str = ""                # the language of THIS line (a short code), only when it differs from the speaker's language; "" = the speaker's
+    translation: str = ""             # for a line that is not in English: its meaning in plain English (one sentence), for subtitles
 
 
 class SplitPart(BaseModel):
@@ -200,6 +202,8 @@ class ClipScriptDraft(BaseModel):
     dialogue: list[Line] = Field(default_factory=list)
     narration: str = ""
     narration_fixed: bool = False     # the narration must be spoken exactly as written
+    narration_language: str = ""      # the language of the narration (a short code); "" = the video's main spoken language
+    narration_translation: str = ""   # when the narration is not in English: its meaning in plain English, for subtitles
     on_camera_speech: bool = False
     sound_notes: str = ""
     motion: str = ""                  # face | body | scene: what must move in this clip
@@ -292,8 +296,18 @@ def template(name: str) -> str:
     return resources.files("video_generator.prompts").joinpath(f"{name}.md").read_text()
 
 
+def english_rule() -> str:
+    """The one rule every AI task gets: all working text is English; only the spoken words follow the video's language(s).
+    It lives in prompts/english_rule.md so it is written once and cannot drift between tasks."""
+    return template("english_rule").strip()
+
+
+ENGLISH_LINE = ("All text you write is English. Only spoken lines (dialogue and narration) keep their own language, "
+                "and anything the user typed or quoted stays as it is.")
+
+
 def render(name: str, **values) -> str:
-    text = template(name)
+    text = template(name).replace("{{english_rule}}", english_rule()).replace("{{english_line}}", ENGLISH_LINE)
     for k, v in values.items():
         text = text.replace("{{" + k + "}}", str(v))
     return text
@@ -305,7 +319,7 @@ SYSTEM = None
 def system_prompt() -> str:
     global SYSTEM
     if SYSTEM is None:
-        SYSTEM = template("system")
+        SYSTEM = template("system").replace("{{english_rule}}", english_rule())
     return SYSTEM
 
 
@@ -373,19 +387,46 @@ class Brain:
                 "the clip seconds MUST add up to TARGET LENGTH (do not plan more).")
 
     @staticmethod
+    def _also(project: Project) -> list[str]:
+        """The 'also spoken' languages (codes), without the main one."""
+        main = languages.normalise(project.settings.language)
+        return [c for c in languages.allowed("", project.settings.also_languages) if c != main]
+
+    @staticmethod
+    def _names(codes: list[str]) -> str:
+        return ", ".join(f"{languages.name_of(c)} ({c})" for c in codes)
+
+    @staticmethod
     def language_block(project: Project) -> str:
+        """The LANGUAGE paragraph of the draft prompt. It is about the SPOKEN words only; everything else stays English (english_rule)."""
         code = languages.normalise(project.settings.language)
+        also = Brain._also(project)
+        mixed = (f" These other languages are also spoken in this video: {Brain._names(also)}. A character speaks the language on their card; "
+                 "when one line (or the narration) is in a different language, set `language` on that line (or `narration_language`) to its short code. "
+                 "Set it only when it differs from that speaker's language. Use only the languages named here." if also else "")
+        meaning = (" For every spoken line that is not in English, also give `translation`: its meaning in plain English, one sentence, for subtitles "
+                   "and so the owner can check it.")
         if not code:
-            return ("LANGUAGE: not set. Decide from the goal which language the people in this video speak, and return it as `language` "
-                    "(a short code such as en, hi, ta).")
-        return (f"LANGUAGE: the people in this video speak {languages.name_of(code)} ({code}). Write every spoken line and narration in "
-                f"it, in the language's own script. Return `language` as {code}.")
+            return ("LANGUAGE OF THE SPOKEN WORDS: not set. Decide from the goal which language the people in this video speak, and return the main one "
+                    "as `language` (a short code such as en, hi, ta). Only the spoken words are in that language; every other word you write "
+                    "(titles, goals, descriptions, notes) is English." + mixed + meaning)
+        return (f"LANGUAGE OF THE SPOKEN WORDS: {languages.name_of(code)} ({code}). Write every spoken line and narration in it, in the language's own "
+                f"script. Only the spoken words are in that language; every other word you write (titles, goals, descriptions, notes) is English. "
+                f"Return `language` as {code}." + mixed + meaning)
 
     @staticmethod
     def language_line(project: Project) -> str:
+        """The LANGUAGE line of the clip-script prompt (spoken words only)."""
         code = languages.normalise(project.settings.language)
-        return (f"{languages.name_of(code)} ({code}): write dialogue and narration in it, in its own script." if code
-                else "decided by the plan: use the language the goal and the actors' voice profiles imply.")
+        also = Brain._also(project)
+        base = (f"the spoken words are in {languages.name_of(code)} ({code}), in its own script" if code
+                else "the spoken words are in the language the goal and the actors' voice profiles imply")
+        if also:
+            base += (f"; also spoken: {Brain._names(also)}. A speaker uses the language on their card; set `language` on a line (or `narration_language`) "
+                     "only when that line is in a different language")
+        return (base + ". Every other word you write (visual, camera, notes, states) is English. For each spoken line that is not in English give "
+                "`translation`: its meaning in plain English, one sentence. If the user gave the words in other letters than the language's own "
+                "script (for example Hindi written in English letters), write the same words, not a translation, in the language's own script.")
 
     @staticmethod
     def contract(project: Project, node: Node) -> str:
@@ -661,13 +702,35 @@ def draft_to_script(project: Project, d: ClipScriptDraft) -> ClipScript:
                 return cid
         return name
 
+    from . import casting
+    # the languages a line may be in: the video's main and "also spoken" ones, and every character's own (when none is set yet, any real code is kept)
+    mains = languages.normalise(project.settings.language)
+    allow = languages.allowed(mains, list(project.settings.also_languages) + [c.actor.language for c in project.context if c.actor and c.actor.language]) \
+        if (mains or project.settings.also_languages) else []
+
+    def line_of(l: Line) -> DialogueLine:
+        speaker = resolve(l.speaker_name)
+        own = languages.clean(l.language, allow)
+        same = casting.line_language(project, speaker, "")
+        if own == same:
+            own = ""                                             # the same as the speaker's language: nothing to record
+        spoken = casting.line_language(project, speaker, own)
+        return DialogueLine(speaker=speaker, text=l.text, emotion=l.emotion, fixed=l.fixed, language=own,
+                            translation="" if languages.is_english(spoken) else l.translation.strip())
+
+    narr_own = languages.clean(d.narration_language, allow)
+    if narr_own == casting.line_language(project, "narrator", ""):
+        narr_own = ""
+    narr_lang = casting.line_language(project, "narrator", narr_own)
     shot = d.shot_type if d.shot_type in SHOT_TYPES else "other"
     return ClipScript(
         shot_type=ShotType(shot), visual=d.visual, action_beats=d.action_beats, camera=d.camera,
         actors_in_shot=[ActorInShot(actor_id=resolve(a.actor_name), clothing=a.clothing, behaviour=a.behaviour)
                         for a in d.actors_in_shot],
-        dialogue=[DialogueLine(speaker=resolve(l.speaker_name), text=l.text, emotion=l.emotion, fixed=l.fixed) for l in d.dialogue],
+        dialogue=[line_of(l) for l in d.dialogue],
         narration=d.narration, narration_fixed=d.narration_fixed and bool(d.narration.strip()),
+        narration_language=narr_own,
+        narration_translation="" if (languages.is_english(narr_lang) or not d.narration.strip()) else d.narration_translation.strip(),
         on_camera_speech=d.on_camera_speech and bool(d.dialogue),
         sound_notes=d.sound_notes, motion=d.motion if d.motion in ("face", "body", "scene") else "",
         start_state=d.start_state, end_state=d.end_state, negative=d.negative)
@@ -691,6 +754,8 @@ def preserve_fixed(old: Optional[ClipScript], new: ClipScript) -> list[str]:
     if old.narration_fixed and old.narration.strip():
         if new.narration.strip() != old.narration.strip():
             new.narration = old.narration
+            new.narration_language = old.narration_language
+            new.narration_translation = old.narration_translation
             restored.append(old.narration)
         new.narration_fixed = True
     return restored

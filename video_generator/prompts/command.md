@@ -19,3 +19,6 @@ Operations (target = node number like "1.2", actor name, or "project"):
 - regenerate_scripts (target = node number) — rewrite scripts under that node
 - generate (target = node number or "next" or "all") — make clips
 Return a short summary of what will change and the ops.
+
+
+{{english_line}}

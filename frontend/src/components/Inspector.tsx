@@ -5,6 +5,7 @@ import { api, Node } from "../api";
 import { DEP_TYPES, depLabel, fmtRange, fmtSec, fmtTime, fmtUsd, leaves, TRANSITIONS, useP, useSettings } from "../lib";
 import { Badge, Button, DropZone, Empty, HelpTip, Input, Select, TabList, TabPanel, Tabs } from "../ui";
 import { ContextCard } from "./ContextCard";
+import { mayBeNonEnglish, SpokenLanguage, SubtitleChoice } from "./LanguageControls";
 import ModelPicker from "./ModelPicker";
 import StockSearch from "./StockSearch";
 import { RecordVoiceDialog } from "./VoiceRecorder";
@@ -114,10 +115,8 @@ function CostTab({ node }: { node: Node }) {
   const P = useP();
   const p = P.view!.project;
   const isClip = node.kind === "clip";
-  const langs = useQuery({ queryKey: ["languages"], queryFn: api.languages, staleTime: Infinity });
   const language = p.settings.language;
-  const languageOptions = [{ value: "auto", label: "Decided from your goal" }, ...(langs.data || []).map((l) => ({ value: l.code, label: `${l.name} (${l.code})` })),
-    ...(language !== "auto" && !(langs.data || []).some((l) => l.code === language) ? [{ value: language, label: language }] : [])];
+  const also = p.settings.also_languages || [];
   const ledger = useQuery({ queryKey: ["ledger", P.pid, p.updated_at], queryFn: () => api.ledger(P.pid) });
   const rows = (ledger.data || []).filter((r) => node.id === p.root.id || (r.what || "").includes(node.id) || r.node === node.id);
   return (
@@ -161,9 +160,17 @@ function CostTab({ node }: { node: Node }) {
       {node.id === p.root.id && (
         <div className="space-y-2 rounded-xl border border-line p-3">
           <div className="text-xs font-semibold">Whole video</div>
+          <div className="space-y-1.5 text-muted">
+            <SpokenLanguage language={language} also={also} className="flex flex-col gap-1.5"
+              onLanguage={(c) => P.act("Save", () => api.patch(P.pid, { settings: { language: c } }))}
+              onAlso={(codes) => P.act("Save", () => api.patch(P.pid, { settings: { also_languages: codes } }))} />
+            {mayBeNonEnglish(language, also) && (
+              <SubtitleChoice value={p.settings.subtitle_language || "spoken"} onChange={(v) => P.act("Save", () => api.patch(P.pid, { settings: { subtitle_language: v } }))} />
+            )}
+            <div className="text-[11px]">Only the spoken words use these languages. Everything else the tool writes is English.</div>
+          </div>
           {[
             ["Quality", "quality_mode", [{ value: "best", label: "Best" }, { value: "balanced", label: "Balanced" }, { value: "budget", label: "Budget" }, { value: "free", label: "Free preview" }]],
-            ["Language", "language", languageOptions],
             ["Resolution", "resolution", [{ value: "720p", label: "720p" }, { value: "1080p", label: "1080p" }, { value: "4k", label: "4K" }]],
             ["Takes for people", "takes_people", [1, 2, 3, 4].map((n) => ({ value: String(n), label: String(n) }))],
             ["Format", "format", [{ value: "mp4", label: ".mp4" }, { value: "mov", label: ".mov" }]],

@@ -95,13 +95,19 @@ def new(goal: str, length: float = typer.Option(60, help="target length in secon
         add: List[Path] = typer.Option([], "--add", help="slides, clips, photos, voice samples, notes"),
         budget: Optional[float] = None, mode: str = typer.Option("", help="best | balanced | budget | free"),
         auto_length: bool = typer.Option(False, "--auto-length", help="no length asked for: as short as the story allows"),
-        language: str = typer.Option("", help="spoken language code (en, hi …), or auto = the plan decides from the goal; default en"),
+        language: str = typer.Option("", help="language of the SPOKEN words (en, hi …), or auto = the plan decides from the goal; default en. "
+                                              "Everything else the tool writes stays English."),
+        also_language: List[str] = typer.Option([], "--also-language", help="another language spoken somewhere in the video (repeat it for more): a mixed-language video"),
+        subtitles: str = typer.Option("", "--subtitles", help="when the speech is not English, show: spoken | english | both (default spoken)"),
         no_draft: bool = typer.Option(False, help="create without the AI first draft")):
     """Create a project from a goal and draft the whole plan."""
     svc = _svc()
+    if subtitles and subtitles not in ("spoken", "english", "both"):
+        raise typer.BadParameter("use spoken, english or both", param_hint="--subtitles")
     p = svc.new_project(goal, seconds=length, aspect=aspect, fmt=format, files=add, budget=budget,
                         quality_mode=mode or None, length_mode="auto" if auto_length else None,
-                        language=language or None)
+                        language=language or None, also_languages=list(also_language) or None,
+                        subtitle_language=subtitles or None)
     if not no_draft:
         with con.status("Drafting the plan…"):
             asyncio.run(svc.draft(p.id))

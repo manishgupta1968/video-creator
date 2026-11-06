@@ -51,8 +51,9 @@ class OpenAITranscribe(Transcriber):
         try:
             client = openai.AsyncOpenAI()
             with open(wav, "rb") as f:
+                extra = {"language": language} if language else {}           # "" = let the service work out the language (a mixed-language clip)
                 resp = await client.audio.transcriptions.create(model="whisper-1", file=f,
-                                                                response_format="verbose_json")
+                                                                response_format="verbose_json", **extra)
         except openai.APIStatusError as exc:
             raise PluginError(f"OpenAI transcription error {exc.status_code}") from exc
         finally:

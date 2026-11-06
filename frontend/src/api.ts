@@ -9,10 +9,10 @@ export interface CostLine { item: string; calc: string; cost: number }
 export interface Cost { min_usd: number; likely_usd: number; max_usd: number; lines: CostLine[]; model: string; basis: string; actual_usd: number | null }
 export interface Duration { min_s: number; likely_s: number; max_s: number; basis: "goal" | "script" | "actual"; explain: string }
 export interface ActorInShot { actor_id: string; clothing: string; behaviour: string }
-export interface Line { speaker: string; text: string; emotion: string; fixed?: boolean }
+export interface Line { speaker: string; text: string; emotion: string; fixed?: boolean; language?: string; translation?: string }
 export interface Script {
   shot_type: string; visual: string; action_beats: string[]; camera: string; actors_in_shot: ActorInShot[];
-  dialogue: Line[]; narration: string; narration_fixed?: boolean; on_camera_speech: boolean; sound_notes: string; start_state: string; end_state: string; negative: string; target_seconds: number | null;
+  dialogue: Line[]; narration: string; narration_fixed?: boolean; narration_language?: string; narration_translation?: string; on_camera_speech: boolean; sound_notes: string; start_state: string; end_state: string; negative: string; target_seconds: number | null;
 }
 export interface Take { id: string; version: number; index: number; video: string | null; keyframe: string | null; model: string; cost_usd: number; seconds: number; quality: Record<string, number>; review_id: string | null }
 export type Join = "" | "continues" | "same_scene" | "cut";
@@ -40,7 +40,7 @@ export interface Review {
   issues: { check: string; text: string; at_s: number | null; frame: string | null; severity: string }[];
   suggestions: { id: string; text: string; accepted: boolean }[]; summary: string; reviewer_model: string; cost_usd: number;
 }
-export interface Settings { auto_photo: boolean; length_mode: "auto" | "fixed"; target_seconds: number; aspect: string; resolution: string; fps: number; format: "mp4" | "mov"; budget_usd: number; takes_people: number; takes_other: number; language: string; default_wpm: number; subtitles: boolean; auto_pick: boolean; review_enabled: boolean; music: boolean; ambience: boolean; fill: "blur" | "black" | "crop"; quality_mode: string }
+export interface Settings { auto_photo: boolean; length_mode: "auto" | "fixed"; target_seconds: number; aspect: string; resolution: string; fps: number; format: "mp4" | "mov"; budget_usd: number; takes_people: number; takes_other: number; language: string; also_languages?: string[]; subtitle_language?: "spoken" | "english" | "both"; default_wpm: number; subtitles: boolean; auto_pick: boolean; review_enabled: boolean; music: boolean; ambience: boolean; fill: "blur" | "black" | "crop"; quality_mode: string }
 export interface Project {
   id: string; name: string; goal: string; settings: Settings; style: { look: string; colour: string; mood: string; notes: string };
   root: Node; context: Ctx[]; dependencies: Dep[]; reviews: Review[];

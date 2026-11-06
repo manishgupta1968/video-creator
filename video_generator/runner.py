@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import casting
+from . import casting, languages
 from . import policy as policy_mod
 from . import deps as deps_mod
 from . import estimate as est
@@ -630,8 +630,12 @@ class Engine:
         n = find(p, nid)
         s = n.script
         lines = [(d.speaker, d.text, d.emotion) for d in s.dialogue if d.text.strip()]
+        langs = [casting.line_language(p, d.speaker, d.language) for d in s.dialogue if d.text.strip()]     # the language of each line, in the same order
+        meanings = [d.translation for d in s.dialogue if d.text.strip()]                                    # its meaning in English (for subtitles)
         if s.narration.strip():
             lines.append(("narrator", s.narration, ""))
+            langs.append(casting.line_language(p, "narrator", s.narration_language))
+            meanings.append(s.narration_translation)
         d = self.cdir(pid, nid)
         if not lines:
             def f(pr: Project):
@@ -656,15 +660,16 @@ class Engine:
         lines_file = d / "voice_lines.json"
         if n.voice_audio and self.abs(pid, n.voice_audio).exists() and n.voice_seconds and lines_file.exists():
             try:
-                if json.loads(lines_file.read_text()).get("voices") == voices_now:
-                    return                                           # made with these same voices: nothing to do
+                made = json.loads(lines_file.read_text())
+                if made.get("voices") == voices_now and made.get("languages", langs) == langs:
+                    return                                           # made with these same voices and languages: nothing to do (older files have no language list)
             except ValueError:
                 pass                                                 # (older files have no voice list: make it again)
         self.step(pid, nid, "Making the voice", n.time.likely_s)
         parts, timings, chars = [], [], 0
         t0 = time.monotonic()
         for i, (speaker, text, emotion) in enumerate(lines):
-            spec = self._voice_spec(p, speaker, entry.plugin, emotion)
+            spec = self._voice_spec(p, speaker, entry.plugin, emotion, langs[i])
             out = d / f"line_{i:02d}.wav"
             try:
                 await plugin.synthesize(text, spec, out, entry.model)
@@ -699,13 +704,14 @@ class Engine:
                 p = self.svc.load(pid)
             out = await self._fit_voice(pid, p, speaker, out)
             parts.append(out)
-            timings.append({"speaker": speaker, "text": text, "seconds": round(media.probe_duration(out), 2)})
+            timings.append({"speaker": speaker, "text": text, "language": langs[i], "translation": meanings[i],
+                           "seconds": round(media.probe_duration(out), 2)})
             chars += len(text)
         voice = d / "voice.wav"
         media.concat_audio(parts, voice, gap=policy_mod.current().line_pause, lead=policy_mod.current().edge_pad)
         secs = media.probe_duration(voice)
         (d / "voice_lines.json").write_text(json.dumps({"lead": policy_mod.current().edge_pad, "gap": policy_mod.current().line_pause, "lines": timings,
-                                                         "voices": self._voices_of(self.svc.load(pid), lines)}))
+                                                         "voices": self._voices_of(self.svc.load(pid), lines), "languages": langs}))
         cost = chars / 1000 * entry.unit_price
         await self.charge(pid, {"kind": "voice", "what": f"voice {numbering(p).get(nid, '')}", "plugin": entry.plugin,
                                 "catalog_id": entry.id, "model": entry.model, "units": f"{chars} chars",
@@ -760,9 +766,13 @@ class Engine:
                     return c
         return None
 
-    def _voice_spec(self, p: Project, speaker: str, plugin: str, emotion: str) -> VoiceSpec:
+    def _voice_spec(self, p: Project, speaker: str, plugin: str, emotion: str, language: str = "") -> VoiceSpec:
+        """What the voice service is asked for. `language` = the language of this one line (a speaker may switch language between lines);
+        empty = the speaker's own language, else the video's."""
         actor = self._speaker_item(p, speaker)
         prof = casting.profile_for(actor, p)
+        if languages.normalise(language):
+            prof.language = languages.normalise(language)
         vid = actor.actor.voice_id if actor and actor.actor and actor.actor.voice_provider == plugin else None
         return casting.spec_from(prof, vid, emotion)
 
@@ -1622,13 +1632,22 @@ class Engine:
                 data = json.loads(meta.read_text())
                 t = offset + data.get("lead", 0.5)
                 for line in data["lines"]:
-                    entries.append((t, t + line["seconds"], line["text"]))
+                    entries.append((t, t + line["seconds"], subtitle_text(line, p.settings.subtitle_language)))
                     t += line["seconds"] + data.get("gap", 0.6)
             offset += dur - (0.5 if leaf.transition_in not in ("cut", "", None) else 0)
         return entries
 
 
 # ===================================================================== helpers
+def subtitle_text(line: dict, mode: str) -> str:
+    """What the subtitle shows for one spoken line. spoken = the words as spoken; english = their meaning in English; both = the two, one under the other.
+    A line with no English meaning (it is already English, or none was written) shows as spoken, so a subtitle is never empty."""
+    said, meaning = (line.get("text") or "").strip(), (line.get("translation") or "").strip()
+    if not meaning or meaning == said or mode == "spoken":
+        return said
+    return meaning if mode == "english" else f"{said}\n{meaning}"
+
+
 def _exists(p: Project, nid: str) -> bool:
     try:
         find(p, nid)

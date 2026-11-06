@@ -13,7 +13,7 @@ import json
 import re
 from typing import Optional
 
-from . import casting, languages
+from . import casting, languages, media
 from . import estimate as est
 from .deps import upstream
 from .models import ContextItem, ContextType, DependencyType, NodeKind, NodeStatus, Project
@@ -136,16 +136,18 @@ def check(project: Project, reg: Registry, project_dir=None) -> list[dict]:
 
     # 4 and 9. every speaker: an accent, a gender; and lines written in the speaker's own script
     spoken: dict[str, str] = {}
+    used_langs: dict[str, str] = {}                             # each language spoken in the video -> the first clip that speaks it
     for l in ls:
         if l.kind != NodeKind.clip or not l.script:
             continue
-        lines = [(d.speaker, d.text) for d in l.script.dialogue if d.text.strip()] + ([("narrator", l.script.narration)] if l.script.narration.strip() else [])
-        for sp, text in lines:
+        lines = ([(d.speaker, d.text, d.language) for d in l.script.dialogue if d.text.strip()]
+                 + ([("narrator", l.script.narration, l.script.narration_language)] if l.script.narration.strip() else []))
+        for sp, text, own in lines:
             card = _speaker_card(project, sp)
             if card and card.id not in spoken:
                 spoken[card.id] = l.id
-            lang = languages.normalise(card.actor.language) if card and card.actor else ""
-            lang = lang or languages.normalise(project.settings.language)
+            lang = casting.line_language(project, sp, own)          # the line's own language, else the speaker's, else the video's
+            used_langs.setdefault(lang, l.id)
             want = languages.scripts().get(lang)
             top, share, n = languages.script_of(text)
             if want and top and n >= 3 and share >= 0.7 and top not in want:
@@ -153,6 +155,13 @@ def check(project: Project, reg: Registry, project_dir=None) -> list[dict]:
                 found.append(_item("script_differs", l.id, nums.get(l.id, ""),
                                    f"In clip {nums.get(l.id, '')}, a line spoken by {who} is written in {top.title()} letters, but {who} speaks {languages.name_of(lang)} "
                                    f"(normally written in {', '.join(w.title() for w in want)}). A voice reads a language best in its own script."))
+    if project.settings.subtitles and project.settings.subtitle_language != "english":       # the subtitles will show these words as spoken
+        for lang, first_id in used_langs.items():
+            if media.font_for_language(lang) is False:
+                found.append(_item("subtitle_font", first_id, nums.get(first_id, ""),
+                                   f"The subtitles will show {languages.name_of(lang)} words, but no font that can draw {languages.name_of(lang)} letters is installed on this "
+                                   "computer, so they would appear as empty boxes. Install a font that supports the language, or show English subtitles "
+                                   "(Settings, Whole video, Subtitles)."))
     for cid, first in spoken.items():
         card = next(c for c in project.context if c.id == cid)
         prof = casting.profile_for(card, project)

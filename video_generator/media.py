@@ -759,6 +759,19 @@ def loudnorm(video: Path, out: Path) -> Path:
     return out
 
 
+@functools.lru_cache(maxsize=64)
+def font_for_language(code: str) -> Optional[bool]:
+    """Is a font installed that can draw this language's letters? Burned-in subtitles need one (without it they show empty boxes).
+    True / False, or None when this computer cannot say (no `fc-list` tool). Asked once per language per run."""
+    if not code or shutil.which("fc-list") is None:
+        return None
+    try:
+        out = subprocess.run(["fc-list", f":lang={code}"], capture_output=True, text=True, timeout=15).stdout
+    except Exception:
+        return None
+    return bool(out.strip())
+
+
 def burn_subtitles(video: Path, srt: Path, out: Path) -> Path:
     path = srt.resolve().as_posix().replace(":", "\\:").replace("'", "\\'")
     ff("-i", str(video), "-vf", f"subtitles='{path}':force_style='FontSize=18,Outline=1,MarginV=28'",

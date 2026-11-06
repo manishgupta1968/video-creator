@@ -119,6 +119,8 @@ class ProjectStore:
                 h.update(f"{n.id}|{[c.transition_in for c in n.children]}\n".encode())
         s = project.settings
         h.update(f"{s.format}|{s.music}|{s.subtitles}|{s.aspect}|{s.resolution}|{s.fps}".encode())
+        if s.subtitle_language != "spoken":                # (the default is left out, so finished videos made before this setting stay current)
+            h.update(f"|subs:{s.subtitle_language}".encode())
         return h.hexdigest()
 
     # ------------------------------------------------------------- undo / redo

@@ -43,6 +43,38 @@ def effective(language: str) -> str:
     return normalise(language) or "en"
 
 
+def pick(*codes: str) -> str:
+    """The first of these that is a usable language code ('' when none is): a line's own language, else the speaker's, else the video's."""
+    for c in codes:
+        n = normalise(c)
+        if n:
+            return n
+    return ""
+
+
+def allowed(main: str, also=()) -> list[str]:
+    """The languages this video may use for spoken words: the main one (when it is decided) and the 'also spoken' ones, no repeats."""
+    out: list[str] = []
+    for c in [main, *(also or [])]:
+        n = normalise(c)
+        if n and n not in out:
+            out.append(n)
+    return out
+
+
+def clean(code: str, allow: list[str]) -> str:
+    """A language code the planner gave for a line, kept only when it is one of the allowed languages ('' = use the speaker's language).
+    When nothing is allowed yet (the plan decides the language), any real code is kept."""
+    n = normalise(code)
+    if not n:
+        return ""
+    return n if (not allow or n in allow) else ""
+
+
+def is_english(code: str) -> bool:
+    return normalise(code) == "en"
+
+
 @lru_cache(maxsize=1)
 def scripts() -> dict[str, tuple[str, ...]]:
     """code -> the writing system(s) the language is normally written in, from data/language_scripts.yaml."""

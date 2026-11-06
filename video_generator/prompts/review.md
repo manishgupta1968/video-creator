@@ -39,3 +39,6 @@ If it looks like a text card, storyboard or slideshow, say so plainly and give r
 
 List concrete issues with the time in seconds. Make each suggestion specific and actionable (change the prompt, settings or model; for example 'add "slow blink, subtle head turn, breathing"', 'negative prompt: warped face, extra fingers', 'use Kling 3 for stronger human motion').
 verdict: meets_goal only if every checked score is 4 or more; does_not_meet_goal if goal, script, realism, motion or join is 2 or less; otherwise minor_issues.
+
+
+{{english_line}}

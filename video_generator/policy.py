@@ -48,6 +48,10 @@ class Policy(BaseModel):
     join_max_difference: float = Field(0.15, description="How different the first picture of a clip may be from the last picture of the clip it continues from "
                                                           "(0 = identical, 1 = opposite). Above this the clip is flagged: it does not start where the one before ended.")
 
+    # ---- languages
+    mixed_language_detection: bool = Field(True, description="When more than one language is spoken in a clip, the Review Agent's speech-to-text works out the language by itself "
+                                                              "(on). Off = it listens only in the first language of the clip, which gives wrong words for the others.")
+
     # ---- the optimizer
     max_cut_ratio: float = Field(0.5, description="The most the AI may cut in one go when it tightens a script: of a clip's spoken words, and of the clips in a part (0.5 = half). "
                                                     "At least one clip always stays in every part.")

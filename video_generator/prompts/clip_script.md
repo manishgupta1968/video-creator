@@ -37,8 +37,8 @@ Fields:
 - action_beats: 1 to {{max_beats}} short actions in order (never more than {{max_beats}})
 - camera: framing and movement
 - actors_in_shot: actor_name plus clothing/behaviour for this clip
-- dialogue: lines spoken (speaker_name = actor name or "narrator"); keep to the target length. Set `fixed` to true on a line that must be spoken exactly as written: text the user gave in the goal or context (a quote, a slogan, a name), or a line already marked fixed in the CURRENT SCRIPT. A fixed line is never shortened, reworded or dropped.
-- narration: voice-over text if any. Set `narration_fixed` to true under the same rule.
+- dialogue: lines spoken (speaker_name = actor name or "narrator"); keep to the target length. Set `fixed` to true on a line that must be spoken exactly as written: text the user gave in the goal or context (a quote, a slogan, a name), or a line already marked fixed in the CURRENT SCRIPT. A fixed line is never shortened, reworded or dropped. `language` (a short code) only when this line is in a different language from the speaker's, as the LANGUAGE line allows. `translation` = the meaning in plain English, for every line that is not in English.
+- narration: voice-over text if any, in the language the LANGUAGE line gives. Set `narration_fixed` to true under the same rule. `narration_language` only when it differs from the video's main spoken language; `narration_translation` = its meaning in plain English when it is not English.
 - on_camera_speech: true only if a visible person speaks on camera
 - sound_notes: the sound design for this clip, always filled: the ambience of the place (for example wind and birds outdoors, room tone indoors, street or crowd), effects tied to the action (footsteps, a door, pouring water), or the single word "silence" when silence is the right choice. Do not describe music here.
 - motion: face | body | scene: what must move in this clip (see HOW TO PLAN above). If the clip would need more than one route can do, keep only the part that one route can do and say in change_summary what should become its own clip.

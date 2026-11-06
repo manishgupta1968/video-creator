@@ -196,8 +196,8 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
                 </div>
                 <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                   <Editable value={a?.voice_accent || ""} onSave={(voice_accent) => saveActor({ voice_accent })} placeholder="Accent, e.g. Indian English (every speaker needs one)" />
-                  <Select title="The language this character speaks" value={a?.language || ""} onChange={(language) => saveActor({ language })} className="w-full"
-                    options={[{ value: "", label: "Language: same as the video" }, ...(langs.data || []).map((l) => ({ value: l.code, label: `${l.name} (${l.code})` }))]} />
+                  <Select title="The language this character speaks (their spoken words only; everything the tool writes stays English)" value={a?.language || ""} onChange={(language) => saveActor({ language })} className="w-full"
+                    options={[{ value: "", label: "Speaks: the video's spoken language" }, ...(langs.data || []).map((l) => ({ value: l.code, label: `${l.name} (${l.code})` }))]} />
                 </div>
                 {a?.voice_accent_label && <div className="mt-1 text-[11px] text-muted">The chosen voice is labelled “{a.voice_accent_label}” by the voice service.</div>}
                 {a?.voice_name && <div className="mt-1.5 text-[11px] text-muted">Voice chosen: <b>{a.voice_name}</b></div>}

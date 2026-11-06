@@ -15,3 +15,6 @@ CONTEXT:
 {{context}}
 
 Check story flow, pacing, consistency of actors and style across clips, and continuity gaps (facts mentioned but never shown, missing call to action, wrong length). Score 1–5 (use goal, script, actors, behaviour, realism, continuity, join, timing, lipsync). Give issues and actionable suggestions. You only suggest; the user decides.
+
+
+{{english_line}}

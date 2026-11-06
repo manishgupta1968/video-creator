@@ -25,3 +25,6 @@ HOW TO RE-PLAN
 - The seconds of all clips must add up to the length the person wants (if they gave one).
 - If you cannot decide what to cut, return `questions` (each with 2 to 4 short options and an id) and NO parts; the person answers and you are asked again.
 - For a single part, return that part only (one entry in `parts`, with `keep` set), and `part_goal` with the smallest change to that part's Goal; `goal` is then the main Goal with at most one short clause added about this part.
+
+
+{{english_line}}

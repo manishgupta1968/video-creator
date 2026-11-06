@@ -25,3 +25,6 @@ CONTINUITY: decide it now, for every child that is a clip, before any script is 
 - carry_over: what must stay exactly as it was in the clip before (clothing, props, sound)
 
 Return 2–6 children in story order. Use kind "clip" for something filmable in one shot (4–12 s), kind "goal" for a larger idea that needs further breakdown. Seconds should add up to the length to fill.
+
+
+{{english_line}}

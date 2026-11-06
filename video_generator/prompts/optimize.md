@@ -24,4 +24,4 @@ Return `edits`, each with:
 - reason: one short line saying why this change is safe
 - kept: one short line saying what meaning is kept
 
-Return at most one edit per clip. If nothing can be tightened without losing meaning, return an empty list and say why in `note`. Write in the language the lines are already in.
+Return at most one edit per clip. If nothing can be tightened without losing meaning, return an empty list and say why in `note`. Write each new spoken line in the language that line is already in (its own script). {{english_line}}

@@ -18,7 +18,7 @@ from typing import Optional
 
 from . import languages, media
 from . import policy as policy_mod
-from .models import ContextItem, Project
+from .models import ContextItem, ContextType, Project
 from .plugins.base import VoiceChoice, VoiceSpec
 
 _MALE = r"\b(male|man|men|boy|he|his|him|father|dad|king|gentleman|sir|husband|son|brother|uncle|grandfather|baritone|bass)\b"
@@ -67,6 +67,41 @@ class Profile:
     accent: str = ""
     language: str = "en"
     description: str = ""
+
+
+def speaker_card(project: Project, speaker: str) -> Optional[ContextItem]:
+    """The character card of a speaker (by id or name); the narrator falls back to the card named like a narrator."""
+    for c in project.context:
+        if c.type == ContextType.actor and c.actor and (c.id == speaker or c.title.lower() == (speaker or "").lower()):
+            return c
+    if speaker == "narrator":
+        for c in project.context:
+            if c.type == ContextType.actor and c.actor and "narrat" in c.title.lower():
+                return c
+    return None
+
+
+def line_language(project: Project, speaker: str, line_language: str = "") -> str:
+    """The language one spoken line is in: the line's own, else the speaker's, else the video's main language (never 'auto')."""
+    card = speaker_card(project, speaker)
+    return languages.pick(line_language, card.actor.language if card and card.actor else "", project.settings.language) or "en"
+
+
+def clip_languages(project: Project, script) -> list[str]:
+    """Every language spoken in a clip's script (lines and narration), in the order first heard. [] when nothing is spoken."""
+    seen: list[str] = []
+    if script is None:
+        return seen
+    for d in script.dialogue:
+        if d.text.strip():
+            c = line_language(project, d.speaker, d.language)
+            if c not in seen:
+                seen.append(c)
+    if script.narration.strip():
+        c = line_language(project, "narrator", script.narration_language)
+        if c not in seen:
+            seen.append(c)
+    return seen
 
 
 def profile_for(actor: Optional[ContextItem], project: Project) -> Profile:

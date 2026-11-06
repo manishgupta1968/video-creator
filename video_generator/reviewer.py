@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from . import languages, media
+from . import casting, languages, media
 from . import policy as policy_mod
 from .models import DependencyType, Review, ReviewIssue, ReviewJoin, ReviewSuggestion
 from .project import ProjectStore
@@ -101,6 +101,15 @@ class Reviewer:
         text = join_block(info.previous, kind, info.reason, info.transition, info.difference, info.limit, prev_end, this_start)
         return info, text, [last, first]
 
+    @staticmethod
+    def _listen_language(p, n) -> str:
+        """The language the speech-to-text listens in for this clip: the one language spoken in it; when several are spoken, "" = work it out
+        by itself (policy.mixed_language_detection); when nothing is scripted, the video's main language."""
+        spoken = casting.clip_languages(p, n.script)
+        if len(spoken) > 1:
+            return "" if policy_mod.current().mixed_language_detection else spoken[0]
+        return spoken[0] if spoken else languages.effective(p.settings.language)
+
     async def review_take(self, pid: str, nid: str, take_id: str) -> Review:
         p = self.svc.load(pid)
         n = find(p, nid)
@@ -112,7 +121,7 @@ class Reviewer:
         pairs = media.sample_pairs(video, work / "pairs")        # neighbouring frames expose warping and morphing
         expected = " ".join([l.text for l in n.script.dialogue] + [n.script.narration]) if n.script else ""
         try:
-            segs = await self.transcriber().transcribe(video, languages.effective(p.settings.language), hint=expected)
+            segs = await self.transcriber().transcribe(video, self._listen_language(p, n), hint=expected)
             transcript = " ".join(s.text for s in segs).strip()
         except Exception as exc:
             transcript = f"(transcription failed: {exc})"

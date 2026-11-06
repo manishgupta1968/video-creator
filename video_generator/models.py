@@ -157,6 +157,8 @@ class DialogueLine(BaseModel):
     text: str = ""
     emotion: str = ""
     fixed: bool = False    # must be spoken exactly as written: a quote, a slogan, text given in the goal. Never cut or reworded.
+    language: str = ""     # the language this line is spoken in (a short code); "" = the speaker's language, else the video's
+    translation: str = ""  # the meaning in English, for subtitles; "" when the line is already English or none was written
 
 
 class ClipScript(BaseModel):
@@ -168,6 +170,8 @@ class ClipScript(BaseModel):
     dialogue: list[DialogueLine] = Field(default_factory=list)
     narration: str = ""
     narration_fixed: bool = False       # the narration must be spoken exactly as written
+    narration_language: str = ""        # the language of the narration (a short code); "" = the video's language
+    narration_translation: str = ""     # the narration's meaning in English, for subtitles
     on_camera_speech: bool = False
     sound_notes: str = ""               # sound design: ambience, effects tied to the action, or "silence"
     motion: str = ""                    # what must move: face (only face and head) | body | scene; "" = not decided
@@ -358,7 +362,9 @@ class Settings(BaseModel):
     budget_usd: float = 50
     takes_people: int = 3
     takes_other: int = 1
-    language: str = "en"
+    language: str = "en"          # the language of the SPOKEN words (everything else the tool writes is English); "auto" = decided from the goal
+    also_languages: list[str] = Field(default_factory=list)   # other languages spoken somewhere in the video (a mixed-language video); [] = just `language`
+    subtitle_language: Literal["spoken", "english", "both"] = "spoken"   # what the subtitles show when the speech is not English
     default_wpm: int = 150
     subtitles: bool = True
     auto_pick: bool = False

@@ -218,14 +218,19 @@ class Service:
     def new_project(self, goal: str, seconds: float = 60, aspect: str = "16:9", fmt: str = "mp4",
                     files: Optional[list[Path]] = None, name: str = "", budget: Optional[float] = None,
                     quality_mode: Optional[str] = None, length_mode: Optional[str] = None,
-                    language: Optional[str] = None) -> Project:
+                    language: Optional[str] = None, also_languages: Optional[list[str]] = None,
+                    subtitle_language: Optional[str] = None) -> Project:
         """length_mode "auto" = no length was asked for (the plan is as short as the story allows); language "auto" = the planner
-        decides from the goal (it is replaced by a real code when the first draft is made)."""
+        decides from the goal (it is replaced by a real code when the first draft is made). `language` is the language of the SPOKEN words
+        (everything else the tool writes is English); `also_languages` are other languages spoken somewhere in a mixed-language video."""
         settings = Settings(target_seconds=seconds, aspect=aspect, format=fmt,
                             budget_usd=budget if budget is not None else self.config.budget_usd,
                             quality_mode=quality_mode or self.config.quality_mode,
                             length_mode="auto" if length_mode == "auto" else "fixed",
-                            language=(language or "en"))
+                            language=(language or "en"),
+                            also_languages=languages.allowed("", also_languages or []),
+                            subtitle_language=subtitle_language if subtitle_language in ("spoken", "english", "both") else "spoken")
+        settings.also_languages = [c for c in settings.also_languages if c != languages.normalise(settings.language)]
         p = Project(name=name or (goal[:60] or "New video"), goal=goal, settings=settings)
         p.root.goal = goal
         p.root.title = p.name
@@ -575,9 +580,12 @@ class Service:
             script = ClipScript(
                 shot_type=ShotType(shot), visual=part.visual or old.visual, action_beats=part.action_beats, camera=old.camera,
                 actors_in_shot=list(old.actors_in_shot),
-                dialogue=[DialogueLine(speaker=names.get(l.speaker_name.lower(), l.speaker_name), text=l.text, emotion=l.emotion, fixed=l.fixed)
+                dialogue=[DialogueLine(speaker=names.get(l.speaker_name.lower(), l.speaker_name), text=l.text, emotion=l.emotion, fixed=l.fixed,
+                                       language=l.language, translation=l.translation)
                           for l in part.dialogue],
                 narration=part.narration, narration_fixed=old.narration_fixed and part.narration.strip() == old.narration.strip(),
+                narration_language=old.narration_language if part.narration.strip() else "",
+                narration_translation=old.narration_translation if part.narration.strip() == old.narration.strip() else "",
                 on_camera_speech=bool(part.dialogue) and old.on_camera_speech,
                 sound_notes=part.sound_notes or old.sound_notes, motion=part.motion if part.motion in ("face", "body", "scene") else "",
                 start_state=part.start_state, end_state=part.end_state, negative=old.negative, target_seconds=part.seconds or None)
@@ -819,6 +827,8 @@ class Service:
             if "target_seconds" in patch["settings"] and "length_mode" not in patch["settings"]:
                 merged["length_mode"] = "fixed"
             p.settings = Settings.model_validate(merged)
+            main = languages.normalise(p.settings.language)           # "also spoken" never repeats the main language, and only holds real codes
+            p.settings.also_languages = [c for c in languages.allowed("", p.settings.also_languages) if c != main]
             p.root.target_seconds = p.settings.target_seconds
             if "target_seconds" in patch["settings"] and p.root.children:
                 self.last_scale[pid] = scaling.scale_node(p, p.root.id, p.settings.target_seconds)

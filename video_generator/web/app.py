@@ -150,6 +150,7 @@ async def list_projects():
 async def create_project(goal: str = Form(...), seconds: float = Form(60), aspect: str = Form("16:9"),
                          format: str = Form("mp4"), quality_mode: str = Form(""), budget: float = Form(0),
                          length_mode: str = Form(""), language: str = Form(""),
+                         also_languages: str = Form(""), subtitle_language: str = Form(""),
                          files: list[UploadFile] = File(default=[])):
     tmp = Path(tempfile.mkdtemp())
     paths = []
@@ -162,7 +163,9 @@ async def create_project(goal: str = Form(...), seconds: float = Form(60), aspec
         paths.append(dest)
     p = svc.new_project(goal, seconds=seconds, aspect=aspect, fmt=format, files=paths,
                         budget=budget or None, quality_mode=quality_mode or None,
-                        length_mode=length_mode or None, language=language or None)
+                        length_mode=length_mode or None, language=language or None,
+                        also_languages=[c for c in also_languages.split(",") if c.strip()],      # "hi,ta" (other languages spoken in the video)
+                        subtitle_language=subtitle_language or None)
     shutil.rmtree(tmp, ignore_errors=True)
     bg(svc.draft(p.id), p.id, "Drafting your plan")
     return {"id": p.id}

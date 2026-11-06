@@ -5,6 +5,7 @@ import { api, Ballpark as BallparkData } from "../api";
 import { useToast } from "../lib";
 import { Badge, Button, Card, cn, DropZone, HelpTip, Select, Tip } from "../ui";
 import HelpDrawer from "./HelpDrawer";
+import { mayBeNonEnglish, SpokenLanguage, SubtitleChoice } from "./LanguageControls";
 import SettingsDialog from "./Settings";
 
 const LENGTHS = [{ s: 15, l: "15 s" }, { s: 30, l: "30 s" }, { s: 60, l: "1 min" }, { s: 120, l: "2 min" }, { s: 300, l: "5 min" }];
@@ -48,6 +49,8 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
   const [aspect, setAspect] = useState("16:9");
   const [modeSel, setMode] = useState<string | null>(null);
   const [language, setLanguage] = useState("auto");
+  const [also, setAlso] = useState<string[]>([]);                      // other languages spoken somewhere (a mixed-language video)
+  const [subs, setSubs] = useState("spoken");
   const [budgetSel, setBudget] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [creating, setCreating] = useState(false);
@@ -65,7 +68,6 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
   const toast = useToast();
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
-  const langs = useQuery({ queryKey: ["languages"], queryFn: api.languages, staleTime: Infinity });
   const mode = modeSel ?? health.data?.default_quality ?? "balanced";               // pre-selected from your Settings
   const budget = budgetSel ?? String(health.data?.default_budget ?? 50);
   const ballpark = useQuery({ queryKey: ["ballpark", seconds ?? 0, mode], queryFn: () => api.ballpark(seconds ?? 0, mode) });
@@ -91,6 +93,8 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
       fd.append("aspect", aspect);
       fd.append("quality_mode", mode);
       fd.append("language", language);
+      if (also.length) fd.append("also_languages", also.join(","));
+      if (subs !== "spoken") fd.append("subtitle_language", subs);
       if (Number(budget) > 0) fd.append("budget", budget);
       files.forEach((f) => fd.append("files", f));
       const r = await api.create(fd);
@@ -168,11 +172,8 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
           </DropZone>
         </Card>
         <div className="mt-3 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-muted" aria-label="More choices for this video">
-          <label className="flex items-center gap-1.5">
-            <HelpTip id="language-picker"><span>Language</span></HelpTip>
-            <Select title="Language of the video" value={language} onChange={setLanguage}
-              options={[{ value: "auto", label: "Decided from your goal" }, ...(langs.data || []).map((l) => ({ value: l.code, label: l.name }))]} />
-          </label>
+          <SpokenLanguage language={language} also={also} onLanguage={(c) => { setLanguage(c); setAlso(also.filter((x) => x !== c)); }} onAlso={setAlso} />
+          {mayBeNonEnglish(language, also) && <SubtitleChoice value={subs} onChange={setSubs} />}
           <label className="flex items-center gap-1.5">
             <HelpTip id="budget-input"><span>Budget</span></HelpTip>
             <span>$</span>

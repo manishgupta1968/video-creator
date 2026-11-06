@@ -4,6 +4,7 @@ import { api, fileUrl, Line, Node, Review, Script, Take } from "../api";
 import { fmtRange, fmtSec, fmtTime, fmtUsd, leaves, SHOT_TYPES, STATUS, useP, useSettings } from "../lib";
 import { Badge, Button, Card, cn, Dialog, Editable, Empty, HelpTip, Select, Switch, Textarea, Tip } from "../ui";
 import { useRun } from "./ConfirmRun";
+import { useLanguages } from "./LanguageControls";
 import DownloadButton from "./Download";
 import ModelPicker from "./ModelPicker";
 import QualityForPart from "./QualityForPart";
@@ -379,12 +380,15 @@ function ClipEditor({ node }: { node: Node }) {
           </div>
           <div className="p-4">
             <div className="field-label mb-2 flex items-center gap-2"><Mic className="h-3.5 w-3.5" />Dialogue</div>
-            <Dialogue lines={s.dialogue} actors={actors.map((a) => ({ id: a.id, title: a.title }))} onSave={(dialogue) => saveScript({ dialogue })} />
+            <Dialogue lines={s.dialogue} actors={actors.map((a) => ({ id: a.id, title: a.title, language: a.actor?.language || "" }))}
+              main={p.settings.language} also={p.settings.also_languages || []} onSave={(dialogue) => saveScript({ dialogue })} />
           </div>
           <div className="p-4">
             <div className="field-label mb-1 flex items-center gap-2">Narration (voice-over)
               {s.narration.trim() && <ExactToggle on={!!s.narration_fixed} onChange={(narration_fixed) => saveScript({ narration_fixed })} />}</div>
             <Editable value={s.narration} onSave={(narration) => saveScript({ narration })} multiline placeholder="Optional voice-over" />
+            <NarrationLanguage script={s} main={p.settings.language} also={p.settings.also_languages || []} actors={actors.map((a) => a.actor?.language || "")}
+              onSave={(patch) => saveScript(patch)} />
           </div>
           <div className="grid gap-4 p-4 sm:grid-cols-2">
             <div><HelpTip id="natural-sound"><div className="field-label mb-1">Natural sound (the plan)</div></HelpTip>
@@ -465,20 +469,75 @@ function ExactToggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => 
   );
 }
 
-function Dialogue({ lines, actors, onSave }: { lines: Line[]; actors: { id: string; title: string }[]; onSave: (l: Line[]) => void }) {
+/** The languages a line may be in: the video's main one, the "also spoken" ones, and every character's own. */
+function spokenCodes(main: string, also: string[], actorLanguages: string[]) {
+  return Array.from(new Set([main === "auto" ? "" : main, ...also, ...actorLanguages].filter(Boolean)));
+}
+
+function Dialogue({ lines, actors, main, also, onSave }: {
+  lines: Line[]; actors: { id: string; title: string; language: string }[]; main: string; also: string[]; onSave: (l: Line[]) => void;
+}) {
+  const langs = useLanguages();
+  const nameOf = (c: string) => langs.data?.find((l) => l.code === c)?.name || c;
   const speakers = [{ value: "narrator", label: "Narrator" }, ...actors.map((a) => ({ value: a.id, label: a.title }))];
+  const codes = spokenCodes(main, also, actors.map((a) => a.language));
+  const mixed = codes.length > 1;
+  const speakerLanguage = (id: string) => actors.find((a) => a.id === id)?.language || (main === "auto" ? "" : main);
+  const set = (i: number, patch: Partial<Line>) => onSave(lines.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   return (
     <div className="space-y-1.5">
-      {lines.map((l, i) => (
-        <div key={i} className="group flex items-start gap-2">
-          <Select value={l.speaker} onChange={(speaker) => onSave(lines.map((x, j) => (j === i ? { ...x, speaker } : x)))}
-            options={speakers.some((s) => s.value === l.speaker) ? speakers : [...speakers, { value: l.speaker, label: l.speaker }]} className="w-32 shrink-0" />
-          <div className="flex-1"><Editable value={l.text} onSave={(text) => onSave(lines.map((x, j) => (j === i ? { ...x, text } : x)))} multiline /></div>
-          <ExactToggle on={!!l.fixed} onChange={(fixed) => onSave(lines.map((x, j) => (j === i ? { ...x, fixed } : x)))} />
-          <button aria-label="Remove line" className="mt-1 opacity-0 group-hover:opacity-100 text-muted hover:text-bad" onClick={() => onSave(lines.filter((_, j) => j !== i))}><Trash2 className="h-3 w-3" /></button>
-        </div>
-      ))}
+      {lines.map((l, i) => {
+        const own = speakerLanguage(l.speaker);
+        const spoken = l.language || own;                      // the language this line is really in ("" = not decided yet)
+        return (
+          <div key={i} className="group flex items-start gap-2">
+            <Select value={l.speaker} onChange={(speaker) => set(i, { speaker })}
+              options={speakers.some((s) => s.value === l.speaker) ? speakers : [...speakers, { value: l.speaker, label: l.speaker }]} className="w-32 shrink-0" />
+            <div className="flex-1">
+              <Editable value={l.text} onSave={(text) => set(i, { text })} multiline />
+              {spoken && spoken !== "en" && l.text.trim() && (
+                <div className="mt-0.5 text-[11px] text-muted" data-help="line-meaning">
+                  <Editable value={l.translation || ""} onSave={(translation) => set(i, { translation })} placeholder="Meaning in English (for subtitles)" />
+                </div>
+              )}
+            </div>
+            {(mixed || !!l.language) && (
+              <Select help="line-language" title="Language of this line" value={l.language || ""} onChange={(language) => set(i, { language })} className="w-36 shrink-0"
+                options={[{ value: "", label: own ? `Speaker's (${nameOf(own)})` : "Speaker's" }, ...codes.map((c) => ({ value: c, label: nameOf(c) })),
+                  ...(l.language && !codes.includes(l.language) ? [{ value: l.language, label: nameOf(l.language) }] : [])]} />
+            )}
+            <ExactToggle on={!!l.fixed} onChange={(fixed) => set(i, { fixed })} />
+            <button aria-label="Remove line" className="mt-1 opacity-0 group-hover:opacity-100 text-muted hover:text-bad" onClick={() => onSave(lines.filter((_, j) => j !== i))}><Trash2 className="h-3 w-3" /></button>
+          </div>
+        );
+      })}
       <Button variant="ghost" size="sm" onClick={() => onSave([...lines, { speaker: actors[0]?.id || "narrator", text: "", emotion: "" }])}><Plus className="h-3.5 w-3.5" />Add line</Button>
+    </div>
+  );
+}
+
+/** The language of the voice-over, and its English meaning (shown only when the video may use more than one language, or the narration is not English). */
+function NarrationLanguage({ script, main, also, actors, onSave }: {
+  script: Script; main: string; also: string[]; actors: string[]; onSave: (patch: Partial<Script>) => void;
+}) {
+  const langs = useLanguages();
+  const nameOf = (c: string) => langs.data?.find((l) => l.code === c)?.name || c;
+  const codes = spokenCodes(main, also, actors);
+  const base = main === "auto" ? "" : main;
+  const spoken = script.narration_language || base;
+  if (!script.narration.trim()) return null;
+  return (
+    <div className="mt-1 space-y-1 text-[11px] text-muted">
+      {(codes.length > 1 || !!script.narration_language) && (
+        <label className="flex items-center gap-1.5"><HelpTip id="line-language"><span>Narration language</span></HelpTip>
+          <Select title="Language of the narration" value={script.narration_language || ""} onChange={(narration_language) => onSave({ narration_language })}
+            options={[{ value: "", label: base ? `The video's (${nameOf(base)})` : "The video's" }, ...codes.map((c) => ({ value: c, label: nameOf(c) }))]} />
+        </label>
+      )}
+      {spoken && spoken !== "en" && (
+        <div data-help="line-meaning"><Editable value={script.narration_translation || ""} onSave={(narration_translation) => onSave({ narration_translation })}
+          placeholder="Meaning in English (for subtitles)" /></div>
+      )}
     </div>
   );
 }
