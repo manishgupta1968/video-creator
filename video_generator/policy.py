@@ -53,6 +53,8 @@ class Policy(BaseModel):
                                                     "At least one clip always stays in every part.")
     optimize_slack_s: float = Field(0.5, description="The optimizer trims a clip only when it is longer than its content needs by at least this many seconds.")
     optimize_goal_tolerance: float = Field(0.02, description="A length or cost goal counts as met when it is within this share of the number you gave (0.02 = 2 %).")
+    goal_max_growth: float = Field(0.25, description="When the optimizer rewrites a Goal to help the saving, the new text may be at most this much longer than the old one "
+                                                      "(0.25 = a quarter longer, with room for a short clause). Quoted text in the old Goal must stay word for word.")
     optimize_ai_cost_range: list[float] = Field([0.6, 1.6], description="The low and high guess, as a share of the estimate, shown for what asking the AI to tighten a script would cost.")
 
     # ---- choosing models

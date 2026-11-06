@@ -15,6 +15,17 @@ from .common import MAX_IMAGES, repair_prompt, schema_instruction, validate
 API = "https://generativelanguage.googleapis.com/v1beta"
 
 
+def media_parts(video: Optional[Path], images: Optional[list[Path]], keep_images: int = 0) -> list[dict]:
+    """The pictures and video sent with a request. A short video is sent INSTEAD of the sampled frames (it already holds them); but the last
+    `keep_images` pictures are evidence that is not in the video (for example the last picture of the clip BEFORE this one), so they are always sent."""
+    def image(p) -> dict:
+        return {"inline_data": {"mime_type": mimetypes.guess_type(str(p))[0] or "image/jpeg", "data": b64(p)}}
+    if video and Path(video).exists() and Path(video).stat().st_size < 18_000_000:
+        extra = list(images or [])[-keep_images:] if keep_images > 0 else []
+        return [{"inline_data": {"mime_type": "video/mp4", "data": b64(video)}}] + [image(p) for p in extra]
+    return [image(p) for p in (images or [])[:MAX_IMAGES]]
+
+
 class GeminiLLM(LLM):
     name = "gemini"
     env_keys = ["GEMINI_API_KEY"]
@@ -25,13 +36,7 @@ class GeminiLLM(LLM):
                             images: Optional[list[Path]] = None, video: Optional[Path] = None,
                             max_tokens: int = 16000, meta: Optional[dict] = None):
         model = model or "gemini-2.5-pro"
-        parts: list[dict] = []
-        if video and Path(video).exists() and Path(video).stat().st_size < 18_000_000:
-            parts.append({"inline_data": {"mime_type": "video/mp4", "data": b64(video)}})
-        else:
-            for p in (images or [])[:MAX_IMAGES]:
-                parts.append({"inline_data": {"mime_type": mimetypes.guess_type(str(p))[0] or "image/jpeg",
-                                              "data": b64(p)}})
+        parts = media_parts(video, images, int((meta or {}).get("keep_images", 0) or 0))
         parts.append({"text": user + schema_instruction(schema)})
         contents = [{"role": "user", "parts": parts}]
         usage = Usage()

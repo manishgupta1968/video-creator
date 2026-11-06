@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from . import continuity as continuity_mod
 from . import optimizer as optimizer_mod
+from . import replan as replan_mod
 from . import deps as deps_mod
 from . import guide as guide_mod
 from . import languages, models_list, musictrack, scaling
@@ -610,6 +611,13 @@ class Service:
         self._ledger_llm(p, f"split clip {node_id}")
         return self.save(p)
 
+    @staticmethod
+    def _set_main_goal(p: Project, text: str) -> None:
+        """The main Goal lives in two places (Project.goal, which the plan, the outline and the music mood read, and the root node's goal, which the
+        screen edits). Every write goes through here so they never differ."""
+        p.goal = text
+        p.root.goal = text
+
     async def revise(self, pid: str, node_id: str, instruction: str) -> Project:
         p = self.load(pid)
         n = find(p, node_id)
@@ -618,7 +626,12 @@ class Service:
         rev = await self.brain.revise_goal(p, n, instruction)
         p = self.load(pid)
         n = find(p, node_id)
-        n.title, n.goal = rev.title or n.title, rev.goal or n.goal
+        n.title = rev.title or n.title
+        if n.id == p.root.id:
+            self._set_main_goal(p, rev.goal or n.goal)
+            p.name = p.root.title = n.title
+        else:
+            n.goal = rev.goal or n.goal
         if rev.seconds:
             n.target_seconds = rev.seconds
         self._ledger_llm(p, f"revise {node_id}")
@@ -670,8 +683,13 @@ class Service:
             n = node_for(op.target) if op.op not in ("set_actor", "set_style") else None
             if op.op == "set_title" and n:
                 n.title = op.value
+                if n.id == p.root.id:
+                    p.name = op.value
             elif op.op == "set_goal" and n:
-                n.goal = op.value
+                if n.id == p.root.id:
+                    self._set_main_goal(p, op.value)
+                else:
+                    n.goal = op.value
             elif op.op == "set_seconds" and n:
                 cur = n.target_seconds or n.duration.likely_s or 6
                 if op.value == "shorter":
@@ -723,6 +741,11 @@ class Service:
                     "review_enabled", "style_overrides", "locked"):
             if key in patch and not (key == "target_seconds" and resize):
                 setattr(n, key, patch[key])
+        if n.id == p.root.id:                                            # the root's goal and title are the project's goal and name
+            if "goal" in patch:
+                self._set_main_goal(p, patch["goal"])
+            if "title" in patch:
+                p.name = patch["title"]
         if "quality_mode" in patch:
             if patch["quality_mode"] not in (None, "", "best", "balanced", "budget", "free"):
                 raise ValueError("quality must be best, balanced, budget or free")
@@ -790,8 +813,7 @@ class Service:
             p.name = patch["name"]
             p.root.title = p.name
         if "goal" in patch:
-            p.goal = patch["goal"]
-            p.root.goal = p.goal
+            self._set_main_goal(p, patch["goal"])
         if "settings" in patch:
             merged = {**p.settings.model_dump(), **patch["settings"]}
             if "target_seconds" in patch["settings"] and "length_mode" not in patch["settings"]:
@@ -1366,14 +1388,14 @@ class Service:
         p = self.load(pid)
         self.refresh(p)
         return optimizer_mod.propose(self, p, body.get("scope") or p.root.id, self._optimize_goal(body), body.get("max_level"),
-                                     body.get("ticked"), body.get("protect") or [], body.get("ai_edits") or [])
+                                     body.get("ticked"), body.get("protect") or [], body.get("ai_edits") or [], self._answers(body))
 
     def optimize_apply(self, pid: str, body: dict) -> Project:
         """Apply the edits you ticked as ONE saved change, so a single undo takes it all back."""
         p = self.load(pid)
         self.refresh(p)
         optimizer_mod.apply(self, p, body.get("scope") or p.root.id, self._optimize_goal(body), body.get("ticked"), body.get("protect") or [],
-                            body.get("ai_edits") or [])
+                            body.get("ai_edits") or [], self._answers(body))
         return self.save(p)
 
     async def optimize_ai(self, pid: str, body: dict) -> dict:
@@ -1382,7 +1404,8 @@ class Service:
         p = self.load(pid)
         self.refresh(p)
         scope = body.get("scope") or p.root.id
-        extra = frozenset(body.get("protect") or [])
+        by_number = {v: k for k, v in numbering(p).items() if v}
+        extra = frozenset(body.get("protect") or []) | frozenset(by_number[n] for n, how in self._answers(body).items() if how == "keep" and n in by_number)
         info = optimizer_mod.ai_estimate(self, p, scope, extra)
         if not info["available"]:
             raise ValueError(info["why"])
@@ -1392,13 +1415,83 @@ class Service:
         want = " and ".join(x for x in (f"a length of about {goal.length:g} seconds" if goal.length else "", f"a cost of about ${goal.cost:g}" if goal.cost else "",
                                          "as short and cheap as possible without losing meaning" if goal.lowest else "") if x)
         clips = optimizer_mod._free_clips(p, scope, extra)
-        tight = await self.brain.tighten(p, what, want or "shorter and cheaper", clips)
+        said = replan_mod.answers_text(p, self._answers(body))
+        tight = await self.brain.tighten(p, what, (want or "shorter and cheaper") + (f". The person said: {said.replace(chr(10), '; ')}" if said else ""), clips)
         spent_before = p.run.spent_usd
         self._ledger_llm(p, "optimize")
         ProjectStore.save(p, snapshot=False)
         raw = [e.model_dump() for e in tight.edits]
         edits, skipped = optimizer_mod.validate_ai(self, p, scope, extra, raw)
         return {"edits": raw, "valid": [e.model_dump() for e in edits], "skipped": skipped, "note": tight.note, "cost_usd": round(p.run.spent_usd - spent_before, 4)}
+
+    # ================================================================ re-plan from a leaner Goal (see replan.py)
+    @staticmethod
+    def _answers(body: dict) -> dict:
+        """What you said may be cut: {clip or part number: keep | shorten | cut}."""
+        return {str(k): v for k, v in (body.get("answers") or {}).items() if v in ("keep", "shorten", "cut")}
+
+    def replan_estimate(self, pid: str, body: dict) -> dict:
+        """What asking for a re-plan costs, and what the new scripts will cost after you apply (nothing is asked or spent)."""
+        p = self.load(pid)
+        self.refresh(p)
+        scope = body.get("scope") or p.root.id
+        return replan_mod.estimate(self, p, scope, frozenset(body.get("protect") or []))
+
+    def cut_list(self, pid: str, body: dict) -> list[dict]:
+        """Every part and clip in the scope with what dropping it would save: the list behind 'what may be cut?'."""
+        p = self.load(pid)
+        self.refresh(p)
+        return replan_mod.cut_list(self, p, body.get("scope") or p.root.id, frozenset(body.get("protect") or []))
+
+    async def replan_preview(self, pid: str, body: dict) -> dict:
+        """Ask the planner for a leaner Goal and a new breakdown, giving it the CURRENT breakdown as context. This SPENDS (the estimate was shown first).
+        Nothing is changed: the answer is a proposal, shown beside the current plan, with the Goal difference and what happens to your videos."""
+        p = self.load(pid)
+        self.refresh(p)
+        scope = body.get("scope") or p.root.id
+        goal = self._optimize_goal(body)
+        answers = self._answers(body)
+        by_number = {v: k for k, v in numbering(p).items() if v}
+        extra = frozenset(body.get("protect") or []) | frozenset(by_number[n] for n, how in answers.items() if how == "keep" and n in by_number)
+        base = optimizer_mod.propose(self, p, scope, goal, protect=list(extra))             # the gentle levels, for the numbers the planner is told
+        nums = numbering(p)
+        node = find(p, scope)
+        qa = "\n".join(f"- {q['text']}: {a}" for q in (body.get("question_answers") or []) for a in [q.get("answer", "")] if a)
+        said = replan_mod.answers_text(p, answers) + (("\nANSWERS TO YOUR QUESTIONS:\n" + qa) if qa else "")
+        data = replan_mod.structure(p, scope, extra, answers, goal)
+        before_spent = p.run.spent_usd
+        raw = await self.brain.replan(p, "the whole video" if scope == p.root.id else f"part {nums.get(scope, '')}", p.goal, "" if scope == p.root.id else node.goal,
+                                      replan_mod.wish_text(goal), replan_mod.situation_text(base["before"], base["levels"][2]["after"], goal),
+                                      replan_mod.outline_text(p, scope, extra), said, data)
+        self._ledger_llm(p, "re-plan")
+        ProjectStore.save(p, snapshot=False)
+        cost = round(p.run.spent_usd - before_spent, 4)
+        r = raw.model_dump()
+        if r.get("questions") and not r.get("parts"):
+            return {"plan": None, "questions": r["questions"], "note": r.get("note", ""), "cost_usd": cost}
+        plan = replan_mod.resolve(self, p, scope, r, extra, answers, goal)
+        out = replan_mod.simulate(self, p, plan, None, scope)
+        return {"plan": plan, "questions": [], **out, "cost_usd": cost, "estimate": replan_mod.estimate(self, p, scope, extra)}
+
+    def replan_measure(self, pid: str, body: dict) -> dict:
+        """The numbers for the plan with YOUR choices (which videos to reuse, an edited Goal): free, measured on a copy."""
+        p = self.load(pid)
+        self.refresh(p)
+        plan = body["plan"]
+        if replan_mod.structure_stamp(p) != plan.get("stamp"):
+            raise ValueError("The project changed since this plan was made. Ask for the plan again.")
+        return replan_mod.simulate(self, p, plan, {k: bool(v) for k, v in (body.get("reuse") or {}).items()}, plan["scope"])
+
+    def replan_apply(self, pid: str, body: dict) -> Project:
+        """Apply the plan as ONE change (one undo step): the Goal, the parts and clips, with the videos you chose to reuse. The new scripts are written
+        afterwards with the usual 'Write the scripts' step, after you have seen what that costs."""
+        p = self.load(pid)
+        self.refresh(p)
+        plan = body["plan"]
+        if replan_mod.structure_stamp(p) != plan.get("stamp"):
+            raise ValueError("The project changed since this plan was made. Ask for the plan again.")
+        replan_mod.apply_plan(self, p, plan, {k: bool(v) for k, v in (body.get("reuse") or {}).items()}, body.get("goal"), body.get("part_goal"))
+        return self.save(p)
 
     def music_status(self, pid: str) -> dict:
         """What the Join button needs to say about the music BEFORE it spends: is there a saved track that can be reused (cost 0),

@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowRight, CheckCircle2, Gauge, Link2, Loader2, Lock, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, Node, OptAi, OptEdit, OptLevel, OptProposal, OptRequest } from "../api";
+import { api, CutAnswer, CutRow, Node, OptAi, OptEdit, OptLevel, OptProposal, OptRequest, QuestionAnswer, ReplanResult } from "../api";
+import { CutsStep, PlanStep, QuestionsStep } from "./ReplanPanels";
 import { findNode, fmtSec, fmtTime, fmtUsd, useP, walk } from "../lib";
 import { Badge, Button, cn, Dialog, HelpTip } from "../ui";
 
@@ -23,7 +24,16 @@ export default function OptimizeHost() {
   const P = useP();
   const [open, setOpen] = useState(false);
   const [scope, setScope] = useState("");
-  const [step, setStep] = useState<"goal" | "proposal">("goal");
+  const [step, setStep] = useState<"goal" | "proposal" | "cuts" | "plan">("goal");
+  const [wantReplan, setWantReplan] = useState(false);
+  const [answers, setAnswers] = useState<Record<string, CutAnswer>>({});
+  const [cutRows, setCutRows] = useState<CutRow[] | null>(null);
+  const [rp, setRp] = useState<ReplanResult | null>(null);
+  const [reuse, setReuse] = useState<Record<string, boolean>>({});
+  const [goalText, setGoalText] = useState("");
+  const [partGoalText, setPartGoalText] = useState("");
+  const [qAnswers, setQAnswers] = useState<QuestionAnswer[]>([]);
+  const [rbusy, setRbusy] = useState<"" | "cuts" | "replan" | "measure" | "apply">("");
   const [mode, setMode] = useState<"lowest" | "number">("lowest");
   const [useLength, setUseLength] = useState(true);
   const [useCost, setUseCost] = useState(false);
@@ -49,6 +59,7 @@ export default function OptimizeHost() {
     const h = (e: Event) => {
       setScope((e as CustomEvent).detail || "");
       setStep("goal"); setProp(null); setTicked([]); setAiEdits([]); setAiInfo(null); setProtect([]); setError(""); setBusy("");
+      setWantReplan(false); setAnswers({}); setCutRows(null); setRp(null); setReuse({}); setGoalText(""); setPartGoalText(""); setQAnswers([]); setRbusy("");
       setOpen(true);
     };
     window.addEventListener("vg-open-optimize", h);
@@ -59,8 +70,8 @@ export default function OptimizeHost() {
     scope: scopeId, lowest: mode === "lowest",
     length: mode === "number" && useLength && lengthVal ? Number(lengthVal) : null,
     cost: mode === "number" && useCost && costVal ? Number(costVal) : null,
-    protect, ai_edits: aiEdits, ...extra,
-  }), [scopeId, mode, useLength, useCost, lengthVal, costVal, protect, aiEdits]);
+    protect, ai_edits: aiEdits, answers, ...extra,
+  }), [scopeId, mode, useLength, useCost, lengthVal, costVal, protect, aiEdits, answers]);
 
   const run = async (kind: "propose" | "recalc", b: OptRequest) => {
     const mine = ++seq.current;
@@ -95,31 +106,92 @@ export default function OptimizeHost() {
     if (r) setOpen(false);
   };
 
+  // ---- what may be cut, and the re-plan
+  const openCuts = async () => {
+    setStep("cuts"); setError("");
+    if (cutRows) return;
+    setRbusy("cuts");
+    try { setCutRows(await api.optimizeCutList(P.pid, body())); } catch (e: any) { setError(e.message || String(e)); }
+    setRbusy("");
+  };
+  const showPlan = (r: ReplanResult) => {
+    setRp(r);
+    if (r.plan) {
+      setGoalText(r.plan.goal.new); setPartGoalText(r.plan.part_goal.new);
+      setReuse({});                                              // the defaults: reuse what the plan keeps as it is; leftovers stay out
+    }
+    setStep("plan");
+  };
+  const doReplan = async () => {
+    setRbusy("replan"); setError("");
+    try { showPlan(await api.replanPreview(P.pid, { ...body(), question_answers: qAnswers })); } catch (e: any) { setError(e.message || String(e)); }
+    setRbusy("");
+  };
+  const remeasure = async (next: Record<string, boolean>) => {
+    setReuse(next);
+    if (!rp?.plan) return;
+    setRbusy("measure");
+    try {
+      const m = await api.replanMeasure(P.pid, { plan: rp.plan, reuse: next });
+      setRp({ ...rp, before: m.before, after: m.after, outline: m.outline, report: m.report });
+    } catch (e: any) { setError(e.message || String(e)); }
+    setRbusy("");
+  };
+  const applyReplan = async () => {
+    if (!rp?.plan) return;
+    setRbusy("apply");
+    const r = await P.act("Re-planning", () => api.replanApply(P.pid, { plan: rp.plan!, reuse, goal: goalText, part_goal: isRoot ? undefined : partGoalText }),
+      "Re-planned. Ctrl+Z undoes it all at once. Now write the scripts of the new clips.");
+    setRbusy("");
+    if (r) setOpen(false);
+  };
+  const askAgain = () => doReplan();
+
   const goalOk = mode === "lowest" || (useLength && Number(lengthVal) > 0) || (useCost && Number(costVal) > 0);
   const title = isRoot ? "Optimize the whole video" : `Optimize part ${P.numbers[scopeId] || ""}`;
   const protectedNow = (c: Node) => c.locked || MADE.includes(c.status);
 
+  const est = prop?.replan;
+  const costWords = !est ? "" : est.call_high === 0 ? " (free: the offline helper)" : ` (about ${usd(est.call_low)} to ${usd(est.call_high)})`;
   const footer = (
     <>
       <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
       {step === "proposal" && <Button variant="outline" onClick={() => setStep("goal")}>Back</Button>}
-      {step === "goal"
-        ? <Button variant="primary" disabled={!goalOk || toMake.length === 0} loading={busy === "propose"} onClick={see}>See the proposal<ArrowRight className="h-3.5 w-3.5" /></Button>
-        : <Button help="optimize-apply" variant="primary" disabled={ticked.length === 0 || busy === "recalc"} loading={busy === "apply"} onClick={apply}>
-          Apply {ticked.length} change{ticked.length === 1 ? "" : "s"}</Button>}
+      {step === "cuts" && <Button variant="outline" onClick={() => setStep("proposal")}>Back</Button>}
+      {step === "plan" && <Button variant="outline" onClick={() => setStep(cutRows ? "cuts" : "proposal")}>Back</Button>}
+      {step === "goal" && <Button variant="primary" disabled={!goalOk || toMake.length === 0} loading={busy === "propose"} onClick={() => { see(); }}>See the proposal<ArrowRight className="h-3.5 w-3.5" /></Button>}
+      {step === "proposal" && <Button help="optimize-apply" variant="primary" disabled={ticked.length === 0 || busy === "recalc"} loading={busy === "apply"} onClick={apply}>
+        Apply {ticked.length} change{ticked.length === 1 ? "" : "s"}</Button>}
+      {step === "cuts" && <>
+        <Button variant="outline" loading={busy === "propose"} onClick={() => run("propose", body())}>Update the proposal with my answers</Button>
+        <Button variant="primary" loading={rbusy === "replan"} onClick={doReplan}><Sparkles className="h-3.5 w-3.5" />Rewrite the Goal and re-plan{costWords}</Button>
+      </>}
+      {step === "plan" && rp && (rp.plan
+        ? <Button help="optimize-apply-replan" variant="primary" disabled={rbusy === "measure"} loading={rbusy === "apply"} onClick={applyReplan}>Apply this plan</Button>
+        : <Button variant="primary" loading={rbusy === "replan"} disabled={qAnswers.length < rp.questions.length} onClick={askAgain}><Sparkles className="h-3.5 w-3.5" />Ask again with my answers{costWords}</Button>)}
     </>
   );
 
   return (
     <Dialog open={open} onOpenChange={setOpen} wide="xl" title={title}
-      description={step === "goal" ? "Say what you want. You see exactly what would change, and what you would lose, before anything is changed or spent." : "Read it, tick what you want, then apply. Nothing changes until you press Apply, and one Undo takes it all back."}
+      description={step === "goal" ? "Say what you want. You see exactly what would change, and what you would lose, before anything is changed or spent."
+        : step === "cuts" ? "Tell it what may be cut. Nothing is changed or spent yet."
+        : step === "plan" ? "The AI's proposal: a lightly changed Goal and a new plan. Nothing is changed until you press Apply, and one Undo takes it all back."
+        : "Read it, tick what you want, then apply. Nothing changes until you press Apply, and one Undo takes it all back."}
       footer={footer}>
       {error && <div className="mb-3 rounded-lg bg-bad/10 px-3 py-2 text-xs text-bad">{error}</div>}
       {step === "goal" ? (
         <GoalStep node={node} clips={clips} toMake={toMake.length} mode={mode} setMode={setMode} useLength={useLength} setUseLength={setUseLength} useCost={useCost} setUseCost={setUseCost}
-          lengthVal={lengthVal} setLengthVal={setLengthVal} costVal={costVal} setCostVal={setCostVal} protect={protect} setProtect={setProtect} protectedNow={protectedNow} numbers={P.numbers} />
+          lengthVal={lengthVal} setLengthVal={setLengthVal} costVal={costVal} setCostVal={setCostVal} protect={protect} setProtect={setProtect} protectedNow={protectedNow} numbers={P.numbers}
+          wantReplan={wantReplan} setWantReplan={setWantReplan} />
+      ) : step === "cuts" ? (
+        <CutsStep rows={cutRows} answers={answers} setAnswers={(a) => { setAnswers(a); }} loading={rbusy === "cuts"} />
+      ) : step === "plan" ? (
+        rp && (rp.plan
+          ? <PlanStep res={rp} reuse={reuse} setReuse={remeasure} goalText={goalText} setGoalText={setGoalText} partGoalText={partGoalText} setPartGoalText={setPartGoalText} busy={rbusy === "measure"} scopeId={scopeId} />
+          : <QuestionsStep questions={rp.questions} answers={qAnswers} setAnswers={setQAnswers} note={rp.note} />)
       ) : prop && (
-        <ProposalStep prop={prop} ticked={ticked} toggle={toggle} busy={busy} askAi={askAi} aiInfo={aiInfo} />
+        <ProposalStep prop={prop} ticked={ticked} toggle={toggle} busy={busy} askAi={askAi} aiInfo={aiInfo} onCuts={openCuts} onReplan={doReplan} replanBusy={rbusy === "replan"} highlightReplan={wantReplan} />
       )}
     </Dialog>
   );
@@ -130,6 +202,7 @@ function GoalStep(p: {
   node?: Node; clips: Node[]; toMake: number; mode: "lowest" | "number"; setMode: (m: "lowest" | "number") => void; useLength: boolean; setUseLength: (v: boolean) => void;
   useCost: boolean; setUseCost: (v: boolean) => void; lengthVal: string; setLengthVal: (v: string) => void; costVal: string; setCostVal: (v: string) => void;
   protect: string[]; setProtect: (v: string[]) => void; protectedNow: (c: Node) => boolean; numbers: Record<string, string>;
+  wantReplan: boolean; setWantReplan: (v: boolean) => void;
 }) {
   const now = p.node?.duration.likely_s || 0;
   const cost = p.clips.filter((c) => c.status !== "done").reduce((a, c) => a + c.cost.likely_usd, 0);
@@ -163,6 +236,13 @@ function GoalStep(p: {
           </label>
         </div>
       </HelpTip>
+      <HelpTip id="optimize-replan-option">
+        <label className={cn("flex cursor-pointer items-start gap-2 rounded-xl border p-3 text-sm", p.wantReplan ? "border-brand bg-brand/5" : "border-line")}>
+          <input type="checkbox" className="mt-1" checked={p.wantReplan} onChange={(e) => p.setWantReplan(e.target.checked)} />
+          <span><b>Also be ready to rewrite the Goal and re-plan the parts (AI)</b><br />
+            <span className="text-xs text-muted">If the gentle changes cannot reach your goal, the AI can reword the Goal a little (never a longer text) and plan the parts again, seeing the current plan. You see the old and new Goal and the new plan first, and choose which of your made videos to reuse. It asks before it spends.</span></span>
+        </label>
+      </HelpTip>
       <details className="rounded-xl border border-line p-3 text-xs">
         <summary className="cursor-pointer font-medium">Protect clips ({p.clips.filter(p.protectedNow).length + p.protect.length} protected)</summary>
         <p className="mt-2 text-muted">Clips already made, clips marked <i>Keep as it is</i>, and lines marked <i>exact</i> are always protected. Tick any other clip you want left exactly as it is.</p>
@@ -194,8 +274,9 @@ function Box({ label, value, sub }: { label: string; value: string; sub?: string
 }
 
 // ======================================================================= step 2: the proposal
-function ProposalStep({ prop, ticked, toggle, busy, askAi, aiInfo }: {
+function ProposalStep({ prop, ticked, toggle, busy, askAi, aiInfo, onCuts, onReplan, replanBusy, highlightReplan }: {
   prop: OptProposal; ticked: string[]; toggle: (id: string) => void; busy: string; askAi: () => void; aiInfo: OptAi | null;
+  onCuts: () => void; onReplan: () => void; replanBusy: boolean; highlightReplan: boolean;
 }) {
   const b = prop.before, a = prop.after;
   const lowest = prop.goal.lowest;
@@ -216,12 +297,28 @@ function ProposalStep({ prop, ticked, toggle, busy, askAi, aiInfo }: {
       ) : (
         <div className="flex items-start gap-2 rounded-lg bg-warn/10 px-3 py-2 text-xs text-warn"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span><b>This goal cannot be met with what is ticked.</b> {prop.reason}</span></div>
       )}
+      {prop.needs_input && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-xs">
+          <span className="min-w-0 flex-1"><b>The gentle changes cannot reach your goal.</b> Tell it what may be cut (with what each part and clip would save), or let the AI re-plan from a leaner Goal (Level 5 below).</span>
+          <Button size="sm" variant="outline" onClick={onCuts}>Choose what may be cut…</Button>
+        </div>
+      )}
       {prop.protected.count > 0 && <p className="text-[11px] text-muted">Left as they are (made, kept or protected): clips {prop.protected.numbers.join(", ")}. Lines marked <i>exact</i> are never changed.</p>}
       {/* the ladder */}
       <div className="space-y-2">
         {prop.levels.map((lv) => (
           <LevelCard key={lv.level} lv={lv} prop={prop} edits={prop.edits.filter((e) => e.level === lv.level)} ticked={ticked} toggle={toggle} askAi={askAi} asking={busy === "ai"} aiInfo={aiInfo} />
         ))}
+      </div>
+      {/* level 5: the Goal itself */}
+      <div className={cn("rounded-xl border p-3", highlightReplan || prop.needs_input ? "border-brand/60 bg-brand/5" : "border-line")}>
+        <div className="flex flex-wrap items-center gap-2"><span className="font-semibold">Level 5 · Re-plan from a leaner Goal (AI)</span>{highlightReplan && <Badge tone="brand">you asked for this</Badge>}</div>
+        <p className="mt-0.5 text-[11px] text-muted">The AI rewords the main Goal as little as it can (a few words, never a longer text, your quoted words kept exactly) and plans the parts again. It is shown the current plan, so it knows what is not enough. You then see the old and new Goal, the new plan beside the current one, and choose which made videos to reuse.</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button help="optimize-replan" size="sm" variant="outline" loading={replanBusy} onClick={onReplan}><Sparkles className="h-3.5 w-3.5" />Rewrite the Goal and re-plan…</Button>
+          {prop.replan && <span className="text-[11px] text-muted">{prop.replan.call_high === 0 ? "free: the offline helper" : `about ${usd(prop.replan.call_low)} to ${usd(prop.replan.call_high)} now; writing the new scripts later about ${usd(prop.replan.scripts_low)} to ${usd(prop.replan.scripts_high)}`}</span>}
+          <Button size="sm" variant="ghost" onClick={onCuts}>Choose what may be cut first</Button>
+        </div>
       </div>
       {/* joins and continuity */}
       <div className="rounded-xl border border-line p-3 text-xs">

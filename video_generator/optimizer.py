@@ -261,7 +261,7 @@ def apply_edits(svc, project: Project, edits: list[Edit]) -> dict[str, str]:
                 s.dialogue = lines if e.value.get("dialogue") else s.dialogue
                 n.voice_audio, n.voice_seconds = None, None            # the words changed, so any earlier voice no longer fits
                 _trim_to_natural(project, n)
-            elif e.kind == "drop_clip":
+            elif e.kind in ("drop_clip", "drop_part"):
                 remove(project, e.nodes[0])
             elif e.kind == "merge_clips":
                 a, b = find(project, e.nodes[0]), find(project, e.nodes[1])
@@ -274,7 +274,7 @@ def apply_edits(svc, project: Project, edits: list[Edit]) -> dict[str, str]:
                 _trim_to_natural(project, a)
         except KeyError:
             continue                                                    # the clip is gone already (for example it was dropped by another edit)
-    if any(e.kind in ("drop_clip", "merge_clips") for e in edits):
+    if any(e.kind in ("drop_clip", "drop_part", "merge_clips") for e in edits):
         svc._repair_joins(project)
         svc._sync_states(project)
     return merged_into
@@ -413,6 +413,51 @@ def validate_ai(svc, base: Project, scope_id: str, extra: frozenset, raw: list[d
     return edits, skipped
 
 
+def user_cuts(base: Project, scope_id: str, extra: frozenset, answers: dict) -> tuple[list[Edit], list[str]]:
+    """What YOU said may be cut becomes level-4 edits you can tick. A clip with a line marked exact, a clip you keep or protect, your own footage and the
+    last clip of a part are never dropped (the note says why); a made clip may be (its video stays on disk, and Undo brings it back)."""
+    nums = numbering(base)
+    by_number = {v: k for k, v in nums.items() if v}
+    inside = {n.id for n, _ in walk(find(base, scope_id))}
+    edits: list[Edit] = []
+    notes: list[str] = []
+    for number, how in answers.items():
+        if how != "cut":
+            continue
+        nid = by_number.get(number)
+        if not nid or nid not in inside or nid == scope_id and nid == base.root.id:
+            notes.append(f"{number}: not part of this scope.")
+            continue
+        node = find(base, nid)
+        inner = [c for c in ([node] if node.is_leaf else [n for n, _ in walk(node) if n.is_leaf])]
+        if any(c.kind != NodeKind.clip for c in inner):
+            notes.append(f"{number}: it holds your own slides or footage, so it stays.")
+        elif any(has_fixed_text(c) for c in inner):
+            notes.append(f"{number}: it holds a line marked “say exactly this”, so it stays.")
+        elif any(c.locked or c.id in extra for c in inner):
+            notes.append(f"{number}: you keep or protect it (or something in it), so it stays.")
+        elif node.is_leaf:
+            siblings = [c for c in parent_of(base, nid).children if c.is_leaf]
+            if len(siblings) <= 1:
+                notes.append(f"{number}: it is the only clip of its part; cut the whole part instead.")
+                continue
+            made = node.status in scaling.MADE
+            edits.append(Edit(id=f"L4:cut:{nid}", level=4, kind="drop_clip", nodes=[nid], numbers=[number],
+                              label=f"Drop clip {number}: {node.title or node.goal[:40]} (you said it may be cut)",
+                              loses="The clip is gone." + (" Its video is already made: it stays on disk, and Undo brings it back." if made else "")
+                                    + " Any join that depended on it becomes a cut."))
+        else:
+            if len(base.root.children) <= 1:
+                notes.append(f"{number}: it is the only part, so it stays.")
+                continue
+            made = [c for c in inner if c.status in scaling.MADE]
+            edits.append(Edit(id=f"L4:cutpart:{nid}", level=4, kind="drop_part", nodes=[nid], numbers=[number],
+                              label=f"Drop part {number}: {node.title or node.goal[:40]} (you said it may be cut)",
+                              loses=f"The whole part ({len(inner)} clips) is gone." + (f" {len(made)} made video(s) stay on disk, and Undo brings them back." if made else "")
+                                    + " Any join that depended on it becomes a cut."))
+    return edits, notes
+
+
 def ai_estimate(svc, project: Project, scope_id: str, extra: frozenset) -> dict:
     """What asking the AI to tighten this scope would cost BEFORE it is asked: {available, clips, cost_low, cost_high, why}."""
     clips = [c for c in _free_clips(project, scope_id, extra)]
@@ -438,20 +483,27 @@ def _delta(a: dict, b: dict) -> dict:
 
 
 def propose(svc, project: Project, scope_id: str, goal: Goal, max_level: Optional[int] = None, ticked: Optional[list[str]] = None,
-            protect: list[str] = (), ai_edits: list[dict] = ()) -> dict:
-    """The whole proposal for a goal. Nothing is saved. `ticked` = the edits you chose (None = let the ladder choose)."""
+            protect: list[str] = (), ai_edits: list[dict] = (), answers: Optional[dict] = None) -> dict:
+    """The whole proposal for a goal. Nothing is saved. `ticked` = the edits you chose (None = let the ladder choose). `answers` = what you said about
+    what may be cut: {clip or part number: keep | shorten | cut}."""
     if goal.length is None and goal.cost is None and not goal.lowest:
         raise ValueError("Choose a goal: a length, a cost, or as low as possible without losing quality.")
+    answers = {k: v for k, v in (answers or {}).items() if v in ("keep", "shorten", "cut")}
     base = project.model_copy(deep=True)
     base_m = measure(svc, base, scope_id)
     nums = numbering(base)
-    extra = frozenset(protect)
+    by_number = {v: k for k, v in nums.items() if v}
+    extra = frozenset(protect) | frozenset(by_number[n] for n, how in answers.items() if how == "keep" and n in by_number)
     scope = find(base, scope_id)
     if max_level is None:
         max_level = 1 if goal.lowest else 3
     cands, notes = candidates(svc, base, scope_id, extra)
     ai, skipped = validate_ai(svc, base, scope_id, extra, list(ai_edits)) if ai_edits else ([], [])
     notes += skipped
+    cuts, cut_notes = user_cuts(base, scope_id, extra, answers)
+    notes += cut_notes
+    tried = " and ".join(x for x in ("the AI's suggestions" if ai else "", "what you allowed to cut" if cuts else "") if x)
+    ai = ai + cuts                                                    # what you said may be cut sits at level 4 beside the AI's suggestions
 
     # what each edit does on its own; an edit that changes nothing is not proposed
     kept_edits: list[Edit] = []
@@ -492,7 +544,7 @@ def propose(svc, project: Project, scope_id: str, goal: Goal, max_level: Optiona
     merged = apply_edits(svc, q, chosen)
     after = measure(svc, q, scope_id)
     met = _meets(after, goal) if not goal.lowest else True
-    reason = "" if met else _reason(goal, base_m, floor_m, base, scope_id, extra, bool(ai))
+    reason = "" if met else _reason(goal, base_m, floor_m, base, scope_id, extra, tried)
     before_findings = {(f["code"], f["node"], f["text"]) for f in continuity_mod.check(base, svc.reg)}
     new_findings = [f for f in continuity_mod.check(q, svc.reg) if (f["code"], f["node"], f["text"]) not in before_findings]
     protected = [nums[c.id] for c in _scope_clips(base, scope_id) if is_protected(c, extra)]
@@ -505,31 +557,41 @@ def propose(svc, project: Project, scope_id: str, goal: Goal, max_level: Optiona
         "joins": joins_report(base, q, merged), "findings": new_findings,
         "protected": {"numbers": protected, "count": len(protected)},
         "ai": ai_estimate(svc, base, scope_id, extra),
+        "needs_input": bool(not met and not goal.lowest and not answers),            # the gentle levels cannot get there: the screen asks what may be cut
+        "answers": answers,
+        "replan": _replan_estimate(svc, base, scope_id, extra),
     }
 
 
-def _reason(goal: Goal, before: dict, floor: dict, base: Project, scope_id: str, extra: frozenset, tried_ai: bool) -> str:
+def _replan_estimate(svc, base: Project, scope_id: str, extra: frozenset) -> dict:
+    from . import replan as replan_mod                               # replan builds on this module
+    return replan_mod.estimate(svc, base, scope_id, extra)
+
+
+def _reason(goal: Goal, before: dict, floor: dict, base: Project, scope_id: str, extra: frozenset, tried: str) -> str:
     """Why the goal cannot be met, in plain words, and what would be needed."""
     held = [c for c in _scope_clips(base, scope_id) if is_protected(c, extra)]
     parts = []
     if goal.length is not None and floor["seconds"] > goal.length * (1 + policy_mod.current().optimize_goal_tolerance) + 0.25:
-        if tried_ai:
-            parts.append(f"Even with the AI's suggestions it cannot go below about {floor['seconds']:.0f} s: lines marked “say exactly this” always stay, "
-                         f"and no more than {policy_mod.current().max_cut_ratio:.0%} of the words or clips may be cut.")
+        if tried:
+            parts.append(f"Even with {tried} it cannot go below about {floor['seconds']:.0f} s: lines marked “say exactly this” always stay, "
+                         f"and no more than {policy_mod.current().max_cut_ratio:.0%} of the words or clips may be cut by the AI.")
         else:
             parts.append(f"Below about {floor['seconds']:.0f} s needs cutting spoken lines or dropping clips. Lines marked “say exactly this” always stay.")
     if goal.cost is not None and floor["cost"] > goal.cost * (1 + policy_mod.current().optimize_goal_tolerance) + 0.005:
-        parts.append(f"The lowest cost reachable here {'with the AI' + chr(39) + 's suggestions' if tried_ai else 'without changing the script'} is about ${floor['cost']:.2f}.")
+        parts.append(f"The lowest cost reachable here {'with ' + tried if tried else 'without changing the script'} is about ${floor['cost']:.2f}.")
     if held:
         parts.append(f"{len(held)} clip{'s are' if len(held) != 1 else ' is'} made, kept or protected, so {'they stay' if len(held) != 1 else 'it stays'} as {'they are' if len(held) != 1 else 'it is'}.")
-    if not tried_ai:
-        parts.append("Asking the AI to tighten the script can go further; you see its cost first and tick each change.")
+    if not tried:
+        parts.append("Asking the AI to tighten the script, or telling it what may be cut, can go further; you see the cost first and tick each change.")
+    parts.append("Or let the AI rewrite the Goal a little and re-plan the parts (Level 5).")
     return " ".join(parts)
 
 
-def apply(svc, project: Project, scope_id: str, goal: Goal, ticked: Optional[list[str]] = None, protect: list[str] = (), ai_edits: list[dict] = ()) -> Project:
+def apply(svc, project: Project, scope_id: str, goal: Goal, ticked: Optional[list[str]] = None, protect: list[str] = (), ai_edits: list[dict] = (),
+          answers: Optional[dict] = None) -> Project:
     """Apply exactly the edits you ticked (None = the ones the ladder chose), as one change (one undo step). Returns the project, not yet saved."""
-    p = propose(svc, project, scope_id, goal, ticked=ticked, protect=list(protect), ai_edits=list(ai_edits))
+    p = propose(svc, project, scope_id, goal, ticked=ticked, protect=list(protect), ai_edits=list(ai_edits), answers=answers)
     chosen_ids = {e["id"] for e in p["edits"] if e["checked"]}
     edits = [Edit(**{k: v for k, v in e.items() if k != "checked"}) for e in p["edits"] if e["id"] in chosen_ids]
     apply_edits(svc, project, edits)

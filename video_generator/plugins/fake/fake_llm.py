@@ -194,6 +194,48 @@ class FakeLLM(LLM):
                               "place": goal[:60], "start_state": f"{l}: {goal[:50]}", "end_state": f"End of '{l}': {goal[:50]}"}
                              for i, l in enumerate(labels)], "note": "offline brain: simple split"}
 
+    def _replan(self, m: dict) -> dict:
+        """Offline re-plan: a short clause is added to the Goal (never twice), every protected clip stays with `reuse`, and in a part with two or more clips
+        the last unprotected one is dropped (the ones you said may be cut first). Seconds are scaled to the wanted length. It cannot judge meaning."""
+        d = m.get("data") or {}
+        old, part_old, scope = d.get("goal", ""), d.get("part_goal", ""), d.get("scope", "root")
+        cut, keep = set(d.get("cut") or []), set(d.get("keep") or [])
+        clause = f"Part {d.get('scope_number', '')} kept brief." if scope == "part" else "Keep it to the essentials."
+        goal = old if (not old or clause in old) else old.rstrip(" .") + ". " + clause
+        part_goal = part_old if (not part_old or "Keep it brief." in part_old) else part_old.rstrip(" .") + ". Keep it brief."
+        parts = []
+        for part in d.get("parts", []):
+            clips = list(part.get("clips", []))
+            if part["number"] in cut:
+                clips = [c for c in clips if c["protected"] or c["number"] in keep]
+            elif len(clips) >= 2:
+                droppable = [c for c in clips if not c["protected"] and c["number"] not in keep]
+                preferred = [c for c in droppable if c["number"] in cut] or droppable[-1:]
+                if preferred:
+                    clips = [c for c in clips if c is not preferred[-1]]
+            if clips:
+                parts.append((part, clips))
+        total_fixed = sum(c["seconds"] for _p, cl in parts for c in cl if c["protected"])
+        total_free = sum(c["seconds"] for _p, cl in parts for c in cl if not c["protected"])
+        want = d.get("target_seconds")
+        factor = 1.0
+        if want and total_free > 0:
+            factor = max((float(want) - total_fixed) / total_free, 0.3)
+        elif total_free > 0:
+            factor = 0.75
+        out = []
+        for part, clips in parts:
+            items, secs = [], 0.0
+            for c in clips:
+                sec = c["seconds"] if c["protected"] else max(3.0, round(c["seconds"] * min(factor, 1.0) * 2) / 2)
+                secs += sec
+                items.append({"title": c["title"], "goal": c["goal"], "seconds": sec, "reuse": c["number"], "join": c.get("join", ""),
+                              "join_reason": c.get("join_reason", ""), "place": c.get("place", ""), "present": c.get("present", []),
+                              "start_state": c.get("start_state", ""), "end_state": c.get("end_state", ""), "carry_over": c.get("carry_over", "")})
+            out.append({"title": part["title"], "goal": part["goal"], "seconds": round(secs, 1), "keep": part["number"], "clips": items})
+        return {"goal": goal, "part_goal": part_goal if scope == "part" else "", "parts": out,
+                "note": "offline helper: a short clause was added to the Goal and the last clip of each part with two or more clips was dropped; it cannot judge meaning, so check it"}
+
     def _optimize(self, m: dict) -> dict:
         """Offline tightening: a spoken text of two or more sentences loses its LAST sentence (never a line marked exact). It cannot judge
         meaning, so the reason says so; the person decides by ticking."""

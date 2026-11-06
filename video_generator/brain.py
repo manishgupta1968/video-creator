@@ -124,6 +124,35 @@ class Tightening(BaseModel):
     note: str = ""
 
 
+class ReplanClip(PlannedContinuity):
+    title: str
+    goal: str
+    seconds: float = 6
+    reuse: str = ""                   # the number of an existing clip this one keeps exactly as it is ("" = a new clip)
+
+
+class ReplanPart(BaseModel):
+    title: str
+    goal: str
+    seconds: float = 20
+    keep: str = ""                    # the number of the existing part this one is ("" = a new part)
+    clips: list[ReplanClip] = Field(default_factory=list)
+
+
+class ReplanQuestion(BaseModel):
+    id: str
+    text: str
+    options: list[str] = Field(default_factory=list)
+
+
+class Replan(BaseModel):
+    goal: str = ""                    # the whole main Goal after the smallest change ("" = unchanged)
+    part_goal: str = ""               # one-part scope: that part's own Goal after the smallest change
+    parts: list[ReplanPart] = Field(default_factory=list)
+    note: str = ""
+    questions: list[ReplanQuestion] = Field(default_factory=list)
+
+
 class Decomposition(BaseModel):
     children: list[ChildDraft]
     note: str = ""
@@ -421,6 +450,15 @@ class Brain:
         return await self.ask("decompose", prompt, Decomposition,
                               {"goal": node.goal, "title": node.title,
                                "seconds": node.duration.likely_s or node.target_seconds or 20})
+
+    async def replan(self, project: Project, scope_label: str, goal: str, part_goal: str, wish: str, situation: str, outline_text: str,
+                     answers: str, data: dict) -> Replan:
+        """Ask the planner for a leaner Goal and a new breakdown, given the CURRENT breakdown (so it knows the current plan is not enough).
+        The tool checks everything that comes back (see replan.py); nothing is applied without your approval."""
+        prompt = render("replan", scope=scope_label, goal=goal, part_goal=(f"CURRENT GOAL OF THIS PART:\n{part_goal}" if part_goal else ""), wish=wish,
+                        situation=situation, outline=outline_text, answers=answers or "(nothing was said: you choose, and ask if you cannot)",
+                        routes=routes_mod.describe(self.reg))
+        return await self.ask("replan", prompt, Replan, {"data": data})
 
     async def tighten(self, project: Project, scope_label: str, goal_text: str, clips: list[Node]) -> Tightening:
         """Ask the AI for shorter lines, or clips to drop or merge, for these clips (the tool checks every suggestion afterwards)."""

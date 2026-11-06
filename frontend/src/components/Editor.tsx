@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clapperboard, Film, Lock, LockOpen, Mic, Play, Plus, RefreshCw, Sparkles, Trash2, User, Wand2, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clapperboard, Film, Link2, Lock, LockOpen, Mic, Play, Plus, RefreshCw, Sparkles, Trash2, User, Wand2, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, fileUrl, Line, Node, Review, Script, Take } from "../api";
 import { fmtRange, fmtSec, fmtTime, fmtUsd, leaves, SHOT_TYPES, STATUS, useP, useSettings } from "../lib";
@@ -491,6 +491,34 @@ function verdictBadge(r?: Review) {
   return <Badge tone="bad"><XCircle className="h-3 w-3" />Does not meet the goal</Badge>;
 }
 
+const JOIN_WORDS: Record<string, string> = { continues: "continues the same shot", same_scene: "stays in the same scene", cut: "is a deliberate cut" };
+
+/** How this take is stitched to the clip before it: the two pictures the Review Agent was shown, the plan's join, the measured difference and the score. */
+function StitchPanel({ review }: { review: Review }) {
+  const P = useP();
+  const j = review.join!;
+  const score = review.scores.join || 0;
+  return (
+    <div data-help="stitch-panel" className="rounded-xl border border-line p-2.5 text-xs">
+      <div className="flex flex-wrap items-center gap-2 font-medium">
+        <Link2 className="h-3.5 w-3.5 text-brand" />Stitch with the clip before{j.previous ? ` (clip ${j.previous})` : ""}
+        {j.judged && score > 0 && <Badge tone={score >= 4 ? "ok" : score >= 3 ? "warn" : "bad"}>{score}/5</Badge>}
+      </div>
+      {j.judged ? (
+        <div className="mt-2 flex flex-wrap items-start gap-3">
+          {j.previous_frame && <figure className="w-36"><img src={fileUrl(P.pid, j.previous_frame)} alt={`Last picture of clip ${j.previous}`} className="w-full rounded" /><figcaption className="mt-0.5 text-[10px] text-muted">last picture of clip {j.previous}</figcaption></figure>}
+          {j.this_frame && <figure className="w-36"><img src={fileUrl(P.pid, j.this_frame)} alt="First picture of this take" className="w-full rounded" /><figcaption className="mt-0.5 text-[10px] text-muted">first picture of this take</figcaption></figure>}
+          <div className="min-w-0 flex-1 space-y-0.5 text-muted">
+            <div>The plan says this clip <b className="text-ink">{JOIN_WORDS[j.kind] || "joins the clip before"}</b>{j.reason ? ` (${j.reason})` : ""}.</div>
+            {j.transition && j.transition !== "cut" && <div>Planned transition: {j.transition}.</div>}
+            {j.difference != null && <div>Measured difference {j.difference.toFixed(2)} (0 = the same picture){j.kind === "continues" ? `; the limit for a continuing shot is ${j.limit.toFixed(2)}` : ""}.</div>}
+          </div>
+        </div>
+      ) : <div className="mt-1 text-muted">Not judged: {j.why_not || "there was nothing to compare with"}.</div>}
+    </div>
+  );
+}
+
 function Takes({ node, takes }: { node: Node; takes: Take[] }) {
   const P = useP();
   const p = P.view!.project;
@@ -554,13 +582,14 @@ function Takes({ node, takes }: { node: Node; takes: Take[] }) {
           <div className="space-y-3">
             {focusReview.summary && <p className="text-xs">{focusReview.summary}</p>}
             <div className="grid grid-cols-4 gap-x-4 gap-y-1.5">
-              {Object.entries(focusReview.scores).map(([k, v]) => (
+              {Object.entries(focusReview.scores).filter(([k, v]) => !(k === "join" && (!v || focusReview.join))).map(([k, v]) => (
                 <div key={k} className="text-[11px]">
                   <div className="flex justify-between"><span className="capitalize text-muted">{k}</span><span className="font-medium">{v}/5</span></div>
                   <div className="mt-0.5 h-1 rounded-full bg-line"><div className={cn("h-full rounded-full", v >= 4 ? "bg-ok" : v >= 3 ? "bg-warn" : "bg-bad")} style={{ width: `${v * 20}%` }} /></div>
                 </div>
               ))}
             </div>
+            {focusReview.join && <StitchPanel review={focusReview} />}
             {focusReview.issues.length > 0 && (
               <ul className="space-y-1">
                 {focusReview.issues.map((iss, i) => (

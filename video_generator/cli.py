@@ -456,13 +456,21 @@ def optimize(scope: str = typer.Option("", "--scope", help="a part number such a
              lowest: bool = typer.Option(False, "--lowest", help="as short and cheap as possible without losing quality"),
              max_level: Optional[int] = typer.Option(None, "--max-level", help="the deepest level it may use: 1 no visible change, 2 small, 3 noticeable"),
              ai: bool = typer.Option(False, "--ai", help="also ask the AI to tighten the script (it shows the cost first)"),
+             replan: bool = typer.Option(False, "--replan", help="ask the AI to rewrite the Goal a little and re-plan the parts (it shows the cost first)"),
+             cut: List[str] = typer.Option([], "--cut", help="a clip or part number that may be cut (repeat for more), for example --cut 2.3"),
+             keep: List[str] = typer.Option([], "--keep", help="a clip or part number that must stay (repeat for more)"),
+             reuse: bool = typer.Option(True, "--reuse/--no-reuse", help="with --replan: reuse the videos already made where the new plan keeps a clip (default), or make new ones"),
              apply_it: bool = typer.Option(False, "--apply", help="apply the proposal (otherwise it only shows it)"),
              yes: bool = typer.Option(False, "--yes", "-y", help="do not ask before spending on the AI or applying"),
              project: Optional[str] = typer.Option(None, "-p")):
-    """Propose a shorter and cheaper video (nothing changes until --apply). Levels: 1 no visible change, 2 small change, 3 noticeable, 4 AI script change."""
+    """Propose a shorter and cheaper video (nothing changes until --apply). Levels: 1 no visible change, 2 small change, 3 noticeable, 4 AI script change,
+    5 (--replan) a lightly reworded Goal and a new breakdown."""
     svc = _svc()
     pid = _pid(project)
-    body = {"scope": _node(svc, pid, scope) if scope else None, "length": length, "cost": cost, "lowest": lowest, "max_level": max_level}
+    body = {"scope": _node(svc, pid, scope) if scope else None, "length": length, "cost": cost, "lowest": lowest, "max_level": max_level,
+            "answers": {**{n: "cut" for n in cut}, **{n: "keep" for n in keep}}}
+    if replan:
+        return _replan_cli(svc, pid, body, apply_it, yes, reuse)
     try:
         prop = svc.optimize_propose(pid, body)
     except ValueError as exc:
@@ -488,6 +496,55 @@ def optimize(scope: str = typer.Option("", "--scope", help="a part number such a
             body["ticked"] = [e["id"] for e in prop["edits"] if e["checked"]]
             svc.optimize_apply(pid, body)
             con.print("[green]Applied.[/] Undo with: vg undo")
+
+
+def _replan_cli(svc, pid: str, body: dict, apply_it: bool, yes: bool, reuse: bool) -> None:
+    """`vg optimize --replan`: the cost first, then the proposed Goal change and the new plan beside the current one; nothing changes without --apply."""
+    est_ = svc.replan_estimate(pid, body)
+    free = est_["call_high"] == 0
+    con.print(f"Asking the AI to re-plan costs about " + ("nothing (the offline helper)." if free else f"${est_['call_low']:.2f} to ${est_['call_high']:.2f} ({est_['model']}).")
+              + (f" Writing the scripts of the new clips afterwards: about ${est_['scripts_low']:.2f} to ${est_['scripts_high']:.2f}." if not free else ""))
+    if not (yes or typer.confirm("Ask the AI?")):
+        return
+    body["question_answers"] = []
+    try:
+        res = asyncio.run(svc.replan_preview(pid, body))
+        while res["plan"] is None and res["questions"]:                                     # the planner could not choose: you answer, it is asked again
+            for q in res["questions"]:
+                answer = typer.prompt(q["text"] + ("  [" + " / ".join(q["options"]) + "]" if q["options"] else ""))
+                body["question_answers"].append({"id": q["id"], "text": q["text"], "answer": answer})
+            res = asyncio.run(svc.replan_preview(pid, body))
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc))
+    plan = res["plan"]
+    if plan is None:
+        con.print("The AI returned no plan.")
+        return
+    g = plan["goal"]
+    con.print("[bold]Goal[/]" + (": unchanged." if g["new"] == g["old"] else f":\n  before: {g['old']}\n  after:  {g['new']}"))
+    if plan["part_goal"]["new"] != plan["part_goal"]["old"]:
+        con.print(f"[bold]Part Goal[/]:\n  before: {plan['part_goal']['old']}\n  after:  {plan['part_goal']['new']}")
+    b, a = res["before"], res["after"]
+    con.print(f"[bold]New plan[/]: length {b['seconds']:.0f} s to {a['seconds']:.0f} s · still to spend ${b['cost']:.2f} to ${a['cost']:.2f} (new clips have no script yet, so this is a range)")
+    for part in res["outline"]:
+        con.print(f"  part {part['number']} {part['title']}: {part['seconds']:.0f} s")
+        for c in part["clips"]:
+            con.print(f"    {c['number']} {c['title']} ({c['seconds']:.0f} s){'  (reuses its video)' if c['reused'] and c['made'] else '  (kept)' if c['reused'] else '  (new)'}")
+    for u in plan["unused_made"]:
+        con.print(f"  [yellow]clip {u['number']} is made but not in the new plan[/]: its video stays on disk (vg undo brings it back); it is not reused")
+    for f in plan["forced"]:
+        con.print(f"  [dim]clip {f['number']} stays: {f['why']}[/]")
+    for w in plan["warnings"]:
+        con.print(f"[yellow]{w}[/]")
+    if plan["note"]:
+        con.print(f"[dim]{plan['note']}[/]")
+    if not apply_it:
+        con.print("Nothing was changed. Add --apply to make this the plan.")
+        return
+    if yes or typer.confirm("Apply this plan? (one undo step)"):
+        choose = {} if reuse else {u: False for u in {c["reuse_id"] for p_ in plan["parts"] for c in p_["clips"] if c["reuse_id"] and not c["forced"]}}
+        svc.replan_apply(pid, {"plan": plan, "reuse": choose})
+        con.print("[green]Applied.[/] Write the scripts of the new clips when you are ready (vg script <clip>, or the Write the scripts step in the app), or undo with: vg undo")
 
 
 def _show_proposal(prop: dict) -> None:

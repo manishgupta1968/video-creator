@@ -33,7 +33,9 @@ export interface Ctx {
   consent: { confirmed: boolean; statement: string; confirmed_by: string; confirmed_at: string; files: string[] }; analysis: Record<string, any>;
 }
 export interface Dep { id: string; from_id: string; to_id: string; type: string; source: string; note: string; payload: Record<string, any> }
+export interface ReviewJoin { judged: boolean; why_not: string; previous: string; kind: string; reason: string; transition: string; previous_frame: string | null; this_frame: string | null; difference: number | null; limit: number }
 export interface Review {
+  join?: ReviewJoin | null;
   id: string; target: string; verdict: "meets_goal" | "minor_issues" | "does_not_meet_goal"; scores: Record<string, number>;
   issues: { check: string; text: string; at_s: number | null; frame: string | null; severity: string }[];
   suggestions: { id: string; text: string; accepted: boolean }[]; summary: string; reviewer_model: string; cost_usd: number;
@@ -77,8 +79,26 @@ export interface OptProposal {
   max_level: number; met: boolean; stopped_at: number; reason: string; notes: string[]; before: OptMeasure; after: OptMeasure; saves: OptDelta;
   levels: OptLevel[]; edits: OptEdit[]; joins: { kept: number; of: number; broken: string[] }; findings: Finding[]; protected: { numbers: string[]; count: number };
   ai: { available: boolean; clips: number; cost_low: number; cost_high: number; model?: string; why: string };
+  needs_input?: boolean; answers?: Record<string, CutAnswer>; replan?: ReplanEstimate;
 }
-export interface OptRequest { scope?: string; length?: number | null; cost?: number | null; lowest?: boolean; max_level?: number; ticked?: string[]; protect?: string[]; ai_edits?: any[] }
+export type CutAnswer = "keep" | "shorten" | "cut";
+export interface ReplanQuestion { id: string; text: string; options: string[] }
+export interface QuestionAnswer { id: string; text: string; answer: string }
+export interface OptRequest { scope?: string; length?: number | null; cost?: number | null; lowest?: boolean; max_level?: number; ticked?: string[]; protect?: string[]; ai_edits?: any[]; answers?: Record<string, CutAnswer>; question_answers?: QuestionAnswer[] }
+export interface CutRow { number: string; title: string; kind: "part" | "clip"; seconds: number; saves_seconds: number; saves_cost: number; made: boolean; exact: boolean; note: string; protected: boolean }
+export interface ReplanEstimate { call_low: number; call_high: number; scripts_low: number; scripts_high: number; clips: number; model: string }
+export interface ReplanClip { reuse_id: string | null; reuse_number: string; title: string; goal: string; seconds: number; continuity: Continuity; forced: string }
+export interface ReplanPart { keep_id: string | null; keep_number: string; title: string; goal: string; seconds: number; clips: ReplanClip[] }
+export interface ReplanPlan {
+  scope: string; stamp: string; goal: { old: string; new: string }; part_goal: { old: string; new: string }; parts: ReplanPart[];
+  forced: { id: string; number: string; why: string }[]; unused_made: { id: string; number: string; title: string; seconds: number; part_number: string; part_id: string }[];
+  warnings: string[]; note: string; questions: ReplanQuestion[]; total_seconds: number;
+}
+export interface ReplanOutlineClip { number: string; title: string; seconds: number; cost: number; cost_min: number; cost_max: number; reused: boolean; made: boolean; estimate_only: boolean }
+export interface ReplanResult {
+  plan: ReplanPlan | null; questions: ReplanQuestion[]; note?: string; before: OptMeasure; after: OptMeasure; cost_usd: number; estimate?: ReplanEstimate;
+  outline: { number: string; title: string; seconds: number; cost: number; clips: ReplanOutlineClip[] }[]; report: { new_clips: number; reused: number; goal_changed: boolean; left_out_made: string[] };
+}
 export interface OptAi { edits: any[]; valid: any[]; skipped: string[]; note: string; cost_usd: number }
 export interface ModeCost { cost: number; cost_todo: number; cost_min: number; cost_max: number; seconds: number; time_s: number; models: string[]; clips: number; to_make: number }
 export interface ModeCosts { current: string; effective: string; inherits: string; is_whole_video: boolean; modes: Record<string, ModeCost> }
@@ -199,6 +219,10 @@ export const api = {
   setJoin: (pid: string, nid: string, join: Join, reason = "") => req<View>("POST", `${P(pid)}/nodes/${nid}/join`, { join, reason }),
   optimizePropose: (pid: string, body: OptRequest) => req<OptProposal>("POST", `${P(pid)}/optimize/propose`, body),
   optimizeAi: (pid: string, body: OptRequest) => req<OptAi>("POST", `${P(pid)}/optimize/ai`, body),
+  optimizeCutList: (pid: string, body: OptRequest) => req<CutRow[]>("POST", `${P(pid)}/optimize/cut-list`, body),
+  replanPreview: (pid: string, body: OptRequest) => req<ReplanResult>("POST", `${P(pid)}/optimize/replan`, body),
+  replanMeasure: (pid: string, body: { plan: ReplanPlan; reuse: Record<string, boolean> }) => req<ReplanResult>("POST", `${P(pid)}/optimize/replan/measure`, body),
+  replanApply: (pid: string, body: { plan: ReplanPlan; reuse: Record<string, boolean>; goal?: string; part_goal?: string }) => req<View>("POST", `${P(pid)}/optimize/replan/apply`, body),
   optimizeApply: (pid: string, body: OptRequest) => req<View>("POST", `${P(pid)}/optimize/apply`, body),
   rewriteOffer: (pid: string, nid: string) => req<{ clips: number; numbers: string[]; kept: string[]; cost_usd: number }>("GET", `${P(pid)}/nodes/${nid}/rewrite-offer`),
   modeCosts: (pid: string, nid: string) => req<ModeCosts>("GET", `${P(pid)}/nodes/${nid}/mode-costs`),

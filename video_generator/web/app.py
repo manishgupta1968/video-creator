@@ -500,10 +500,48 @@ async def optimize_ai(pid: str, body: dict = Body(...)):
     return await guard(svc.optimize_ai)(pid, body)
 
 
+def refuse_while_running(pid: str) -> None:
+    if engine.status(pid)["active"]:
+        raise HTTPException(409, "Clips are being made right now. Pause or stop the run first, then change the plan.")
+
+
 @app.post("/api/projects/{pid}/optimize/apply")
 async def optimize_apply(pid: str, body: dict = Body(...)):
     """Apply the ticked edits as one saved change (one undo step)."""
+    refuse_while_running(pid)
     await guard(svc.optimize_apply)(pid, body)
+    return with_scale(pid)
+
+
+@app.post("/api/projects/{pid}/optimize/cut-list")
+async def optimize_cut_list(pid: str, body: dict = Body(default={})):
+    """Every part and clip in the scope with what dropping it would save: the list behind "what may be cut?"."""
+    return await guard(svc.cut_list)(pid, body)
+
+
+@app.post("/api/projects/{pid}/optimize/replan/estimate")
+async def replan_estimate(pid: str, body: dict = Body(default={})):
+    """What asking for a re-plan costs, and what the new scripts will cost afterwards. Nothing is asked or spent."""
+    return await guard(svc.replan_estimate)(pid, body)
+
+
+@app.post("/api/projects/{pid}/optimize/replan")
+async def replan_preview(pid: str, body: dict = Body(...)):
+    """Ask the planner for a leaner Goal and a new breakdown, with the current breakdown as context. SPENDS (the estimate was shown first). Changes nothing."""
+    return await guard(svc.replan_preview)(pid, body)
+
+
+@app.post("/api/projects/{pid}/optimize/replan/measure")
+async def replan_measure(pid: str, body: dict = Body(...)):
+    """The numbers for a plan with your choices (which videos to reuse): free, measured on a copy."""
+    return await guard(svc.replan_measure)(pid, body)
+
+
+@app.post("/api/projects/{pid}/optimize/replan/apply")
+async def replan_apply(pid: str, body: dict = Body(...)):
+    """Apply the plan as one change (one undo step). Refused while clips are being made, or when the project changed since the plan was made."""
+    refuse_while_running(pid)
+    await guard(svc.replan_apply)(pid, body)
     return with_scale(pid)
 
 

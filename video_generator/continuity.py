@@ -115,6 +115,25 @@ def check(project: Project, reg: Registry, project_dir=None) -> list[dict]:
                 found.append(_item("parts_differ", b.id, bn, f"Clip {an} (end of one part) is made with {ma.id} and clip {bn} (start of the next) with {mb.id}: "
                                    "the look may differ slightly where the parts meet."))
 
+    # the Review Agent's own opinion of how a clip is stitched to the one before it (kept only while it is current)
+    measured_nodes = {f["node"] for f in found if f["code"] == "join_measured"}
+    reviews = {r.id: r for r in project.reviews}          # a take points at its review by the review's id
+    for a, b in pairs:
+        if b.status != NodeStatus.done or b.id in measured_nodes:
+            continue
+        take = next((t for t in b.takes if t.id == b.chosen_take), None)
+        r = reviews.get(take.review_id or "") if take and take.review_id else None
+        score = (r.scores.get("join", 0) if r else 0)
+        if not r or not r.join or not r.join.judged or not 0 < score <= 3:
+            continue
+        bn, an = nums.get(b.id, ""), nums.get(a.id, "")
+        said = next((i.text for i in r.issues if i.check == "join"), "")
+        fixes = [{"action": "remake", "label": "Re-make it", "node": b.id}]
+        if r.join.kind != "cut":
+            fixes.append({"action": "set_join", "label": "Change this join to a cut", "node": b.id, "join": "cut"})
+        found.append(_item("join_review", b.id, bn, f"The Review Agent says clip {bn} does not stitch well to clip {an} (stitch {score} out of 5)."
+                           + (f" {said}" if said else ""), fixes, "problem" if score <= 2 else "note"))
+
     # 4 and 9. every speaker: an accent, a gender; and lines written in the speaker's own script
     spoken: dict[str, str] = {}
     for l in ls:

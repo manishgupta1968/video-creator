@@ -76,6 +76,20 @@ def save(project: Project, track: Path, made_for_s: float, model: str, free: boo
     (folder(project.id) / META).write_text(json.dumps(meta))
 
 
+def rebind(project: Project, old_key: str) -> bool:
+    """The Goal (or the style) was reworded a little and the saved track was made from the old wording: it still fits, so it is linked to the new wording
+    and keeps being reused for free. Only a track that was valid before the change is re-linked. Returns True when it did."""
+    try:
+        meta = read(project.id)
+        if not meta.get("file") or meta.get("key") != old_key:
+            return False
+        meta["key"] = key(project)
+        (folder(project.id) / META).write_text(json.dumps(meta))
+        return True
+    except (OSError, FileNotFoundError):
+        return False
+
+
 def status(project: Project, total_s: float, real_music_possible: bool = False) -> dict:
     """What is saved and whether it can be used for a video of `total_s` seconds.
     reusable = a track exists, was made from the same mood and reference, is not a free placeholder when a real track is now

@@ -266,3 +266,82 @@ def test_a_picture_past_the_end_of_a_video_is_never_handed_back_as_a_missing_fil
     assert near_end.exists() and near_end.stat().st_size > 0
     with pytest.raises(media.MediaError, match="no picture could be read"):
         media.extract_frame(clip_path, tmp_path / "x.jpg", at=60.0)
+
+
+# ------------------------------------------------------------------ the extras: Gemini and the Continuity list
+def test_gemini_still_gets_the_join_pictures_when_it_is_sent_the_video_itself(tmp_path):
+    from video_generator.plugins.llm.gemini_llm import media_parts
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"video")
+    pics = []
+    for name in ("f1", "f2", "join_prev_last", "join_this_first"):
+        f = tmp_path / f"{name}.jpg"
+        f.write_bytes(b"jpg")
+        pics.append(f)
+    with_video = media_parts(video, pics, keep_images=2)
+    assert len(with_video) == 3 and "video/mp4" in with_video[0]["inline_data"]["mime_type"]      # the video, then ONLY the evidence that is not in it
+    assert len(media_parts(video, pics, keep_images=0)) == 1                                       # nothing extra when there is none
+    assert len(media_parts(None, pics, keep_images=2)) == 4                                        # no video: every picture
+    assert len(media_parts(video, pics)) == 1
+
+
+def stitched_project(svc, score, kind="continues", with_measured=False):
+    from video_generator.models import Take
+    p, ids = build(svc, "Two", [], [clip("landscape", "A road", end="a road"), clip("landscape", "The same road", start="a road")])
+    if kind != "cut":
+        svc.set_join(p.id, ids[1], kind)
+    p = svc.load(p.id)
+    a, b = leaves(p)
+    t = Take(version=1, index=1, video="b.mp4", model="kling_3")
+    t.review_id = "rv_join"
+    b.takes, b.chosen_take, b.status, b.output = [t], t.id, __import__("video_generator.models", fromlist=["NodeStatus"]).NodeStatus.done, "b.mp4"
+    p.reviews = [Review(id="rv_join", target=t.id, scores={"goal": 4, "join": score},
+                        issues=[__import__("video_generator.models", fromlist=["ReviewIssue"]).ReviewIssue(check="join", text="She is at the door in one picture and at the window in the next.", severity="major")],
+                        join=ReviewJoin(judged=True, previous="1.1", kind=kind, difference=0.5 if with_measured else None, limit=0.15))]
+    if with_measured:
+        b.continuity.difference = 0.5
+    return p, b
+
+
+def test_a_weak_stitch_the_reviewer_found_is_listed_under_continuity_with_fixes(svc):
+    from video_generator import continuity as C
+    p, b = stitched_project(svc, score=2)
+    found = [f for f in C.check(p, svc.reg) if f["code"] == "join_review"]
+    assert len(found) == 1 and found[0]["severity"] == "problem" and found[0]["number"] == "1.2"
+    assert "does not stitch well to clip 1.1" in found[0]["text"] and "window" in found[0]["text"]
+    assert [f["action"] for f in found[0]["fixes"]] == ["remake", "set_join"] and found[0]["fixes"][1]["join"] == "cut"
+    note = [f for f in C.check(stitched_project(svc, score=3)[0], svc.reg) if f["code"] == "join_review"]
+    assert note and note[0]["severity"] == "note"
+    assert not [f for f in C.check(stitched_project(svc, score=4)[0], svc.reg) if f["code"] == "join_review"]
+    assert not [f for f in C.check(stitched_project(svc, score=0)[0], svc.reg) if f["code"] == "join_review"]           # 0 = not judged
+
+
+def test_a_cut_that_looks_accidental_can_only_be_re_made_and_a_clip_waiting_to_be_made_again_is_not_judged(svc):
+    from video_generator import continuity as C
+    from video_generator.models import NodeStatus
+    p, b = stitched_project(svc, score=2, kind="cut")
+    f = [x for x in C.check(p, svc.reg) if x["code"] == "join_review"]
+    assert f and [x["action"] for x in f[0]["fixes"]] == ["remake"]
+    b.status = NodeStatus.stale
+    assert not [x for x in C.check(p, svc.reg) if x["code"] == "join_review"]                       # the review is out of date: the clip must be made again first
+
+
+def test_the_measured_difference_and_the_reviewers_opinion_are_not_listed_twice(svc):
+    from video_generator import continuity as C
+    p, b = stitched_project(svc, score=2, with_measured=True)
+    codes = [f["code"] for f in C.check(p, svc.reg) if f["node"] == b.id]
+    assert "join_measured" in codes and "join_review" not in codes
+
+
+def test_the_review_with_its_stitch_travels_to_the_screen(svc, monkeypatch):
+    from fastapi.testclient import TestClient
+    from video_generator.web import app as appmod
+    monkeypatch.setattr(appmod, "svc", svc)
+    monkeypatch.setattr(appmod.engine, "svc", svc)
+    p, b = stitched_project(svc, score=2)
+    svc.save(p)
+    with TestClient(appmod.app) as client:
+        v = client.get(f"/api/projects/{p.id}").json()
+        r = next(x for x in v["project"]["reviews"] if x["id"] == "rv_join")
+        assert r["join"]["judged"] and r["join"]["previous"] == "1.1" and r["scores"]["join"] == 2
+        assert any(f["code"] == "join_review" for f in v["summary"]["continuity"])
