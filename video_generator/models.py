@@ -154,6 +154,7 @@ class DialogueLine(BaseModel):
     speaker: str = ""      # actor id or "narrator"
     text: str = ""
     emotion: str = ""
+    fixed: bool = False    # must be spoken exactly as written: a quote, a slogan, text given in the goal. Never cut or reworded.
 
 
 class ClipScript(BaseModel):
@@ -164,6 +165,7 @@ class ClipScript(BaseModel):
     actors_in_shot: list[ActorInShot] = Field(default_factory=list)
     dialogue: list[DialogueLine] = Field(default_factory=list)
     narration: str = ""
+    narration_fixed: bool = False       # the narration must be spoken exactly as written
     on_camera_speech: bool = False
     sound_notes: str = ""               # sound design: ambience, effects tied to the action, or "silence"
     motion: str = ""                    # what must move: face (only face and head) | body | scene; "" = not decided
@@ -285,6 +287,7 @@ class Node(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     needs_split: bool = False       # computed: the clip needs more than any single route can do (see estimate.plan_clip)
     review_enabled: bool = True
+    locked: bool = False            # "keep this clip as it is": its length is never changed by resizing or optimizing
 
     @property
     def is_leaf(self) -> bool:

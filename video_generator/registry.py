@@ -7,6 +7,7 @@ from functools import lru_cache
 from importlib.metadata import entry_points
 from typing import Optional
 
+from . import policy as policy_mod
 from .catalog import Catalog, CatalogEntry
 from .config import Config, vg_home
 from .plugins.base import Plugin
@@ -155,7 +156,7 @@ class Registry:
             if real:
                 out = real                                   # a placeholder card is never "cheaper" than real footage
             if mode == "budget":
-                decent = [e for e in out if level(e) >= 3]   # cheapest, but not a model that is poor for this kind of shot
+                decent = [e for e in out if level(e) >= policy_mod.current().budget_min_strength]   # cheapest, but not a model that is poor for this kind of shot
                 if decent:
                     out = decent
 

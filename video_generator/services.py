@@ -9,12 +9,12 @@ from typing import Any, Optional
 
 from . import deps as deps_mod
 from . import guide as guide_mod
-from . import languages, models_list, musictrack
+from . import languages, models_list, musictrack, scaling
 from . import policy as policy_mod
 from . import estimate as est
 from . import media
 from . import stock
-from .brain import (Brain, ClipScriptDraft, CommandPlan, Op, ProjectDraft, draft_to_script)
+from .brain import (Brain, ClipScriptDraft, CommandPlan, Op, ProjectDraft, draft_to_script, preserve_fixed)
 from .catalog import Catalog
 from .config import Config
 from .context import guess_type_and_role, item_by_id
@@ -34,6 +34,7 @@ class Service:
         self.catalog = Catalog.load()
         self.reg = Registry(self.config, self.catalog)
         self.brain = Brain(self.reg)
+        self.last_scale: dict[str, dict] = {}        # what the last length change did to the clips (shown to you once)
 
     def reload(self) -> None:
         self.config = Config.load()
@@ -226,7 +227,7 @@ class Service:
                 c = existing[a.name.lower()]
                 if c.actor:
                     for f in ("description", "clothing", "behaviour", "voice_description", "voice_gender", "voice_age",
-                              "voice_pitch", "voice_pace", "voice_accent"):
+                              "voice_pitch", "voice_pace", "voice_accent", "speaking_wpm"):
                         if not getattr(c.actor, f):
                             setattr(c.actor, f, getattr(a, f))
                 continue
@@ -235,7 +236,8 @@ class Service:
                                          actor=ActorDetails(kind=a.kind, description=a.description, clothing=a.clothing,
                                                             behaviour=a.behaviour, voice_description=a.voice_description,
                                                             voice_gender=a.voice_gender, voice_age=a.voice_age, voice_pitch=a.voice_pitch,
-                                                            voice_pace=a.voice_pace, voice_accent=a.voice_accent)))
+                                                            voice_pace=a.voice_pace, voice_accent=a.voice_accent,
+                                                            speaking_wpm=a.speaking_wpm or None)))
         p.music_advice = d.music_advice or p.music_advice
         p.root.children = []
         for part in d.parts:
@@ -334,7 +336,9 @@ class Service:
         if node.script:
             node.versions.append(ClipVersion(version=node.version, script=node.script, feedback=feedback))
             node.version += 1
+        before = node.script if node.script is not None else (node.versions[-1].script if node.versions else None)
         node.script = draft_to_script(p, draft)
+        preserve_fixed(before, node.script)                  # lines marked "say exactly this" survive any rewrite
         if node.target_seconds and not node.script.target_seconds:
             node.script.target_seconds = node.target_seconds
         limit = node.script.target_seconds or node.target_seconds
@@ -414,8 +418,10 @@ class Service:
             script = ClipScript(
                 shot_type=ShotType(shot), visual=part.visual or old.visual, action_beats=part.action_beats, camera=old.camera,
                 actors_in_shot=list(old.actors_in_shot),
-                dialogue=[DialogueLine(speaker=names.get(l.speaker_name.lower(), l.speaker_name), text=l.text, emotion=l.emotion) for l in part.dialogue],
-                narration=part.narration, on_camera_speech=bool(part.dialogue) and old.on_camera_speech,
+                dialogue=[DialogueLine(speaker=names.get(l.speaker_name.lower(), l.speaker_name), text=l.text, emotion=l.emotion, fixed=l.fixed)
+                          for l in part.dialogue],
+                narration=part.narration, narration_fixed=old.narration_fixed and part.narration.strip() == old.narration.strip(),
+                on_camera_speech=bool(part.dialogue) and old.on_camera_speech,
                 sound_notes=part.sound_notes or old.sound_notes, motion=part.motion if part.motion in ("face", "body", "scene") else "",
                 start_state=part.start_state, end_state=part.end_state, negative=old.negative, target_seconds=part.seconds or None)
             made.append(Node(kind=NodeKind.clip, title=part.title or n.title, goal=part.goal or n.goal, target_seconds=part.seconds or None,
@@ -549,10 +555,17 @@ class Service:
         p = self.load(pid)
         n = find(p, node_id)
         script_changed = False
+        resize = None
+        if "target_seconds" in patch and n.children and patch["target_seconds"]:
+            resize = float(patch["target_seconds"])                  # a part's length: its clips follow (see scaling.py)
         for key in ("title", "goal", "target_seconds", "provider_override", "takes_override", "transition_in",
-                    "review_enabled", "style_overrides"):
-            if key in patch:
+                    "review_enabled", "style_overrides", "locked"):
+            if key in patch and not (key == "target_seconds" and resize):
                 setattr(n, key, patch[key])
+        if resize:
+            self.last_scale[pid] = scaling.scale_node(p, node_id, resize)
+            if n.id == p.root.id:
+                n.target_seconds = resize
         if "kind" in patch and patch["kind"] in [k.value for k in NodeKind]:
             n.kind = NodeKind(patch["kind"])
             if n.kind != NodeKind.goal and n.children:
@@ -608,6 +621,9 @@ class Service:
                 merged["length_mode"] = "fixed"
             p.settings = Settings.model_validate(merged)
             p.root.target_seconds = p.settings.target_seconds
+            if "target_seconds" in patch["settings"] and p.root.children:
+                self.last_scale[pid] = scaling.scale_node(p, p.root.id, p.settings.target_seconds)
+                p.root.target_seconds = p.settings.target_seconds
         if "style" in patch:
             p.style = Style.model_validate({**p.style.model_dump(), **patch["style"]})
         return self.save(p)

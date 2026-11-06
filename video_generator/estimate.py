@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Optional
 
@@ -30,8 +31,28 @@ REVIEW_TOKENS = (26000, 1800)      # per take review (frames + context)
 PLAN_TOKENS = (8000, 6000)
 
 
+_UNSPACED_SCRIPTS = ("CJK", "HIRAGANA", "KATAKANA", "THAI", "LAO", "KHMER", "MYANMAR")     # written without spaces between words
+
+
+def _unspaced(ch: str) -> bool:
+    try:
+        return unicodedata.name(ch).startswith(_UNSPACED_SCRIPTS)
+    except ValueError:
+        return False
+
+
 def _words(text: str) -> int:
-    return len(re.findall(r"[\w'’-]+", text or ""))
+    """How many words are spoken. A word is a piece between spaces that holds a letter, a mark or a digit, so it works for any
+    script: Devanagari vowel signs are marks, not letters, and a regular expression for letters alone would count one Hindi word as
+    two or three. Scripts written without spaces (Chinese, Japanese kana, Thai) count policy.unspaced_chars_per_word characters as one."""
+    total = 0.0
+    per_word = max(policy_mod.current().unspaced_chars_per_word, 0.5)
+    for tok in (text or "").split():
+        if not any(unicodedata.category(c)[0] in "LMN" for c in tok):
+            continue                                                       # a lone dash, a danda, a quotation mark
+        packed = sum(1 for c in tok if _unspaced(c))
+        total += packed / per_word + (1 if any(unicodedata.category(c)[0] in "LMN" and not _unspaced(c) for c in tok) else 0)
+    return int(round(total))
 
 
 def speaking_wpm(project: Project, node: Node, speaker: str) -> int:
@@ -47,6 +68,44 @@ def speaking_wpm(project: Project, node: Node, speaker: str) -> int:
             if any(w in b for w in ("slow", "calm", "measured", "deliberate", "gentle")):
                 return int(base * 0.88)
     return base
+
+
+def speech_need(project: Project, node: Node) -> float:
+    """Seconds the spoken lines of a clip need at the speakers' own pace, with the pauses between lines and the quiet at both ends.
+    0 when nobody speaks. Once the real voice exists its real length is used."""
+    pol = policy_mod.current()
+    if node.voice_seconds:
+        return node.voice_seconds + pol.edge_pad
+    s = node.script
+    if not s:
+        return 0.0
+    lines = [(d.speaker, d.text) for d in s.dialogue if d.text.strip()]
+    if s.narration.strip():
+        lines.append(("narrator", s.narration))
+    if not lines:
+        return 0.0
+    speech = sum(_words(text) / speaking_wpm(project, node, speaker) * 60 for speaker, text in lines)
+    return speech + pol.line_pause * (len(lines) - 1) + 2 * pol.edge_pad
+
+
+def clip_floor(project: Project, node: Node) -> tuple[float, str]:
+    """The shortest this clip can honestly be, and why: the speech needs its time (words cannot be squeezed), every action step needs
+    policy.min_action_seconds, and a clip is never shorter than policy.min_clip_s. (A clip's length is the one planned for it, cut from
+    what the video model makes, so the model's own shortest length changes what is billed, not this floor.)"""
+    pol = policy_mod.current()
+    if node.kind != NodeKind.clip:
+        return node.duration.likely_s, "your own slides or footage keep their length"
+    s = node.script
+    speech = speech_need(project, node)
+    steps = len(s.action_beats) * pol.min_action_seconds if s else 0.0
+    best = max(speech, steps, pol.min_clip_s)
+    if best == speech and speech > 0:
+        why = f"the speech needs {speech:.0f} s"
+    elif best == steps and steps > 0:
+        why = f"{len(s.action_beats)} action steps need {steps:.0f} s"
+    else:
+        why = f"a clip is never shorter than {pol.min_clip_s:.0f} s"
+    return round(best, 1), why
 
 
 def is_people_shot(node: Node) -> bool:

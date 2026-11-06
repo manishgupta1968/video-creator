@@ -21,6 +21,9 @@ def _ranges() -> dict[str, dict[str, list[float]]]:
 class Policy(BaseModel):
     # ---- timing of a clip
     action_seconds: float = Field(2.5, description="Seconds one action step needs (used to size clips that have no target length).")
+    min_action_seconds: float = Field(1.5, description="The least time one action step may be given when a clip is made shorter. Below this the steps cannot be seen.")
+    min_clip_s: float = Field(3.0, description="The shortest clip the tool will plan when it shortens a video, in seconds.")
+    unspaced_chars_per_word: float = Field(2.0, description="In scripts written without spaces (Chinese, Japanese kana, Thai …) this many characters count as one word when the length of speech is worked out.")
     line_pause: float = Field(0.6, description="Pause between two spoken lines, in seconds.")
     edge_pad: float = Field(0.5, description="Quiet before the first and after the last spoken word, in seconds.")
 
@@ -41,6 +44,9 @@ class Policy(BaseModel):
     finish_sharpen: float = Field(0.8, description="Strength of the finishing sharpen (0 = off).")
     finish_grain: float = Field(4.0, description="Strength of the matching film grain in the finishing pass (0 = off).")
     precise_endings: Literal["auto", "on", "off"] = Field("auto", description="Make an end picture for a clip whose end is planned and which the next clip continues from: auto = when a usable model can use it; on = always ask for it; off = never.")
+
+    # ---- choosing models
+    budget_min_strength: int = Field(3, description="Budget quality picks the cheapest model, but never one that scores below this (1 = poor, 5 = best) for the kind of shot.")
 
     # ---- sound
     bed_under_speech_lufs: float = Field(-34.0, description="Loudness of natural sound (wind, room tone …) under speech, in LUFS. Lower = quieter.")

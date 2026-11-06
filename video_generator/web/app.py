@@ -95,6 +95,15 @@ def view(pid: str) -> dict:
     return {"project": p.model_dump(mode="json"), "summary": summary, "engine": engine.status(pid)}
 
 
+def with_scale(pid: str) -> dict:
+    """The new view, plus what a length change did to the clips (shown to you once): {requested, achieved, changed, kept, note}."""
+    v = view(pid)
+    res = svc.last_scale.pop(pid, None)
+    if res:
+        v["scale"] = res
+    return v
+
+
 def guard(fn):
     async def inner(*a, **k):
         try:
@@ -167,7 +176,7 @@ async def get_project(pid: str):
 @app.patch("/api/projects/{pid}")
 async def patch_project(pid: str, patch: dict = Body(...)):
     await guard(svc.update_project)(pid, patch)
-    return view(pid)
+    return with_scale(pid)
 
 
 @app.delete("/api/projects/{pid}")
@@ -221,7 +230,7 @@ async def add_node(pid: str, body: dict = Body(...)):
 @app.patch("/api/projects/{pid}/nodes/{nid}")
 async def patch_node(pid: str, nid: str, patch: dict = Body(...)):
     await guard(svc.update_node)(pid, nid, patch)
-    return view(pid)
+    return with_scale(pid)
 
 
 @app.delete("/api/projects/{pid}/nodes/{nid}")

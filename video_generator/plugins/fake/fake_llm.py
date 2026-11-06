@@ -188,7 +188,7 @@ class FakeLLM(LLM):
         mid = f"Right after the speech: {(sc.get('visual') or m.get('title') or '')[:80]}"
         if lines:
             parts = [{"title": f"{m.get('title', 'Clip')}: speaking", "goal": "speak to the camera", "seconds": speech_s, "shot_type": "talking_head",
-                      "motion": "face", "visual": sc.get("visual", ""), "dialogue": [{"speaker_name": l.get("speaker", ""), "text": l.get("text", "")} for l in lines],
+                      "motion": "face", "visual": sc.get("visual", ""), "dialogue": [{"speaker_name": l.get("speaker", ""), "text": l.get("text", ""), "fixed": bool(l.get("fixed"))} for l in lines],
                       "sound_notes": sc.get("sound_notes", ""), "start_state": start, "end_state": mid},
                      {"title": f"{m.get('title', 'Clip')}: movement", "goal": m.get("goal", ""), "seconds": round(max(secs - speech_s, 2.0), 1),
                       "shot_type": sc.get("shot_type", "other") if sc.get("shot_type") != "talking_head" else "other", "motion": "body",

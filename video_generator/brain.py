@@ -38,6 +38,7 @@ class ActorDraft(BaseModel):
     voice_pitch: str = ""             # low | medium | high
     voice_pace: str = ""              # slow | normal | fast
     voice_accent: str = ""
+    speaking_wpm: Optional[int] = None   # words per minute this speaker really speaks (normal speech is about 150; slow delivery far fewer)
 
 
 class ClipDraft(BaseModel):
@@ -90,6 +91,7 @@ class Line(BaseModel):
     speaker_name: str
     text: str
     emotion: str = ""
+    fixed: bool = False               # true when this line must be spoken exactly as written (given text: a quote, a slogan, a name)
 
 
 class SplitPart(BaseModel):
@@ -120,6 +122,7 @@ class ClipScriptDraft(BaseModel):
     actors_in_shot: list[ShotActor] = Field(default_factory=list)
     dialogue: list[Line] = Field(default_factory=list)
     narration: str = ""
+    narration_fixed: bool = False     # the narration must be spoken exactly as written
     on_camera_speech: bool = False
     sound_notes: str = ""
     motion: str = ""                  # face | body | scene: what must move in this clip
@@ -478,7 +481,31 @@ def draft_to_script(project: Project, d: ClipScriptDraft) -> ClipScript:
         shot_type=ShotType(shot), visual=d.visual, action_beats=d.action_beats, camera=d.camera,
         actors_in_shot=[ActorInShot(actor_id=resolve(a.actor_name), clothing=a.clothing, behaviour=a.behaviour)
                         for a in d.actors_in_shot],
-        dialogue=[DialogueLine(speaker=resolve(l.speaker_name), text=l.text, emotion=l.emotion) for l in d.dialogue],
-        narration=d.narration, on_camera_speech=d.on_camera_speech and bool(d.dialogue),
+        dialogue=[DialogueLine(speaker=resolve(l.speaker_name), text=l.text, emotion=l.emotion, fixed=l.fixed) for l in d.dialogue],
+        narration=d.narration, narration_fixed=d.narration_fixed and bool(d.narration.strip()),
+        on_camera_speech=d.on_camera_speech and bool(d.dialogue),
         sound_notes=d.sound_notes, motion=d.motion if d.motion in ("face", "body", "scene") else "",
         start_state=d.start_state, end_state=d.end_state, negative=d.negative)
+
+
+def preserve_fixed(old: Optional[ClipScript], new: ClipScript) -> list[str]:
+    """A rewritten script must still hold every line that was marked "say exactly this". Lines marked fixed in the old script that are
+    missing (or reworded) in the new one are put back at the same place; matching lines are marked fixed. Returns what was restored."""
+    restored: list[str] = []
+    if not old:
+        return restored
+    for i, line in enumerate(old.dialogue):
+        if not line.fixed or not line.text.strip():
+            continue
+        match = next((x for x in new.dialogue if x.text.strip() == line.text.strip()), None)
+        if match:
+            match.fixed = True
+        else:
+            new.dialogue.insert(min(i, len(new.dialogue)), line.model_copy())
+            restored.append(line.text)
+    if old.narration_fixed and old.narration.strip():
+        if new.narration.strip() != old.narration.strip():
+            new.narration = old.narration
+            restored.append(old.narration)
+        new.narration_fixed = True
+    return restored
