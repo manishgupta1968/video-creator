@@ -24,7 +24,7 @@ from .project import ProjectStore
 
 SHOT_TYPES_ALL = [t.value for t in ShotType]
 from .registry import Registry
-from .tree import add_child, find, leaves, move, numbering, remove, walk
+from .tree import add_child, ancestors, find, leaves, move, numbering, remove, walk
 
 
 class Service:
@@ -88,7 +88,7 @@ class Service:
                         models.append(x.cost.model)
                 rows.append({"id": c.id, "number": nums.get(c.id, ""), "title": c.title or c.goal[:40], "kind": c.kind.value, "depth": depth,
                              "seconds": c.duration.likely_s, "cost": c.cost.likely_usd, "cost_min": c.cost.min_usd, "cost_max": c.cost.max_usd,
-                             "time_s": c.time.likely_s, "quality": project.settings.quality_mode, "models": models,
+                             "time_s": c.time.likely_s, "quality": est.mode_for(project, c), "quality_own": c.quality_mode is not None, "models": models,
                              "clips": len(below), "done": sum(1 for x in below if x.status == NodeStatus.done)})
                 if c.kind == NodeKind.goal:
                     add(c, depth + 1)
@@ -114,7 +114,7 @@ class Service:
         """WHY a clip only gets a free placeholder, so the screen never blames a missing key when the cause is something else.
         free_mode: you chose free preview quality | pinned: you chose a free model for this very clip |
         no_key: no real model of this kind is connected | not_covered: real models exist but none fits what the clip needs."""
-        if project.settings.quality_mode == "free":
+        if est.mode_for(project, leaf) == "free":
             return "free_mode"
         if job in ("video", "avatar") and leaf.provider_override and plan.video:
             try:
@@ -562,6 +562,10 @@ class Service:
                     "review_enabled", "style_overrides", "locked"):
             if key in patch and not (key == "target_seconds" and resize):
                 setattr(n, key, patch[key])
+        if "quality_mode" in patch:
+            if patch["quality_mode"] not in (None, "", "best", "balanced", "budget", "free"):
+                raise ValueError("quality must be best, balanced, budget or free")
+            n.quality_mode = patch["quality_mode"] or None               # "" or None = the part above decides
         if resize:
             self.last_scale[pid] = scaling.scale_node(p, node_id, resize)
             if n.id == p.root.id:
@@ -1143,6 +1147,39 @@ class Service:
         configured = [v["name"] for v in self.vendors_status() if v["configured"]]
         L.append("CONNECTED SERVICES: " + (", ".join(configured) or "none (free local tools only)"))
         return "\n".join(L)[:16000]
+
+    def mode_costs(self, pid: str, node_id: str) -> dict:
+        """What this part (or clip, or the whole video) would cost, and take, in each quality: worked out on a COPY, nothing is saved.
+        `cost_todo` counts only clips not made yet, since made clips do not change."""
+        p = self.load(pid)
+        node = find(p, node_id)
+        is_root = node.id == p.root.id
+
+        def measure(mode: Optional[str]) -> dict:
+            q = p.model_copy(deep=True)
+            n = find(q, node_id)
+            if is_root:
+                q.settings.quality_mode = mode or q.settings.quality_mode
+            else:
+                n.quality_mode = mode
+            self.refresh(q)
+            n = find(q, node_id)
+            below = [x for x, _ in walk(n) if x.is_leaf]
+            todo = [x for x in below if x.status != NodeStatus.done]
+            models: list[str] = []
+            for x in below:
+                if x.cost.model and x.cost.model not in models:
+                    models.append(x.cost.model)
+            return {"cost": n.cost.likely_usd, "cost_todo": round(sum(x.cost.likely_usd for x in todo), 2), "cost_min": n.cost.min_usd,
+                    "cost_max": n.cost.max_usd, "seconds": n.duration.likely_s, "time_s": n.time.likely_s, "models": models,
+                    "clips": len(below), "to_make": len(todo)}
+        modes = {m: measure(m) for m in ("best", "balanced", "budget", "free")}
+        parent_mode = p.settings.quality_mode
+        if not is_root:
+            chain = [a for a in ancestors(p, node_id) if a.quality_mode]
+            parent_mode = chain[-1].quality_mode if chain else p.settings.quality_mode
+        return {"current": "" if is_root else (node.quality_mode or ""), "effective": est.mode_for(p, node), "inherits": parent_mode,
+                "is_whole_video": is_root, "modes": modes}
 
     def music_status(self, pid: str) -> dict:
         """What the Join button needs to say about the music BEFORE it spends: is there a saved track that can be reused (cost 0),

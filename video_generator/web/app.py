@@ -482,6 +482,12 @@ async def suggest_deps(pid: str):
     return view(pid)
 
 
+@app.get("/api/projects/{pid}/nodes/{nid}/mode-costs")
+async def mode_costs(pid: str, nid: str):
+    """The cost and time of this part in each quality, worked out on a copy (nothing is saved)."""
+    return await guard(svc.mode_costs)(pid, nid)
+
+
 @app.post("/api/projects/{pid}/unpin")
 async def unpin(pid: str, body: dict = Body(default={})):
     """Clear the model chosen on clips (all clips pinned to a free model when no ids are given): the tool picks the best again."""

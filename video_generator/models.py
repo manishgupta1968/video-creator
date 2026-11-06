@@ -288,6 +288,7 @@ class Node(BaseModel):
     needs_split: bool = False       # computed: the clip needs more than any single route can do (see estimate.plan_clip)
     review_enabled: bool = True
     locked: bool = False            # "keep this clip as it is": its length is never changed by resizing or optimizing
+    quality_mode: Optional[Literal["best", "balanced", "budget", "free"]] = None   # this part's own quality; None = the part above, then the video
 
     @property
     def is_leaf(self) -> bool:

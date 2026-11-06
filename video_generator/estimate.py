@@ -22,7 +22,7 @@ from .models import (ContextItem, ContextRole, ContextType, CostEstimate, CostLi
 from . import musictrack
 from . import policy as policy_mod
 from .registry import MOTION_LEVELS, Registry
-from .tree import find, leaves, walk
+from .tree import ancestors, find, leaves, walk
 
 PEOPLE_SHOTS = {ShotType.talking_head, ShotType.dialogue_scene, ShotType.human_motion}
 SECONDS_PER_SLIDE = 5.0
@@ -311,6 +311,52 @@ def clip_motion(node: Node, speaker: Optional[ContextItem]) -> str:
     return "scene"
 
 
+def mode_for(project: Project, node: Node) -> str:
+    """The quality for this node: its own choice, else the nearest part above that chose one, else the whole video's."""
+    if node.quality_mode:
+        return node.quality_mode
+    for a in reversed(ancestors(project, node.id)):
+        if a.quality_mode:
+            return a.quality_mode
+    return project.settings.quality_mode
+
+
+def _spoken_by(project: Project, node: Node) -> list[ContextItem]:
+    """The actor cards that speak in this clip (the narrator too)."""
+    s = node.script
+    if not s:
+        return []
+    names = {d.speaker.lower() for d in s.dialogue if d.text.strip() and d.speaker}
+    cards = clip_actors(project, node)
+    out = [a for a in cards if a.id.lower() in names or a.title.lower() in names]
+    if s.narration.strip() or "narrator" in names:
+        out += [a for a in cards if a.actor and a not in out and ("narrat" in a.title.lower() or a.role == ContextRole.voice)]
+    return out
+
+
+def voice_entry(project: Project, node: Node, reg: Registry, need: Optional[dict] = None) -> CatalogEntry:
+    """The voice service for this clip. A character has ONE voice for the whole video: a speaker who is already cast keeps the service that
+    cast them, whatever this part's quality is (a cheaper part must never re-cast the character). A new voice is chosen by the quality of the
+    WHOLE video. (Free quality never keeps a paid voice: free means free.)"""
+    base = project.settings.quality_mode
+    providers = [a.actor.voice_provider for a in _spoken_by(project, node) if a.actor and a.actor.voice_id and a.actor.voice_provider]
+    if providers and base != "free":
+        for provider in dict.fromkeys(providers):
+            for wanted in ([need] if need else []) + [None]:
+                cands = [e for e in reg.candidates("voice", need=wanted, mode=base) if e.plugin == provider]
+                if cands:
+                    return cands[0]
+    return reg.choose("voice", mode=base, need=need)
+
+
+def sheet_image(reg: Registry, project: Project) -> Optional[CatalogEntry]:
+    """The picture model for a character's reference sheet: chosen once, by the whole video's quality, so a character looks the same in every part."""
+    try:
+        return reg.choose("image", mode=project.settings.quality_mode)
+    except LookupError:
+        return None
+
+
 def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     warnings: list[str] = []
     if node.kind in (NodeKind.slides, NodeKind.user_clip):
@@ -323,13 +369,13 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     ref_images = sum(len([f for f in e.item.files if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))])
                      for e in eff if e.item.role in (ContextRole.must_appear, ContextRole.look_reference))
     needs_start = any(d.type == DependencyType.continues_from for d in upstream(project, node.id))
-    mode = "free" if project.settings.quality_mode == "free" else project.settings.quality_mode
+    mode = mode_for(project, node)
     has_lines = bool(s and (s.dialogue or s.narration))
     # a voice sample can only be used by a voice-copying service (ElevenLabs, Cartesia)
     used_ids = _actor_ids(node)
     sample_actors = [a for a in clip_actors(project, node) if a.actor and a.actor.voice_sample and (
         a.id in used_ids or (bool(s and s.narration) and ("narrat" in a.title.lower() or a.role == ContextRole.voice)))]
-    voice = reg.choose("voice", mode=mode, need={"clone": True} if sample_actors else None) if has_lines else None
+    voice = voice_entry(project, node, reg, {"clone": True} if sample_actors else None) if has_lines else None
     if voice and sample_actors and not voice.capabilities.get("clone"):
         names = ", ".join(a.title for a in sample_actors)
         warnings.append(f"The voice sample of {names} is not used yet: no voice-copying service is connected "
@@ -435,10 +481,11 @@ def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Option
         lines.append(CostLine(item=item, calc=calc, cost=round(cost, 4)))
 
     step_times: list[float] = []
+    sheet = sheet_image(reg, project)
     for who in new_sheets or []:
-        if plan.image:
-            add(f"Reference picture of {who} ({plan.image.id})", "1 image, made once and reused", plan.image.unit_price)
-            step_times.append((plan.image.time.queue_s + plan.image.time.per_output_s) * reg.time_factor(plan.image.id))
+        if sheet:
+            add(f"Reference picture of {who} ({sheet.id})", "1 image, made once and reused", sheet.unit_price)
+            step_times.append((sheet.time.queue_s + sheet.time.per_output_s) * reg.time_factor(sheet.id))
     if node.script is None and node.kind == NodeKind.clip:
         e = _llm_entry(reg, "write_clip_script")
         add("AI brain: write script", f"~{SCRIPT_TOKENS[0] // 1000}k in + {SCRIPT_TOKENS[1] // 1000}k out tokens", _llm_cost(e, SCRIPT_TOKENS))
@@ -560,13 +607,14 @@ def refresh(project: Project, reg: Registry) -> ProjectEstimate:
     for leaf in leaves(project):
         plan = plan_clip(project, leaf, reg)
         new_sheets: list[str] = []
-        if leaf.kind == NodeKind.clip and leaf.script and plan.image:
+        sheet = sheet_image(reg, project)
+        if leaf.kind == NodeKind.clip and leaf.script and sheet:
             for a in clip_actors(project, leaf):
                 if a.id in _actor_ids(leaf) and a.actor and a.id not in seen_sheets:
                     seen_sheets.add(a.id)
                     nonhuman = a.actor.kind in ("animal", "product")
                     has_photo = any(f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) for f in a.files)
-                    if not a.actor.reference_sheet and not (has_photo and (nonhuman or plan.image.is_free)):
+                    if not a.actor.reference_sheet and not (has_photo and (nonhuman or sheet.is_free)):
                         new_sheets.append(a.title)
         kept = [w for w in leaf.warnings if (leaf.status.value == "failed" and w.startswith(("failed:", "compare failed:")))
                 or w.startswith(("Made ", "Softer than"))]

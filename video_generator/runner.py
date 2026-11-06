@@ -446,7 +446,7 @@ class Engine:
             actors = [item_by_id(p, a.id) for a in actors]
         for a in actors:
             if a.actor and not a.actor.reference_sheet:
-                await self._reference_sheet(pid, a.id, plan.image)
+                await self._reference_sheet(pid, a.id, est.sheet_image(self.svc.reg, p) or plan.image)
             if a.actor and (a.actor.voice_provider != (plan.voice.plugin if plan.voice else None) or not a.actor.voice_id
                             or not a.actor.voice_name):       # a voice with no name was chosen by the old text match: choose it again
                 if plan.voice:
@@ -491,7 +491,8 @@ class Engine:
     async def _make_image(self, pid: str, entry, make_req, what: str, nid: Optional[str] = None):
         """One picture. If the chosen picture model fails, the other usable picture models are tried."""
         reg = self.svc.reg
-        mode = self.svc.load(pid).settings.quality_mode
+        p = self.svc.load(pid)
+        mode = est.mode_for(p, find(p, nid)) if nid else p.settings.quality_mode        # a clip's picture follows its part's quality
 
         async def call(e):
             _, usage = await reg.plugin(e.plugin).generate(make_req(e))
@@ -810,7 +811,7 @@ class Engine:
                         photo = fitted_photo
                     audio = voice or media.silence(d / "silence.wav", seconds)
                     nonhuman = bool(speaker and speaker.actor and speaker.actor.kind in ("animal", "product"))
-                    alts = self.svc.reg.candidates("avatar", mode=p.settings.quality_mode, need={"non_human": True} if nonhuman else None)
+                    alts = self.svc.reg.candidates("avatar", mode=est.mode_for(p, n), need={"non_human": True} if nonhuman else None)
 
                     async def call_avatar(e, audio=audio, photo=photo, raw=raw):
                         _, u = await self.svc.reg.plugin(e.plugin).generate(
@@ -850,7 +851,7 @@ class Engine:
                     need_v = {"start_frame": True} if start else {}
                     if end_used:
                         need_v["end_frame"] = True
-                    v_alts = [e for e in self.svc.reg.candidates("video", n.script.shot_type.value, need_v, p.settings.quality_mode)
+                    v_alts = [e for e in self.svc.reg.candidates("video", n.script.shot_type.value, need_v, est.mode_for(p, n))
                               if float(e.capabilities.get("max_seconds", 10) or 10) >= min(seconds, 8)] if not entries else []
                     ventry = await self._video_parts(pid, ventry, VideoRequest(
                         prompt=prompt, out=raw, model=ventry.model, seconds=seconds, aspect=p.settings.aspect,
@@ -939,7 +940,7 @@ class Engine:
         reg = self.svc.reg
         notes = (n.script.sound_notes or "").strip() or f"natural ambience that fits: {n.script.visual[:120]}"
         self.step(pid, nid, "Making natural sound", 15)
-        real = [e for e in reg.candidates("sfx", mode=p.settings.quality_mode) if not e.is_free]
+        real = [e for e in reg.candidates("sfx", mode=est.mode_for(p, n)) if not e.is_free]
         if real:
             async def call(e):
                 _, u = await reg.plugin(e.plugin).generate(notes, seconds, out, e.model, clip, dict(e.params))
