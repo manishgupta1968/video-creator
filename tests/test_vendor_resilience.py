@@ -233,10 +233,14 @@ def test_music_without_permission_falls_back_then_is_skipped_with_a_visible_note
     run_all(svc, p.id)
     q = svc.load(p.id)
     assert q.final_output and seen == ["fal-ai/minimax-music/v2"] and q.final_notes == []           # the next music model took over
-    # every music model refused: the video is still made, and the user is told why
+    # the music is made ONCE: joining again reuses the saved track, so no music vendor is asked (and none can refuse)
     monkeypatch.setattr(svc.reg.plugin("fal_music"), "generate", refused)
     from video_generator.runner import Engine
     asyncio.run(Engine(svc)._assemble(p.id))
+    q = svc.load(p.id)
+    assert q.final_output and q.final_notes == []
+    # new music is asked for on purpose and every music model refuses: the video is still made, and the user is told why
+    asyncio.run(Engine(svc)._assemble(p.id, "new"))
     q = svc.load(p.id)
     assert q.final_output and any("music_generation" in n for n in q.final_notes)
     assert any("music_generation" in i["text"] for i in svc.summary(q)["guide"]["issues"])         # and the guide shows it
