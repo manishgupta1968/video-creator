@@ -43,8 +43,8 @@ those steps automatically inside the tool.
 | 7 | Render the reference in background Blender; the free sketch when Blender is missing or fails | Blender / sketch | done |
 | 8 | Automatic check-and-fix rounds (up to `max_fix_rounds`) with Claude Code / Codex | agent | phase 4 |
 | 9 | You approve the 3D preview, or auto-approve does it | You / setting | done (`vg scene3d approve`) |
-| 10 | Turn the first frame into a realistic start picture with the character and location pictures | image model | phase 3 |
-| 11 | Make the video from the reference, the pictures and the prompt | video model (reference-to-video) | phase 3 |
+| 10 | Turn the first frame into a realistic start picture with the character and location pictures | image model | done |
+| 11 | Make the video from the reference, the pictures and the prompt | video model (reference-to-video) | done |
 | 12 | Review: "Did it follow the camera?" | Review Agent | phase 5 |
 | 13 | Pick takes, join with music | as today | exists |
 
@@ -65,9 +65,23 @@ those steps automatically inside the tool.
    - `video_generator/scene3d/service.py`: plan, check, build and approve one clip; the result is kept on the clip.
    - A continuing clip starts where the clip before ended (camera and figures), in the same set.
    - `vg doctor` reports Blender and which render engine can run.
-3. **Use the reference when a clip is made.** In `runner._make_takes`: when a clip has an approved, up-to-date
-   reference, make the realistic start picture from its first frame, then call a reference-to-video model with the
-   reference, the pictures (labelled, with the colour legend) and the prompt. Otherwise nothing changes.
+3. **Use the reference when a clip is made (done).** A clip uses its reference only when the add-on is on for it, the
+   preview is approved, and the reference is up to date (the plan has not changed and the clip is still the same
+   length, within 0.25 s). Then:
+   - **The first picture** is made from the layout: the layout's first picture goes to the picture model as picture 1,
+     followed by the character and place pictures, with the words "Make a realistic, cinematic still with exactly the
+     same framing … In picture 1, the red shape is Dan …".
+   - **The video** is made by a reference-to-video model. It gets the reference video, the realistic first picture
+     ("the first picture of the clip: it starts exactly like this"), the character pictures with labels ("Dan, the red
+     shape in the camera reference"), and the colour legend in the prompt.
+   - **A clip longer than the model allows** is made in parts, and each part gets its own stretch of the reference.
+   - **The cost estimate** uses the reference model's price, so the numbers you approve are the numbers you pay.
+   - **When it cannot be used, the clip says why and is made the usual way:**
+     - No reference model is connected: the first picture still comes from the layout, so the framing matches.
+     - The clip continues the one before: it must start from that clip's last picture, and no model can follow a
+       reference video and start from a picture. The hand-over rule wins.
+     - The speech needs a model that speaks the line itself.
+   - **A clip made before its reference was approved** is marked out of date, so you can make it again.
 4. **The agent (Claude Code / Codex / pair).** A `scene_agent` plugin kind, run through the command-line tools
    (`claude -p …`, `codex exec …`) in a locked folder, allowed only to edit the plan and run Blender. Used when a check
    fails, or when a shape needs more than the fixed builder makes.

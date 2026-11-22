@@ -879,7 +879,7 @@ def _scene3d_show(svc, pid: str, nid: str) -> None:
         return
     con.print(f"[bold]{num}[/] {n.title}: 3D camera reference {on}, [bold]{s.status}[/]"
               + (f" (approved by {s.approved_by})" if s.approved_by else "")
-              + ("" if not s.video or s3.is_current(n) else " [magenta](out of date: the plan changed)[/]"))
+              + ("" if not s.video or not s3.stale_reason(n) else f" [magenta](out of date: {s3.stale_reason(n)})[/]"))
     con.print(f"  set: {s.plan.set_id or '-'} {s.plan.set.size} m · {s.plan.seconds:g} s · camera: {s.plan.camera.move or '-'}")
     for colour, label in legend(s.plan):
         con.print(f"  {colour} shape = {label}")

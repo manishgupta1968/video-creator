@@ -49,6 +49,22 @@ def is_current(clip: Node) -> bool:
     return bool(s and s.plan and s.video and s.plan_hash == plan_hash(s.plan))
 
 
+LENGTH_SLACK_S = 0.25      # a reference this much shorter or longer than the clip is still used (the clip is cut to length)
+
+
+def stale_reason(clip: Node) -> str:
+    """Why the clip's rendered reference cannot be used as it is ("" = it can): the plan changed, or the clip's length did."""
+    s = clip.scene3d
+    if not s or not s.plan or not s.video:
+        return "no reference has been rendered yet"
+    if s.plan_hash != plan_hash(s.plan):
+        return "the 3D plan changed after it was rendered"
+    secs = clip.duration.likely_s
+    if secs and abs(secs - s.plan.seconds) > LENGTH_SLACK_S:
+        return f"the clip is now {secs:g} s long but the reference is {s.plan.seconds:g} s; plan it again"
+    return ""
+
+
 def continues_from(project: Project, node: Node) -> Optional[Node]:
     for d in deps_mod.upstream(project, node.id):
         if d.type == DependencyType.continues_from:
@@ -176,8 +192,9 @@ async def build_clip(svc, pid: str, nid: str, renderer: Optional[str] = None) ->
     s.issues, s.notes = texts, result.notes
     s.plan_hash = plan_hash(plan)
     s.approved_by = ""
-    if settings.auto_approve and not major:
+    if settings.auto_approve and not major and not stale_reason(n):
         s.status, s.approved_by = "approved", "auto"
+        _outdate_made_clip(n)
     s.updated_at = now_iso()
     svc.save(p)
     return s
@@ -187,17 +204,30 @@ def approve(svc, pid: str, nid: str) -> Scene3DClip:
     """You approve the rendered preview: its reference is then used when the clip's video is made."""
     p = svc.load(pid)
     n = _clip(p, nid)
-    if not n.scene3d or not is_current(n):
-        raise Scene3DError(f"Clip '{n.title}' has no up-to-date 3D preview to approve. Build it first.")
+    why = stale_reason(n)
+    if why:
+        raise Scene3DError(f"Clip '{n.title}' has no up-to-date 3D preview to approve ({why}). Build it first.")
     n.scene3d.status, n.scene3d.approved_by = "approved", "you"
     n.scene3d.updated_at = now_iso()
+    _outdate_made_clip(n)
     svc.save(p)
     return n.scene3d
+
+
+def _outdate_made_clip(n: Node) -> None:
+    """A clip already made without this reference is marked out of date, so you can make it again with it."""
+    from ..models import NodeStatus
+    if n.status == NodeStatus.done and n.scene3d and n.scene3d.status == "approved":
+        n.status = NodeStatus.stale
+        note = "Made before its 3D camera reference was approved: make it again to follow the reference."
+        if note not in n.warnings:
+            n.warnings.append(note)
+
 
 
 def ready_reference(project: Project, node: Node) -> Optional[Scene3DClip]:
     """The approved, up-to-date reference of a clip, or None (the clip is then made the usual way)."""
     s = node.scene3d
-    if enabled_for(project, node) and s and s.status == "approved" and is_current(node):
+    if enabled_for(project, node) and s and s.status == "approved" and not stale_reason(node):
         return s
     return None

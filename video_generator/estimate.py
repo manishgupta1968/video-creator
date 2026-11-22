@@ -240,6 +240,8 @@ class ClipPlan:
     end_picture: bool = False              # make a picture of the planned ending and give it to the video model
     motion: str = ""                       # what must move: face | body | scene (declared by the plan, or the legacy default)
     blocked: str = ""                      # why this clip cannot be made at all right now (empty = it can)
+    reference: bool = False                # the video model follows the clip's approved 3D camera reference
+    layout: bool = False                   # the clip has an approved 3D layout (its first picture is made from it)
 
 
 def ambience_for(project: Project, node: Node) -> bool:
@@ -493,7 +495,26 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     if end_wanted:
         need["end_frame"] = True
     blocked = ""
-    if needs_start and mode != "free" and _real_video_exists(reg, shot):
+    from .scene3d.service import ready_reference
+    ref3d = ready_reference(project, node)
+    video = None
+    if ref3d and mode != "free":
+        # the 3D camera reference: a model that follows a reference video (and, for a continuing clip, can also start
+        # from the last picture of the clip before; the hand-over rule always wins)
+        follow = [e for e in reg.candidates("video", shot, {**{k: v for k, v in need.items() if k != "end_frame"}, "reference_video": 1}, mode) if not e.is_free]
+        pinned = next((e for e in follow if e.id == node.provider_override), None)
+        video = pinned or (follow[0] if follow else None)
+        if video is None and needs_start:
+            warnings.append("This clip has an approved 3D camera reference, but it continues the clip before, so it must start from "
+                            "that clip's last picture, and no connected model can both follow a reference video and start from a "
+                            "picture. It is made the usual way, from that last picture.")
+        elif video is None:
+            warnings.append("This clip has an approved 3D camera reference, but no connected video model can follow a reference "
+                            "video (for example Seedance 2.0 reference-to-video through fal.ai). It is made the usual way, but its "
+                            "first picture is made from the 3D layout, so the framing still matches.")
+    if video is not None:
+        end_wanted = False          # the reference video already decides how the clip ends
+    elif needs_start and mode != "free" and _real_video_exists(reg, shot):
         # the hand-over rule: a clip that continues the one before MUST start from that clip's last picture
         video, blocked = _video_that_starts_from_picture(reg, node, shot, mode, end_wanted, warnings)
         if video is None:
@@ -533,6 +554,10 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
         elif lipsync is None or lipsync.is_free:
             video = speaks[0] if video.id not in {e.id for e in speaks} else video      # a model that speaks the line itself
     plan_v = ClipPlan("video", video, image, voice, lipsync, takes, needs_start, ref_images, lip, warnings)
+    plan_v.reference = bool(ref3d and video.capabilities.get("reference_video"))
+    plan_v.layout = bool(ref3d)
+    if ref3d and mode != "free" and not plan_v.reference and lip and not any("3D camera reference" in w for w in warnings):
+        warnings.append("This clip's 3D camera reference is not used: its speech needs a video model that speaks the line itself.")
     plan_v.motion = motion
     plan_v.uncovered = uncovered
     plan_v.blocked = blocked

@@ -311,3 +311,21 @@ def legend(plan: ScenePlan) -> list[tuple[str, str]]:
     """(colour name, what it stands for) for every figure: the words the video prompt uses."""
     p = normalise(plan)
     return [(colour_name(th.colour), th.label or th.id) for th in p.things if th.kind == "figure"]
+
+
+def legend_sentence(plan: ScenePlan, where: str = "the camera reference") -> str:
+    """'In the camera reference, the red shape is Dan, the blue shape is Bruiser and the green shape is the lizard;
+    grey shapes are scenery.' The words that tell a picture or video model which plain shape is which character."""
+    parts = [f"the {colour} shape is {label}" for colour, label in legend(plan)]
+    if not parts:
+        return ""
+    joined = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    props = any(t.kind == "prop" for t in plan.things)
+    return f"In {where}, {joined}" + ("; grey shapes are scenery." if props else ".")
+
+
+def layout_words(plan: ScenePlan) -> str:
+    """The instruction that turns the first picture of a 3D layout into a realistic first picture of the clip."""
+    return ("Picture 1 is a rough 3D layout made of plain coloured shapes. Make a realistic, cinematic still with exactly the "
+            "same framing, camera angle, lens and positions as picture 1, and none of its plain look. "
+            + legend_sentence(plan, "picture 1") + " The other pictures show how they really look.")

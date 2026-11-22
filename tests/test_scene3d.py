@@ -237,3 +237,146 @@ def test_a_clip_without_a_script_is_told_to_write_one_first(svc):
     svc.save(p)
     with pytest.raises(s3.Scene3DError, match="no script yet"):
         asyncio.run(s3.plan_clip(svc, p.id, ids[0]))
+
+
+# ----------------------------------------------------------------- phase 3: the reference is used when a clip is made
+from video_generator import estimate as E  # noqa: E402
+
+from .fake_vendors import Vendors  # noqa: E402
+from .test_scenarios import run_all  # noqa: E402
+
+
+def approved(svc, pid, nid, auto=False):
+    """Plan, render (free sketch) and approve one clip's 3D reference."""
+    asyncio.run(s3.plan_clip(svc, pid, nid))
+    asyncio.run(s3.build_clip(svc, pid, nid, renderer="sketch"))
+    return s3.approve(svc, pid, nid)
+
+
+def keyframe_of(v, nid):
+    """The first-picture request of one clip (character sheets are made before it)."""
+    return next(r for r in v.calls["picture"] if nid in str(r.out) and "keyframe" in Path(r.out).name)
+
+
+def reference_project(svc, monkeypatch, links=()):
+    v = Vendors(svc, monkeypatch)
+    p, ids = two_shot_project(svc, links=links)
+    p.settings.scene3d.enabled = True
+    svc.save(p)
+    return v, p, ids
+
+
+@requires_ffmpeg
+def test_an_approved_reference_is_followed_and_the_first_picture_is_made_from_the_layout(svc, monkeypatch):
+    v, p, ids = reference_project(svc, monkeypatch)
+    approved(svc, p.id, ids[0])
+    q = svc.load(p.id)
+    plan = E.plan_clip(q, find(q, ids[0]), svc.reg)
+    assert plan.reference and plan.video.id.endswith("_reference")
+    run_all(svc, p.id)
+    first_pic = keyframe_of(v, ids[0])
+    assert first_pic.prompt.startswith("Picture 1 is a rough 3D layout made of plain coloured shapes.")
+    assert "the red shape is Dan, the blue shape is Bruiser and the green shape is Lizard" in first_pic.prompt
+    assert Path(first_pic.references[0]).name == "first.png"            # the layout's first picture leads
+    call = next(c for c in v.calls["video"] if c.reference_video)
+    assert call.model == svc.catalog.get(plan.video.id).model and call.start_frame is None
+    assert Path(call.reference_video).name == "reference.mp4" and ids[0] in str(call.reference_video)
+    assert call.reference_labels[0] == "the first picture of the clip: it starts exactly like this"
+    assert Path(call.references[0]) == Path(first_pic.out)               # the realistic first picture, not the grey layout
+    assert "In the camera reference, the red shape is Dan" in call.prompt
+    body = fal_video.build_payload(call)
+    assert body["prompt"].startswith("[Video1] is the camera and movement reference")
+    assert "[Image1] is the first picture of the clip" in body["prompt"]
+    # the second clip has no approved reference: it is made the usual way
+    other = [c for c in v.calls["video"] if not c.reference_video]
+    assert other and all(c.start_frame for c in other)
+
+
+@requires_ffmpeg
+def test_a_reference_that_is_only_rendered_or_switched_off_is_not_used(svc, monkeypatch):
+    v, p, ids = reference_project(svc, monkeypatch)
+    asyncio.run(s3.plan_clip(svc, p.id, ids[0]))
+    asyncio.run(s3.build_clip(svc, p.id, ids[0], renderer="sketch"))      # rendered, not approved
+    q = svc.load(p.id)
+    assert not E.plan_clip(q, find(q, ids[0]), svc.reg).reference
+    s3.approve(svc, p.id, ids[0])
+    q = svc.load(p.id)
+    q.settings.scene3d.enabled = False                                    # approved, but the add-on is off
+    svc.save(q)
+    q = svc.load(p.id)
+    plan = E.plan_clip(q, find(q, ids[0]), svc.reg)
+    assert not plan.reference and not plan.layout
+    run_all(svc, p.id)
+    assert not any(c.reference_video for c in v.calls["video"])
+    assert not any(r.prompt.startswith("Picture 1 is a rough 3D layout") for r in v.calls["picture"])
+
+
+@requires_ffmpeg
+def test_without_a_reference_model_the_first_picture_still_comes_from_the_layout(svc, monkeypatch):
+    v, p, ids = reference_project(svc, monkeypatch)
+    svc.config.disabled_models += ["seedance_2_reference", "seedance_2_fast_reference"]
+    approved(svc, p.id, ids[0])
+    q = svc.load(p.id)
+    plan = E.plan_clip(q, find(q, ids[0]), svc.reg)
+    assert plan.layout and not plan.reference
+    assert any("no connected video model can follow a reference video" in w for w in plan.warnings)
+    run_all(svc, p.id)
+    assert not any(c.reference_video for c in v.calls["video"])
+    assert keyframe_of(v, ids[0]).prompt.startswith("Picture 1 is a rough 3D layout")
+
+
+@requires_ffmpeg
+def test_a_continuing_clip_keeps_its_hand_over_picture_over_the_reference(svc, monkeypatch):
+    v, p, ids = reference_project(svc, monkeypatch, links=[(0, 1, DependencyType.continues_from.value)])
+    approved(svc, p.id, ids[0])
+    approved(svc, p.id, ids[1])
+    q = svc.load(p.id)
+    plan = E.plan_clip(q, find(q, ids[1]), svc.reg)
+    assert not plan.reference
+    assert any("it continues the clip before" in w for w in plan.warnings)
+    run_all(svc, p.id)
+    second = [c for c in v.calls["video"] if not c.reference_video]
+    assert second and Path(second[-1].start_frame).name.startswith("handoff_from_")
+
+
+def test_a_reference_of_the_wrong_length_is_out_of_date(svc):
+    p, ids = two_shot_project(svc)
+    p.settings.scene3d.enabled = True
+    svc.save(p)
+    approved(svc, p.id, ids[0])
+    q = svc.load(p.id)
+    n = find(q, ids[0])
+    assert s3.ready_reference(q, n) is not None
+    n.duration.likely_s = n.scene3d.plan.seconds + 2
+    assert s3.ready_reference(q, n) is None and "plan it again" in s3.stale_reason(n)
+
+
+@requires_ffmpeg
+def test_approving_a_reference_for_a_made_clip_marks_it_out_of_date(svc, monkeypatch):
+    v, p, ids = reference_project(svc, monkeypatch)
+    run_all(svc, p.id)
+    q = svc.load(p.id)
+    assert find(q, ids[0]).status.value == "done"
+    approved(svc, p.id, ids[0])
+    q = svc.load(p.id)
+    assert find(q, ids[0]).status.value == "stale"
+    assert any("3D camera reference was approved" in w for w in find(q, ids[0]).warnings)
+
+
+@requires_ffmpeg
+def test_a_clip_made_in_parts_gives_each_part_its_own_stretch_of_the_reference(svc, monkeypatch, tmp_path):
+    from video_generator.runner import Engine
+    v, p, ids = reference_project(svc, monkeypatch)
+    entry = svc.catalog.get("seedance_2_reference").model_copy(deep=True)
+    entry.capabilities["max_seconds"] = 2
+    ref = tmp_path / "reference.mp4"
+    media.ff("-f", "lavfi", "-i", "testsrc=size=320x180:rate=24", "-t", "4", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(ref))
+    pic = tmp_path / "first.png"
+    from PIL import Image
+    Image.new("RGB", (320, 180), (200, 40, 40)).save(pic)
+    req = VideoRequest(prompt="run", out=tmp_path / "out.mp4", model=entry.model, seconds=4, references=[pic],
+                       reference_video=ref, params=dict(entry.params))
+    asyncio.run(Engine(svc)._video_parts(p.id, entry, req, "t1", (), ids[0]))
+    parts = [c.reference_video for c in v.calls["video"]]
+    assert len(parts) == 2 and len(set(parts)) == 2 and ref not in parts
+    assert all(media.probe_duration(x) == pytest.approx(2.0, abs=0.15) for x in parts)

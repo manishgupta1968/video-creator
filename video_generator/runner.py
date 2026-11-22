@@ -28,6 +28,8 @@ from .models import (ActorDetails, ContextItem, ContextRole, ContextType, Depend
 from .plugins.base import (AvatarRequest, ImageRequest, PluginError, Usage, VideoRequest, VoiceSpec)
 from .project import ProjectStore, slug
 from .reviewer import Reviewer
+from .scene3d import service as s3
+from .scene3d.spec import layout_words, legend_sentence
 from .tree import effective_style, find, leaves, numbering, walk
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -810,6 +812,9 @@ class Engine:
         handoff = await self._handoff_frame(pid, nid)
         end_frame = self._end_frame(p, nid)
         refs = self._references(p, n, plan)
+        labelled = self._labelled_references(p, n)
+        ref3d = s3.ready_reference(p, n)                      # the approved 3D camera reference, or None (the usual way)
+        layout_first = self.abs(pid, ref3d.first) if ref3d and ref3d.first else None
         prompt = build_visual_prompt(p, n)
         label = f"Clip {numbering(p).get(nid, '')} · {n.title}"
         speaker = est.speaking_actor(p, n)
@@ -857,10 +862,17 @@ class Engine:
                     if not start:
                         kf = d / f"{tag}_keyframe.png"
                         compose = f" Compose for a {p.settings.aspect} frame with the subject well inside it and room around."
-                        await self._make_image(pid, plan.image, lambda e: ImageRequest(
-                            prompt=(prompt + f" (variation {i})" if i > 1 else prompt) + compose, out=kf, model=e.model,
-                            references=refs[: int(e.capabilities.get("reference_images", 0) or 0)],
-                            aspect=p.settings.aspect, negative=negative, label=label), f"keyframe {tag}", nid)
+                        def keyframe_request(e, i=i, kf=kf, compose=compose):
+                            cap = int(e.capabilities.get("reference_images", 0) or 0)
+                            text = (prompt + f" (variation {i})" if i > 1 else prompt) + compose
+                            if layout_first and cap >= 1:
+                                # the 3D layout fixes the framing; the character and place pictures give the looks
+                                return ImageRequest(prompt=layout_words(ref3d.plan) + " " + text, out=kf, model=e.model,
+                                                    references=[layout_first] + refs[: cap - 1], aspect=p.settings.aspect,
+                                                    negative=negative, label=label)
+                            return ImageRequest(prompt=text, out=kf, model=e.model, references=refs[:cap],
+                                                aspect=p.settings.aspect, negative=negative, label=label)
+                        await self._make_image(pid, plan.image, keyframe_request, f"keyframe {tag}", nid)
                         media.fit_image(kf, kf, p.settings.aspect, mode="cover")     # picture models make 3:2; the video is not
                         start = kf
                     take.keyframe = self.rel(pid, start)
@@ -875,17 +887,36 @@ class Engine:
                             prompt=end_prompt, out=end_used, model=e.model, references=[start],
                             aspect=p.settings.aspect, negative=negative, label=label), f"end picture {tag}", nid)
                         media.fit_image(end_used, end_used, p.settings.aspect, mode="cover")
-                    need_v = {"start_frame": True} if start else {}
-                    if end_used:
-                        need_v["end_frame"] = True
-                    v_alts = [e for e in self.svc.reg.candidates("video", n.script.shot_type.value, need_v, est.mode_for(p, n))
-                              if float(e.capabilities.get("max_seconds", 10) or 10) >= min(seconds, 8)] if not entries else []
-                    ventry = await self._video_parts(pid, ventry, VideoRequest(
-                        prompt=prompt, out=raw, model=ventry.model, seconds=seconds, aspect=p.settings.aspect,
-                        resolution=p.settings.resolution, start_frame=start, end_frame=end_used,
-                        references=refs[: int(ventry.capabilities.get("reference_images", 0) or 0)],
-                        negative=negative, audio=bool(ventry.capabilities.get("native_audio")),
-                        camera=n.script.camera, label=label, params=dict(ventry.params)), tag, v_alts, nid)
+                    if ref3d and ventry and ventry.capabilities.get("reference_video"):
+                        # follow the 3D camera reference: the reference video gives the camera and the movement, the first
+                        # picture (made from the layout, or the last picture of the clip before) and the character
+                        # pictures give the looks
+                        can_start = bool(ventry.capabilities.get("start_frame"))
+                        pics = ([(start, "the first picture of the clip: it starts exactly like this")] if start and not can_start else [])
+                        pics += [(path, words) for path, words in labelled if path != start]
+                        pics = pics[: int(ventry.capabilities.get("reference_images", 0) or 0)]
+                        need_r = {"reference_video": 1, **({"start_frame": True} if handoff else {})}
+                        r_alts = [e for e in self.svc.reg.candidates("video", n.script.shot_type.value, need_r, est.mode_for(p, n))
+                                  if not e.is_free] if not entries else []
+                        ventry = await self._video_parts(pid, ventry, VideoRequest(
+                            prompt=prompt + " " + legend_sentence(ref3d.plan), out=raw, model=ventry.model, seconds=seconds,
+                            aspect=p.settings.aspect, resolution=p.settings.resolution, start_frame=start if can_start else None,
+                            references=[x for x, _ in pics], reference_labels=[w for _, w in pics],
+                            reference_video=self.abs(pid, ref3d.video), negative=negative,
+                            audio=bool(ventry.capabilities.get("native_audio")), camera=n.script.camera, label=label,
+                            params=dict(ventry.params)), tag, r_alts, nid)
+                    else:
+                        need_v = {"start_frame": True} if start else {}
+                        if end_used:
+                            need_v["end_frame"] = True
+                        v_alts = [e for e in self.svc.reg.candidates("video", n.script.shot_type.value, need_v, est.mode_for(p, n))
+                                  if float(e.capabilities.get("max_seconds", 10) or 10) >= min(seconds, 8)] if not entries else []
+                        ventry = await self._video_parts(pid, ventry, VideoRequest(
+                            prompt=prompt, out=raw, model=ventry.model, seconds=seconds, aspect=p.settings.aspect,
+                            resolution=p.settings.resolution, start_frame=start, end_frame=end_used,
+                            references=refs[: int(ventry.capabilities.get("reference_images", 0) or 0)],
+                            negative=negative, audio=bool(ventry.capabilities.get("native_audio")),
+                            camera=n.script.camera, label=label, params=dict(ventry.params)), tag, v_alts, nid)
                     take.model = ventry.id
                     native = bool(ventry.capabilities.get("native_audio"))
                 # post-process: fit frame, exact length, mix voice + sounds
@@ -1023,8 +1054,14 @@ class Engine:
         current = entry
         for k in range(parts_n):
             piece = req.out.with_name(f"{req.out.stem}_p{k}.mp4")
+            ref_part = None
+            if req.reference_video:          # each part follows its own stretch of the reference video
+                ref_part = piece.with_name(f"{piece.stem}_reference.mp4")
+                media.ff("-ss", f"{k * each:.3f}", "-i", str(req.reference_video), "-t", f"{each:.3f}", "-an",
+                         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(ref_part))
             sub = VideoRequest(**{**req.__dict__, "out": piece, "seconds": each, "start_frame": start,
-                                  "end_frame": req.end_frame if k == parts_n - 1 else None})
+                                  "end_frame": req.end_frame if k == parts_n - 1 else None,
+                                  "reference_video": ref_part})
             current = await make(current, sub, f"video {tag} part {k + 1}", each)
             pieces.append(piece)
             start = media.last_frame(piece, piece.with_suffix(".last.png"))
@@ -1065,29 +1102,43 @@ class Engine:
 
     def _references(self, p: Project, n: Node, plan) -> list[Path]:
         """Actors first, then must-appear items, then look references, then locations."""
+        return [path for path, _ in self._labelled_references(p, n)]
+
+    def _labelled_references(self, p: Project, n: Node) -> list[tuple[Path, str]]:
+        """The reference pictures with what each one shows, in words ("Dan, the red shape in the camera reference").
+        Actors first, then must-appear items, then look references, then locations."""
         used = _actor_ids_in(n)
         eff = effective_context(p, n.id)
-        out: list[Path] = []
+        shapes = {}
+        if n.scene3d and n.scene3d.plan:
+            from .scene3d.spec import colour_name, normalise
+            shapes = {t.actor_id: colour_name(t.colour) for t in normalise(n.scene3d.plan).things if t.actor_id and t.kind == "figure"}
+        out: list[tuple[Path, str]] = []
         for e in eff:
             c = e.item
             if c.type == ContextType.actor and c.id in used and c.actor:
+                label = c.title + (f" ({c.actor.description})" if c.actor.description else "")
+                if c.id in shapes:
+                    label += f", the {shapes[c.id]} shape in the camera reference"
                 anchor = self._anchor(p, c)
                 if anchor:
-                    out.append(anchor)               # the look this character already has in the video comes first
+                    out.append((anchor, label))               # the look this character already has in the video comes first
                 for f in (c.actor.reference_sheet or c.files)[:2]:
                     if f.lower().endswith(IMG_EXT):
-                        out.append(self.abs(p.id, f))
-        out += self._scene_frames(p, n)
+                        out.append((self.abs(p.id, f), label))
+        out += [(f, "the place, as the earlier clips show it") for f in self._scene_frames(p, n)]
+        words = {ContextRole.must_appear: "must be seen in the clip", ContextRole.start_frame: "how the clip looks",
+                 ContextRole.look_reference: "the look to copy (style only, not the content)"}
         for role in (ContextRole.must_appear, ContextRole.start_frame, ContextRole.look_reference):
             for e in eff:
                 c = e.item
                 if c.role == role and c.type != ContextType.actor:
-                    out += [self.abs(p.id, f) for f in c.files if f.lower().endswith(IMG_EXT)]
+                    out += [(self.abs(p.id, f), f"{c.title or c.type.value}: {words[role]}") for f in c.files if f.lower().endswith(IMG_EXT)]
         seen, uniq = set(), []
-        for x in out:
+        for x, label in out:
             if x and x.exists() and str(x) not in seen:
                 seen.add(str(x))
-                uniq.append(x)
+                uniq.append((x, label))
         return uniq
 
     def _clip_sharpness(self, video: Path) -> Optional[float]:
