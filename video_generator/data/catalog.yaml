@@ -73,6 +73,44 @@ video:
     licence: commercial (fal / ByteDance terms)
     pricing_url: https://fal.ai/models/bytedance/seedance-2.0/fast/image-to-video
     last_checked: "2026-11-05"
+  # Reference-to-video: follows a rough 3D camera reference (the "3D camera reference" add-on). These rows are only
+  # chosen for a clip that has a reference video (capabilities.requires). Field names and limits come from fal's
+  # listing as seen in search results on 2026-11-22 (the page itself could not be opened): up to 9 pictures,
+  # 3 videos and 3 sounds, prompt tags [Image1] / [Video1]. Check the API page before a big project.
+  - id: seedance_2_reference
+    plugin: fal
+    model: bytedance/seedance-2.0/reference-to-video
+    vendor: fal
+    note: follows a 3D camera reference video
+    strengths: {human_motion: 5, dialogue_scene: 4, product: 4, wildlife: 4, landscape: 4, talking_head: 3, other: 4}
+    capabilities: {start_frame: false, end_frame: false, reference_images: 9, reference_video: 3, native_audio: true,
+                   max_seconds: 15, animates: scene, length: fixed, requires: [reference_video]}
+    # fal lists about $0.30/s at 720p without a reference video and about $0.18/s with one; the higher price is used so
+    # the estimate never comes out low
+    price: {unit: second, usd: 0.30}
+    time: {queue_s: 60, per_output_s: 12}
+    params: {reference_images_field: image_urls, reference_video_field: video_urls, tag_format: "[{kind}{n}]",
+             durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolution: 720p,
+             fields: [prompt, reference_images_field, reference_video_field, duration, resolution, aspect_ratio, generate_audio]}
+    licence: commercial (fal / ByteDance terms)
+    pricing_url: https://fal.ai/models/bytedance/seedance-2.0/reference-to-video
+    last_checked: "2026-11-22"
+  - id: seedance_2_fast_reference
+    plugin: fal
+    model: bytedance/seedance-2.0/fast/reference-to-video
+    vendor: fal
+    note: follows a 3D camera reference video (faster, 720p at most)
+    strengths: {human_motion: 4, dialogue_scene: 3, product: 3, wildlife: 4, landscape: 4, talking_head: 3, other: 3}
+    capabilities: {start_frame: false, end_frame: false, reference_images: 9, reference_video: 3, native_audio: true,
+                   max_seconds: 15, animates: scene, length: fixed, requires: [reference_video]}
+    price: {unit: second, usd: 0.24}
+    time: {queue_s: 40, per_output_s: 8}
+    params: {reference_images_field: image_urls, reference_video_field: video_urls, tag_format: "@{kind}{n}",
+             durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolution: 720p,
+             fields: [prompt, reference_images_field, reference_video_field, duration, resolution, aspect_ratio, generate_audio]}
+    licence: commercial (fal / ByteDance terms)
+    pricing_url: https://fal.ai/models/bytedance/seedance-2.0/fast/reference-to-video
+    last_checked: "2026-11-22"
   - id: wan_2_6
     plugin: fal
     model: wan/v2.6/image-to-video

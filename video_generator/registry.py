@@ -23,6 +23,9 @@ BUILTINS = {
     "fake_lipsync": "video_generator.plugins.fake.fake_media:FakeLipSync",
     "fake_music": "video_generator.plugins.fake.fake_media:FakeMusic",
     "fake_transcribe": "video_generator.plugins.fake.fake_media:FakeTranscriber",
+    "fake_agent": "video_generator.plugins.fake.fake_agent:FakeAgent",
+    "claude_code": "video_generator.plugins.agent.cli_agents:ClaudeCodeAgent",
+    "codex": "video_generator.plugins.agent.cli_agents:CodexAgent",
     "anthropic": "video_generator.plugins.llm.anthropic_llm:AnthropicLLM",
     "openai": "video_generator.plugins.llm.openai_llm:OpenAILLM",
     "gemini": "video_generator.plugins.llm.gemini_llm:GeminiLLM",
@@ -145,6 +148,8 @@ class Registry:
                 continue
             if mode == "free" and not e.is_free:
                 continue
+            if any(not need.get(r) for r in (e.capabilities.get("requires") or [])):
+                continue        # a model that only works with an input this clip does not have (e.g. a reference video)
             if all(capability_covers(job, e.capabilities, cap, want) for cap, want in need.items()):
                 out.append(e)
 

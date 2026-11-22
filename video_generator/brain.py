@@ -279,6 +279,7 @@ class Scores(BaseModel):
     audio: int = 0            # voice natural, clear, right level, matches the mouth
     continuity: int = 3
     join: int = 0             # the stitch with the clip before it (0 = no evidence: the first clip, or the clip before is not made or only a placeholder)
+    camera: int = 0           # the clip followed its 3D camera reference (0 = the clip has no reference)
     timing: int = 3
     lipsync: int = 3
 
@@ -532,6 +533,22 @@ class Brain:
         return await self.ask("split_clip", prompt, ClipSplit, {"title": node.title, "goal": node.goal, "seconds": secs,
                                                                   "script": sc.model_dump() if sc else {}})
 
+    async def scene_plan(self, project: Project, node: Node, shared_set: str = "", previous: str = ""):
+        """A rough 3D plan of one clip (the "3D camera reference" add-on): plain shapes, their paths and the camera path."""
+        from .scene3d.spec import ScenePlan
+        nums = numbering(project)
+        sc = node.script
+        secs = node.duration.likely_s or node.target_seconds or (sc.target_seconds if sc else None) or 6
+        prompt = render("scene_plan", outline=outline(project), number=nums.get(node.id, ""), title=node.title, goal=node.goal,
+                        seconds=f"{secs:g}", aspect=project.settings.aspect, actors=self._actor_list(project, node.id),
+                        script=sc.model_dump_json(indent=1) if sc else "(none)",
+                        shared_set=shared_set or "(none yet: this clip decides the set)", previous=previous or "(not a continuation)")
+        return await self.ask("scene_plan", prompt, ScenePlan,
+                              {"title": node.title, "goal": node.goal, "seconds": secs, "aspect": project.settings.aspect,
+                               "script": sc.model_dump() if sc else {},
+                               "actors": [{"id": a.id, "title": a.title, "kind": a.actor.kind if a.actor else ""}
+                                          for a in project.context if a.type == ContextType.actor]})
+
     async def write_clip_script(self, project: Project, node: Node, feedback: str = "") -> ClipScriptDraft:
         nums = numbering(project)
         prev = _previous_leaf(project, node)
@@ -598,21 +615,23 @@ class Brain:
     async def review_take(self, project: Project, node: Node, frames: list[tuple[float, Path]],
                           transcript: str, measurements: dict, take_seconds: float,
                           video: Optional[Path] = None, history: str = "", pair_times: Optional[list[float]] = None,
-                          join_text: str = "", join: Optional[dict] = None, join_images: Optional[list[Path]] = None) -> ReviewDraft:
+                          join_text: str = "", join: Optional[dict] = None, join_images: Optional[list[Path]] = None,
+                          camera_text: str = "", camera_images: Optional[list[Path]] = None) -> ReviewDraft:
         nums = numbering(project)
         script = node.script.model_dump_json(indent=1) if node.script else "{}"
-        pics = list(join_images or [])
+        pics = list(camera_images or []) + list(join_images or [])          # the join pictures stay the last two
         prompt = render("review", number=nums.get(node.id, ""), title=node.title, goal=node.goal,
                         parents=" > ".join(a.goal for a in ancestors(project, node.id) if a.id != project.root.id),
                         script=script, context=self._context_block(project, node.id),
                         transcript=transcript or "(no speech detected)", measurements=json.dumps(measurements),
                         target=node.duration.likely_s, actual=take_seconds,
                         frame_times=_frame_description(frames, pair_times or []), history=history or "(first review)",
-                        join=join_text or "(there is no clip before this one to compare with: give join 0)")
+                        join=join_text or "(there is no clip before this one to compare with: give join 0)",
+                        camera=camera_text or "(this clip was not made from a 3D camera reference: give camera 0)")
         return await self.ask("review", prompt, ReviewDraft,
                               {"script": node.script.model_dump() if node.script else {}, "transcript": transcript,
                                "measurements": measurements, "target": node.duration.likely_s,
-                               "actual": take_seconds, "join": join or {}, "keep_images": len(pics)},
+                               "actual": take_seconds, "join": join or {}, "keep_images": len(pics), "camera": bool(camera_text)},
                               images=[p for _, p in frames] + pics, video=video)
 
     async def review_node(self, project: Project, node: Node, summaries: str, actual_seconds: float,

@@ -195,3 +195,42 @@ async def run_checks(client: Optional[httpx.AsyncClient] = None, catalog=None) -
     finally:
         if own:
             await client.aclose()
+
+
+def check_blender(configured: str = "") -> list[Check]:
+    """The 3D camera reference add-on: is Blender installed, and which render engine can work on this machine?
+    Only reads the version (no rendering), so it is quick and free."""
+    import ctypes.util
+    import subprocess
+    import sys
+
+    from .scene3d.render import find_blender
+    exe = find_blender(configured)
+    if not exe:
+        return [Check("Blender", SKIP, "Blender is not installed. (Optional: only for the 3D camera reference. Without it a free "
+                                       "sketch is drawn instead. Get it free at blender.org, or set its path with "
+                                       "`vg config set blender_path <path>`.)")]
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=60).stdout
+        version = next((l.strip() for l in out.splitlines() if l.startswith("Blender")), "Blender")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [Check("Blender", WARN, f"Blender was found at {exe} but did not start ({type(exc).__name__}).")]
+    out = [Check("Blender", OK, f"{version} at {exe}.")]
+    if sys.platform.startswith("linux") and not ctypes.util.find_library("EGL"):
+        out.append(Check("Blender render engine", WARN, "This computer has no graphics libraries (libEGL), so the fast Workbench engine "
+                                                        "cannot run. The slower Cycles engine on the processor is used instead (about a "
+                                                        "minute or more per few seconds of video). Installing the libegl1 and libgl1-mesa-dri packages lets "
+                                                        "Workbench run, which is about twice as fast even with no graphics card."))
+    return out
+
+
+def check_agents() -> list[Check]:
+    """The 3D camera reference add-on: which coding agents can fix 3D plans (only checks that the commands exist)."""
+    from .plugins.agent.cli_agents import ClaudeCodeAgent, CodexAgent
+    out = []
+    for cls, what in ((ClaudeCodeAgent, "Claude Code"), (CodexAgent, "Codex")):
+        exe = cls().exe()
+        out.append(Check(what, OK, f"found at {exe}.") if exe else
+                   Check(what, SKIP, f"not installed. (Optional: fixes 3D plans for the 3D camera reference. Install the "
+                                     f"`{cls.program}` command, or set {cls.env_override} to its path.)"))
+    return out

@@ -101,6 +101,39 @@ class Reviewer:
         text = join_block(info.previous, kind, info.reason, info.transition, info.difference, info.limit, prev_end, this_start)
         return info, text, [last, first]
 
+    def _camera_reference(self, p, n, take):
+        """The clip's 3D camera reference, when this take was made by a model that followed it; else None."""
+        from .scene3d import service as s3
+        ref = s3.ready_reference(p, n)
+        if not ref or not take.model:
+            return None
+        try:
+            return ref if self.svc.catalog.get(take.model).capabilities.get("reference_video") else None
+        except KeyError:
+            return None
+
+    @staticmethod
+    def _camera_evidence(ref, base: Path, video: Path, measurements: dict, placeholder: bool) -> tuple[str, list[Path]]:
+        """The measured camera match (into `measurements`), the reference's first and last pictures, and the words that
+        explain them to the Review Agent. Empty when the take did not follow a reference."""
+        if not ref or placeholder or not ref.video:
+            return "", []
+        from .scene3d import follow
+        from .scene3d.spec import legend
+        m = follow.compare(base / ref.video, video)
+        if m:
+            measurements.update(m)
+        pics = [base / ref.checks[k] for k in ("start", "end") if ref.checks.get(k) and (base / ref.checks[k]).exists()]
+        shapes = ", ".join(f"{c} = {who}" for c, who in legend(ref.plan)) if ref.plan else ""
+        text = (f"This clip was made to follow a rough 3D reference of plain coloured shapes ({shapes or 'no characters'}). "
+                f"Planned camera move: {(ref.plan.camera.move if ref.plan else '') or 'see the pictures'}. ")
+        if pics:
+            text += (f"The {len(pics)} attached picture(s) just before the join pictures (or the last ones, when there are no join "
+                     f"pictures) are the reference's first and last pictures: compare framing and where each shape is. ")
+        text += (f"Measured camera match: camera_follow = {m['camera_follow']:.2f} (reference moved {m['camera_reference_move']:.2f} "
+                 f"picture widths, the clip {m['camera_take_move']:.2f})." if m else "The camera paths could not be measured.")
+        return text, pics
+
     @staticmethod
     def _listen_language(p, n) -> str:
         """The language the speech-to-text listens in for this clip: the one language spoken in it; when several are spoken, "" = work it out
@@ -117,7 +150,9 @@ class Reviewer:
         base = ProjectStore.path_for(pid)
         video = base / take.video
         work = base / "clips" / nid / "review" / take.id
-        frames = media.sample_frames(video, work, every=1.0, max_frames=9)           # 9 + 6 pair pictures + 2 join pictures = 17 (a review model sees at most 18)
+        ref = self._camera_reference(p, n, take)
+        # 9 + 6 pair pictures + 2 join pictures = 17 (a review model sees at most 18); with a 3D camera reference, 7 + 6 + 2 + 2 = 17
+        frames = media.sample_frames(video, work, every=1.0, max_frames=7 if ref else 9)
         pairs = media.sample_pairs(video, work / "pairs")        # neighbouring frames expose warping and morphing
         expected = " ".join([l.text for l in n.script.dialogue] + [n.script.narration]) if n.script else ""
         try:
@@ -136,6 +171,7 @@ class Reviewer:
         join, join_text, join_images = self._join_evidence(p, n, take, base, work, video, frames, placeholder)
         if join.judged and join.difference is not None:
             measurements["join_difference"] = join.difference
+        camera_text, camera_images = self._camera_evidence(ref, base, video, measurements, placeholder)
         history = []
         for r in p.reviews:
             if r.target in {t.id for t in n.takes if t.id != take.id}:
@@ -146,7 +182,8 @@ class Reviewer:
         brain = self.svc.brain
         draft = await brain.review_take(p, n, frames + pairs, transcript, measurements, take.seconds, video=video,
                                         history="; ".join(history[-8:]), pair_times=[t for t, _ in pairs],
-                                        join_text=join_text, join=join.model_dump(), join_images=join_images)
+                                        join_text=join_text, join=join.model_dump(), join_images=join_images,
+                                        camera_text=camera_text, camera_images=camera_images)
         usage = brain.last_usage
         speech_expected = bool(expected.strip())
         draft = apply_quality_rules(draft, measurements, placeholder, speech_expected, join=join)
@@ -265,7 +302,7 @@ class Reviewer:
 
 
 VERDICT_RANK = {"meets_goal": 0, "minor_issues": 1, "does_not_meet_goal": 2}
-HARD_CHECKS = ("goal", "script", "realism", "motion", "join")
+HARD_CHECKS = ("goal", "script", "realism", "motion", "join", "camera")
 
 
 def apply_quality_rules(draft, meas: dict, placeholder: bool, speech_expected: bool, join=None):
@@ -336,6 +373,21 @@ def apply_quality_rules(draft, meas: dict, placeholder: bool, speech_expected: b
                           f"{join.limit:.2f}). It should begin on the very last picture of the clip before.", "major")
         cap("join", 2)
         suggestions.append(f"Re-make this clip from the hand-over picture (the last picture of clip {join.previous}), or change the join to a cut.")
+    # the 3D camera reference: measured facts win over any opinion; no reference means no camera score
+    follow = meas.get("camera_follow")
+    if follow is None or placeholder:
+        scores["camera"] = 0
+    else:
+        pol = policy_mod.current()
+        if follow < pol.camera_follow_major:
+            issue("camera", f"The clip did not follow its 3D camera reference (measured match {follow:.2f}; below "
+                            f"{pol.camera_follow_major:.2f} means clearly not followed).", "major")
+            cap("camera", 2)
+            suggestions.append("Make it again with the same reference, or simplify the camera move in the 3D plan (one move per clip) "
+                               "and render the reference again.")
+        elif follow < pol.camera_follow_minor:
+            issue("camera", f"The clip follows its 3D camera reference only loosely (measured match {follow:.2f}).", "minor")
+            cap("camera", 3)
     if speech_expected:
         if meas.get("has_audio") == 0:
             issue("audio", "The clip has no sound but speech was expected.", "major")

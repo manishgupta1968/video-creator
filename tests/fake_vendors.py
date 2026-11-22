@@ -99,6 +99,12 @@ class Vendors:
 
         async def video(req):
             vendors.calls["video"].append(req)
+            if not req.start_frame:           # a reference-to-video model has no start picture: it works from its references
+                req = __import__("dataclasses").replace(req, start_frame=req.references[0] if req.references else None)
+            if not req.start_frame:
+                still = req.out.with_suffix(".still.png")
+                Image.new("RGB", (1280, 720), colour_for(req.prompt[:40])).save(still)
+                req = __import__("dataclasses").replace(req, start_frame=still)
             w, h = Image.open(req.start_frame).size if req.start_frame else (1280, 720)
             w, h = w - w % 2, h - h % 2
             secs = f"{vendors.video_seconds:g}"

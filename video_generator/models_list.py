@@ -18,6 +18,7 @@ ABILITY_WORDS = {
     "start_frame": "starts from a picture", "end_frame": "can end on a picture", "native_audio": "makes its own sound",
     "speech": "speaks the line itself", "clone": "copies a voice", "vision": "sees pictures", "video": "watches whole videos",
     "voice_preview": "has a free sample to listen to", "non_human": "works for animals and objects",
+    "reference_video": "follows a 3D camera reference",
 }
 MOTION_WORDS = {"face": "moves only the face", "body": "moves the body", "scene": "moves the whole scene"}
 UNIT_WORDS = {"second": "per second", "image": "per image", "1k_chars": "per 1,000 characters", "minute": "per minute",

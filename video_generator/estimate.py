@@ -27,6 +27,7 @@ from .tree import ancestors, find, leaves, numbering, walk
 PEOPLE_SHOTS = {ShotType.talking_head, ShotType.dialogue_scene, ShotType.human_motion}
 SECONDS_PER_SLIDE = 5.0
 SCRIPT_TOKENS = (6000, 2500)       # in, out per clip script
+SCENE_PLAN_TOKENS = (7000, 3000)   # in, out per 3D plan (the 3D camera reference add-on)
 REVIEW_TOKENS = (29000, 1800)      # per take review (frames + context + the two pictures of the join with the clip before)
 PLAN_TOKENS = (8000, 6000)
 
@@ -240,6 +241,8 @@ class ClipPlan:
     end_picture: bool = False              # make a picture of the planned ending and give it to the video model
     motion: str = ""                       # what must move: face | body | scene (declared by the plan, or the legacy default)
     blocked: str = ""                      # why this clip cannot be made at all right now (empty = it can)
+    reference: bool = False                # the video model follows the clip's approved 3D camera reference
+    layout: bool = False                   # the clip has an approved 3D layout (its first picture is made from it)
 
 
 def ambience_for(project: Project, node: Node) -> bool:
@@ -493,7 +496,26 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     if end_wanted:
         need["end_frame"] = True
     blocked = ""
-    if needs_start and mode != "free" and _real_video_exists(reg, shot):
+    from .scene3d.service import ready_reference
+    ref3d = ready_reference(project, node)
+    video = None
+    if ref3d and mode != "free":
+        # the 3D camera reference: a model that follows a reference video (and, for a continuing clip, can also start
+        # from the last picture of the clip before; the hand-over rule always wins)
+        follow = [e for e in reg.candidates("video", shot, {**{k: v for k, v in need.items() if k != "end_frame"}, "reference_video": 1}, mode) if not e.is_free]
+        pinned = next((e for e in follow if e.id == node.provider_override), None)
+        video = pinned or (follow[0] if follow else None)
+        if video is None and needs_start:
+            warnings.append("This clip has an approved 3D camera reference, but it continues the clip before, so it must start from "
+                            "that clip's last picture, and no connected model can both follow a reference video and start from a "
+                            "picture. It is made the usual way, from that last picture.")
+        elif video is None:
+            warnings.append("This clip has an approved 3D camera reference, but no connected video model can follow a reference "
+                            "video (for example Seedance 2.0 reference-to-video through fal.ai). It is made the usual way, but its "
+                            "first picture is made from the 3D layout, so the framing still matches.")
+    if video is not None:
+        end_wanted = False          # the reference video already decides how the clip ends
+    elif needs_start and mode != "free" and _real_video_exists(reg, shot):
         # the hand-over rule: a clip that continues the one before MUST start from that clip's last picture
         video, blocked = _video_that_starts_from_picture(reg, node, shot, mode, end_wanted, warnings)
         if video is None:
@@ -533,6 +555,10 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
         elif lipsync is None or lipsync.is_free:
             video = speaks[0] if video.id not in {e.id for e in speaks} else video      # a model that speaks the line itself
     plan_v = ClipPlan("video", video, image, voice, lipsync, takes, needs_start, ref_images, lip, warnings)
+    plan_v.reference = bool(ref3d and video.capabilities.get("reference_video"))
+    plan_v.layout = bool(ref3d)
+    if ref3d and mode != "free" and not plan_v.reference and lip and not any("3D camera reference" in w for w in warnings):
+        warnings.append("This clip's 3D camera reference is not used: its speech needs a video model that speaks the line itself.")
     plan_v.motion = motion
     plan_v.uncovered = uncovered
     plan_v.blocked = blocked
@@ -583,6 +609,30 @@ def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Option
         add("AI brain: write script", f"~{SCRIPT_TOKENS[0] // 1000}k in + {SCRIPT_TOKENS[1] // 1000}k out tokens", _llm_cost(e, SCRIPT_TOKENS))
         step_times.append(20)
 
+    extra_max = 0.0             # costs that happen only sometimes (the 3D agent): counted in the highest figure only
+    from .scene3d import service as s3
+    if node.kind == NodeKind.clip and node.script and s3.enabled_for(project, node):
+        s = node.scene3d
+        why = s3.stale_reason(node) if s else ""
+        st = project.settings.scene3d
+        if not s or not s.plan or "plan it again" in why:
+            e = _llm_entry(reg, "scene_plan")
+            add("AI brain: 3D plan", f"~{SCENE_PLAN_TOKENS[0] // 1000}k in + {SCENE_PLAN_TOKENS[1] // 1000}k out tokens",
+                _llm_cost(e, SCENE_PLAN_TOKENS))
+            step_times.append(30)
+        if not s or s.status in ("planned", "failed") or why:
+            from .scene3d import render as render_mod
+            cfg = getattr(reg, "config", None)
+            engine = render_mod.likely_engine(getattr(cfg, "blender_path", ""), getattr(cfg, "blender_engines", None), st.renderer)
+            who = "the free sketch" if engine == "sketch" else f"Blender ({engine.replace('BLENDER_', '').title()}), on this computer"
+            add("3D reference render", f"{secs:.0f} s by {who}: free", 0.0)
+            step_times.append(render_mod.expected_seconds(secs, getattr(cfg, "blender_path", ""), getattr(cfg, "blender_engines", None),
+                                                          st.renderer))
+            left = max(st.agent_max_usd - (s.agent_cost_usd if s else 0), 0.0)
+            if left > 0:
+                add("3D plan fixes by the agent", f"only if a check finds a problem{' (pair mode always looks)' if st.agent == 'pair' else ''}; "
+                                                  f"at most ${left:.2f}", 0.0)
+                extra_max += left
     if plan.voice and node.script:
         chars = len(" ".join([l.text for l in node.script.dialogue] + [node.script.narration]))
         v = plan.voice
@@ -639,7 +689,7 @@ def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Option
 
     likely = sum(l.cost for l in lines)
     spread = {EstimateBasis.goal: (0.6, 1.6), EstimateBasis.script: (0.85, 1.2), EstimateBasis.actual: (0.97, 1.05)}[d.basis]
-    cost = CostEstimate(min_usd=round(likely * spread[0], 2), likely_usd=round(likely, 2), max_usd=round(likely * spread[1], 2),
+    cost = CostEstimate(min_usd=round(likely * spread[0], 2), likely_usd=round(likely, 2), max_usd=round(likely * spread[1] + extra_max, 2),
                         lines=lines, model=plan.video.id if plan.video else plan.route, basis=d.basis,
                         actual_usd=node.cost.actual_usd)
     t = sum(step_times)

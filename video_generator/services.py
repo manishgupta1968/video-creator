@@ -754,6 +754,10 @@ class Service:
                 self._set_main_goal(p, patch["goal"])
             if "title" in patch:
                 p.name = patch["title"]
+        if "scene3d_enabled" in patch:                                   # the 3D camera reference for this part: None = the part above decides
+            if patch["scene3d_enabled"] not in (None, True, False):
+                raise ValueError("scene3d_enabled must be true, false or null")
+            n.scene3d_enabled = patch["scene3d_enabled"]
         if "quality_mode" in patch:
             if patch["quality_mode"] not in (None, "", "best", "balanced", "budget", "free"):
                 raise ValueError("quality must be best, balanced, budget or free")

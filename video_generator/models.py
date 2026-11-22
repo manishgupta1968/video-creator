@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
+from .scene3d.spec import ScenePlan
 
 
 def new_id(prefix: str = "") -> str:
@@ -294,6 +295,27 @@ class Continuity(BaseModel):
 
 
 # --------------------------------------------------------------------------- tree
+class Scene3DClip(BaseModel):
+    """One clip's rough 3D scene (the "3D camera reference" add-on): the plan, what was rendered, and its checks."""
+    plan: Optional[ScenePlan] = None
+    status: Literal["planned", "rendered", "approved", "failed"] = "planned"
+    renderer: str = ""                  # blender | sketch
+    engine: str = ""                    # the Blender render engine that worked
+    video: Optional[str] = None         # reference.mp4 (project-relative)
+    first: Optional[str] = None         # its first picture
+    last: Optional[str] = None          # its last picture
+    checks: dict[str, str] = Field(default_factory=dict)      # start | middle | end -> picture
+    blend: Optional[str] = None         # the Blender file, to open and adjust by hand
+    issues: list[str] = Field(default_factory=list)           # what the automatic checks found, in plain words
+    notes: list[str] = Field(default_factory=list)
+    approved_by: Literal["", "you", "auto"] = ""
+    plan_hash: str = ""                 # the plan the files were rendered from (a changed plan makes them out of date)
+    agent_rounds: int = 0               # check-and-fix rounds the agent has run on this clip
+    agent_cost_usd: float = 0.0         # what the agent has spent on this clip
+    agent_log: list[str] = Field(default_factory=list)       # what happened in each round, in plain words
+    updated_at: str = Field(default_factory=now_iso)
+
+
 class Node(BaseModel):
     id: str = Field(default_factory=lambda: new_id("n_"))
     kind: NodeKind = NodeKind.goal
@@ -330,6 +352,8 @@ class Node(BaseModel):
     ambience: Optional[bool] = None   # natural sound made for the clips under this node: None = the part above, then the video; False = none
     continuity: Continuity = Field(default_factory=Continuity)
     blocked: str = ""               # computed: why this clip cannot be made yet (for example it must continue a shot but no model can)
+    scene3d_enabled: Optional[bool] = None   # the 3D camera reference for the clips under this node: None = the part above, then the video
+    scene3d: Optional[Scene3DClip] = None     # clips only: the rough 3D scene and its reference video
 
     @property
     def is_leaf(self) -> bool:
@@ -374,6 +398,17 @@ class Settings(BaseModel):
     fill: Literal["blur", "black", "crop"] = "blur"   # what to put around a picture that is not the video's shape
     auto_photo: bool = True       # find a real photo by itself when none is supplied (animals, objects, places)
     quality_mode: Literal["best", "balanced", "budget", "free"] = "balanced"
+    scene3d: "Scene3DSettings" = Field(default_factory=lambda: Scene3DSettings())
+
+
+class Scene3DSettings(BaseModel):
+    """The optional "3D camera reference" add-on. Off = the tool works exactly as it did without it."""
+    enabled: bool = False
+    agent: Literal["claude_code", "codex", "pair"] = "claude_code"   # who builds and fixes scenes the fixed builder cannot
+    auto_approve: bool = False          # True = a rendered 3D preview whose checks pass is approved by itself
+    max_fix_rounds: int = 3             # automatic check-and-fix rounds before the preview is shown to you
+    agent_max_usd: float = 2.0          # the most the agent may spend on one clip (all rounds together)
+    renderer: Literal["auto", "blender", "sketch"] = "auto"   # auto = Blender when installed, else the free sketch
 
 
 class Style(BaseModel):

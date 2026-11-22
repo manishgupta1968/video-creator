@@ -48,6 +48,11 @@ class Policy(BaseModel):
     join_max_difference: float = Field(0.15, description="How different the first picture of a clip may be from the last picture of the clip it continues from "
                                                           "(0 = identical, 1 = opposite). Above this the clip is flagged: it does not start where the one before ended.")
 
+    camera_follow_minor: float = Field(0.65, description="3D camera reference: a made clip whose measured camera path matches its reference "
+                                                          "less than this (0 = not at all, 1 = closely) gets a minor issue.")
+    camera_follow_major: float = Field(0.45, description="3D camera reference: below this the clip clearly did not follow the reference "
+                                                          "camera: a major issue, and the camera score is capped at 2.")
+
     # ---- languages
     mixed_language_detection: bool = Field(True, description="When more than one language is spoken in a clip, the Review Agent's speech-to-text works out the language by itself "
                                                               "(on). Off = it listens only in the first language of the clip, which gives wrong words for the others.")
