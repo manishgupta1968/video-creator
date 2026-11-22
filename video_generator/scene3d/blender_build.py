@@ -130,11 +130,21 @@ def animate(ob, keys, fps):
 
 def build_set(s):
     lx, ly, lz = (list(s.get("size") or [20, 12, 6]) + [20, 12, 6])[:3]
-    bpy.ops.mesh.primitive_plane_add(size=1)
+    # a checker floor of two greys (same tile size as the sketch): it makes the camera's movement visible
+    step = max(1.0, round(max(lx, ly) / 12))
+    nx, ny = max(1, round(lx / step)), max(1, round(ly / step))
+    bpy.ops.mesh.primitive_grid_add(x_subdivisions=nx, y_subdivisions=ny, size=1)
     floor = bpy.context.active_object
     floor.name = "floor"
     floor.scale = (lx, ly, 1)
-    floor.data.materials.append(material(s.get("floor_colour") or "#9a9a9a"))
+    base = s.get("floor_colour") or "#9a9a9a"
+    r, g, b = (int(base.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    darker = "#%02x%02x%02x" % (int(r * 0.8), int(g * 0.8), int(b * 0.8))
+    floor.data.materials.append(material(base))
+    floor.data.materials.append(material(darker))
+    for poly in floor.data.polygons:
+        cx, cy = poly.center.x + 0.5, poly.center.y + 0.5          # the grid spans -0.5..0.5 before scaling
+        poly.material_index = (int(cx * nx) + int(cy * ny)) % 2
     if s.get("walls"):
         wall = s.get("wall_colour") or "#bdbdbd"
         for name, loc, scale in (("wall_back", (0, ly / 2, lz / 2), (lx, 0.1, lz)),

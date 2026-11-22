@@ -27,6 +27,7 @@ from .tree import ancestors, find, leaves, numbering, walk
 PEOPLE_SHOTS = {ShotType.talking_head, ShotType.dialogue_scene, ShotType.human_motion}
 SECONDS_PER_SLIDE = 5.0
 SCRIPT_TOKENS = (6000, 2500)       # in, out per clip script
+SCENE_PLAN_TOKENS = (7000, 3000)   # in, out per 3D plan (the 3D camera reference add-on)
 REVIEW_TOKENS = (29000, 1800)      # per take review (frames + context + the two pictures of the join with the clip before)
 PLAN_TOKENS = (8000, 6000)
 
@@ -608,6 +609,30 @@ def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Option
         add("AI brain: write script", f"~{SCRIPT_TOKENS[0] // 1000}k in + {SCRIPT_TOKENS[1] // 1000}k out tokens", _llm_cost(e, SCRIPT_TOKENS))
         step_times.append(20)
 
+    extra_max = 0.0             # costs that happen only sometimes (the 3D agent): counted in the highest figure only
+    from .scene3d import service as s3
+    if node.kind == NodeKind.clip and node.script and s3.enabled_for(project, node):
+        s = node.scene3d
+        why = s3.stale_reason(node) if s else ""
+        st = project.settings.scene3d
+        if not s or not s.plan or "plan it again" in why:
+            e = _llm_entry(reg, "scene_plan")
+            add("AI brain: 3D plan", f"~{SCENE_PLAN_TOKENS[0] // 1000}k in + {SCENE_PLAN_TOKENS[1] // 1000}k out tokens",
+                _llm_cost(e, SCENE_PLAN_TOKENS))
+            step_times.append(30)
+        if not s or s.status in ("planned", "failed") or why:
+            from .scene3d import render as render_mod
+            cfg = getattr(reg, "config", None)
+            engine = render_mod.likely_engine(getattr(cfg, "blender_path", ""), getattr(cfg, "blender_engines", None), st.renderer)
+            who = "the free sketch" if engine == "sketch" else f"Blender ({engine.replace('BLENDER_', '').title()}), on this computer"
+            add("3D reference render", f"{secs:.0f} s by {who}: free", 0.0)
+            step_times.append(render_mod.expected_seconds(secs, getattr(cfg, "blender_path", ""), getattr(cfg, "blender_engines", None),
+                                                          st.renderer))
+            left = max(st.agent_max_usd - (s.agent_cost_usd if s else 0), 0.0)
+            if left > 0:
+                add("3D plan fixes by the agent", f"only if a check finds a problem{' (pair mode always looks)' if st.agent == 'pair' else ''}; "
+                                                  f"at most ${left:.2f}", 0.0)
+                extra_max += left
     if plan.voice and node.script:
         chars = len(" ".join([l.text for l in node.script.dialogue] + [node.script.narration]))
         v = plan.voice
@@ -664,7 +689,7 @@ def estimate_clip_cost(project: Project, node: Node, reg: Registry, plan: Option
 
     likely = sum(l.cost for l in lines)
     spread = {EstimateBasis.goal: (0.6, 1.6), EstimateBasis.script: (0.85, 1.2), EstimateBasis.actual: (0.97, 1.05)}[d.basis]
-    cost = CostEstimate(min_usd=round(likely * spread[0], 2), likely_usd=round(likely, 2), max_usd=round(likely * spread[1], 2),
+    cost = CostEstimate(min_usd=round(likely * spread[0], 2), likely_usd=round(likely, 2), max_usd=round(likely * spread[1] + extra_max, 2),
                         lines=lines, model=plan.video.id if plan.video else plan.route, basis=d.basis,
                         actual_usd=node.cost.actual_usd)
     t = sum(step_times)

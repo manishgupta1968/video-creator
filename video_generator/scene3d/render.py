@@ -15,6 +15,7 @@ Result files in the output folder:
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 import shutil
@@ -29,6 +30,38 @@ from .. import media
 from .spec import ScenePlan, camera_at, corners, normalise, project
 
 DEFAULT_ENGINES = ["BLENDER_WORKBENCH", "CYCLES"]     # Workbench is fast; Cycles on the CPU works even with no graphics card
+REFERENCE_RESOLUTION = "480p"     # a reference needs clear movement, not detail; smaller renders much faster
+
+# Making time per second of reference video at 480p, measured on a machine with no graphics card (Blender 4.0):
+# Workbench about 35 s for 4 s at 360p, Cycles about 82 s. Scaled to 480p and rounded up so estimates are not low.
+RENDER_S_PER_SECOND = {"BLENDER_WORKBENCH": 16.0, "CYCLES": 38.0, "sketch": 0.6}
+
+
+def likely_engine(blender: str = "", engines: Optional[list[str]] = None, renderer: str = "auto") -> str:
+    """The renderer that will most likely be used: 'sketch', or the first Blender engine that can run here."""
+    if renderer == "sketch":
+        return "sketch"
+    return _likely_engine(blender, tuple(engines or DEFAULT_ENGINES))
+
+
+@functools.lru_cache(maxsize=16)
+def _likely_engine(blender: str, order: tuple) -> str:        # looks at the computer once (it does not change while running)
+    if not find_blender(blender):
+        return "sketch"
+    import ctypes.util
+    import sys
+    for e in order:
+        if e == "BLENDER_WORKBENCH" and sys.platform.startswith("linux") and not ctypes.util.find_library("EGL"):
+            continue                     # no graphics libraries: Workbench cannot run here
+        return e
+    return order[-1]
+
+
+def expected_seconds(clip_seconds: float, blender: str = "", engines: Optional[list[str]] = None, renderer: str = "auto") -> float:
+    """About how long rendering a reference of this length takes, plus Blender's start-up."""
+    engine = likely_engine(blender, engines, renderer)
+    start = 0.0 if engine == "sketch" else 8.0
+    return round(start + clip_seconds * RENDER_S_PER_SECOND.get(engine, 38.0), 0)
 
 
 class RenderError(RuntimeError):
@@ -162,6 +195,11 @@ def _hull(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
     return lower[:-1] + upper[:-1]
 
 
+def checker_step(plan: ScenePlan) -> float:
+    """The size of one floor tile in metres: about 1 m in a room, larger in a big set (about 12 tiles along the long side)."""
+    return max(1.0, round(max(plan.set.size[0], plan.set.size[1]) / 12))
+
+
 def sketch_frame(plan: ScenePlan, t: float, size: tuple[int, int]) -> Image.Image:
     """One picture of the plan at time t: sky, a floor grid and every shape as a flat coloured block."""
     w, h = size
@@ -174,23 +212,20 @@ def sketch_frame(plan: ScenePlan, t: float, size: tuple[int, int]) -> Image.Imag
         return (q[0] * w, q[1] * h, q[2]) if q else None
 
     lx, ly = plan.set.size[0], plan.set.size[1]
-    floor = [to_px(c) for c in ([-lx / 2, -ly / 2, 0], [lx / 2, -ly / 2, 0], [lx / 2, ly / 2, 0], [-lx / 2, ly / 2, 0])]
-    if all(floor):
-        draw.polygon([(x, y) for x, y, _ in floor], fill=_rgb(plan.set.floor_colour))
-    step = max(1.0, round(max(lx, ly) / 10))
-    grid = _shade(_rgb(plan.set.floor_colour), 0.8)
-    x = -lx / 2
-    while x <= lx / 2 + 1e-6:
-        a, b = to_px([x, -ly / 2, 0]), to_px([x, ly / 2, 0])
-        if a and b:
-            draw.line([a[:2], b[:2]], fill=grid, width=1)
-        x += step
-    y = -ly / 2
-    while y <= ly / 2 + 1e-6:
-        a, b = to_px([-lx / 2, y, 0]), to_px([lx / 2, y, 0])
-        if a and b:
-            draw.line([a[:2], b[:2]], fill=grid, width=1)
-        y += step
+    # a checker floor of two greys: it makes the camera's movement visible (to the video model and to the camera check)
+    step = checker_step(plan)
+    light, dark = _rgb(plan.set.floor_colour), _shade(_rgb(plan.set.floor_colour), 0.8)
+    nx, ny = max(1, round(lx / step)), max(1, round(ly / step))
+    tiles = []
+    for i in range(nx):
+        for j in range(ny):
+            x0, y0 = -lx / 2 + i * lx / nx, -ly / 2 + j * ly / ny
+            x1, y1 = x0 + lx / nx, y0 + ly / ny
+            pts = [to_px(c) for c in ([x0, y0, 0], [x1, y0, 0], [x1, y1, 0], [x0, y1, 0])]
+            if all(pts):
+                tiles.append((sum(p_[2] for p_ in pts) / 4, (i + j) % 2, [(x, y) for x, y, _ in pts]))
+    for _, odd, poly in sorted(tiles, key=lambda t: -t[0]):
+        draw.polygon(poly, fill=dark if odd else light)
     blocks = []
     for th in plan.things:
         pts = [to_px(c) for c in corners(th, t)]

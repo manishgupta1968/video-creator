@@ -279,6 +279,7 @@ class Scores(BaseModel):
     audio: int = 0            # voice natural, clear, right level, matches the mouth
     continuity: int = 3
     join: int = 0             # the stitch with the clip before it (0 = no evidence: the first clip, or the clip before is not made or only a placeholder)
+    camera: int = 0           # the clip followed its 3D camera reference (0 = the clip has no reference)
     timing: int = 3
     lipsync: int = 3
 
@@ -614,21 +615,23 @@ class Brain:
     async def review_take(self, project: Project, node: Node, frames: list[tuple[float, Path]],
                           transcript: str, measurements: dict, take_seconds: float,
                           video: Optional[Path] = None, history: str = "", pair_times: Optional[list[float]] = None,
-                          join_text: str = "", join: Optional[dict] = None, join_images: Optional[list[Path]] = None) -> ReviewDraft:
+                          join_text: str = "", join: Optional[dict] = None, join_images: Optional[list[Path]] = None,
+                          camera_text: str = "", camera_images: Optional[list[Path]] = None) -> ReviewDraft:
         nums = numbering(project)
         script = node.script.model_dump_json(indent=1) if node.script else "{}"
-        pics = list(join_images or [])
+        pics = list(camera_images or []) + list(join_images or [])          # the join pictures stay the last two
         prompt = render("review", number=nums.get(node.id, ""), title=node.title, goal=node.goal,
                         parents=" > ".join(a.goal for a in ancestors(project, node.id) if a.id != project.root.id),
                         script=script, context=self._context_block(project, node.id),
                         transcript=transcript or "(no speech detected)", measurements=json.dumps(measurements),
                         target=node.duration.likely_s, actual=take_seconds,
                         frame_times=_frame_description(frames, pair_times or []), history=history or "(first review)",
-                        join=join_text or "(there is no clip before this one to compare with: give join 0)")
+                        join=join_text or "(there is no clip before this one to compare with: give join 0)",
+                        camera=camera_text or "(this clip was not made from a 3D camera reference: give camera 0)")
         return await self.ask("review", prompt, ReviewDraft,
                               {"script": node.script.model_dump() if node.script else {}, "transcript": transcript,
                                "measurements": measurements, "target": node.duration.likely_s,
-                               "actual": take_seconds, "join": join or {}, "keep_images": len(pics)},
+                               "actual": take_seconds, "join": join or {}, "keep_images": len(pics), "camera": bool(camera_text)},
                               images=[p for _, p in frames] + pics, video=video)
 
     async def review_node(self, project: Project, node: Node, summaries: str, actual_seconds: float,

@@ -166,7 +166,7 @@ async def build_clip(svc, pid: str, nid: str, renderer: Optional[str] = None) ->
     plan = normalise(n.scene3d.plan)
     settings = p.settings.scene3d
     how = renderer or settings.renderer
-    size = media.frame_size(p.settings.aspect, "720p")       # a reference needs clear movement, not detail
+    size = media.frame_size(p.settings.aspect, render_mod.REFERENCE_RESOLUTION)
     out = _clip_dir(pid, nid)
     try:
         result = await render_mod.render(plan, out, size, blender=svc.config.blender_path,

@@ -268,8 +268,9 @@ class FakeLLM(LLM):
             kind = actors[aid].get("kind", "")
             shape, size = (("creature", [2.0, 0.8, 1.2]) if kind == "animal" else ("box", [0.6, 0.6, 0.6]) if kind == "product"
                            else ("person", [0.5, 0.4, 1.75]))
-            y = (i - (len(in_shot[:4]) - 1) / 2) * 1.5
-            start = [-travel / 2, y, 0.0]
+            # side by side as the camera sees them (staggered along X, a little apart in depth), so no one hides another
+            y = (i % 2) * 0.8
+            start = [-travel / 2 + (i - (len(in_shot[:4]) - 1) / 2) * 1.6, y, 0.0]
             things.append({"id": f"a{i + 1}", "label": actors[aid].get("title") or f"character {i + 1}", "actor_id": aid,
                            "kind": "figure", "shape": shape, "size": size,
                            "keys": [{"t": 0, "at": start}, {"t": secs, "at": [start[0] + travel, y, 0.0]}]})
@@ -407,7 +408,7 @@ class FakeLLM(LLM):
     def _review(self, m: dict) -> dict:
         issues, suggestions = [], []
         scores = {"goal": 4, "script": 4, "actors": 4, "behaviour": 4, "realism": 0, "motion": 0, "consistency": 0,
-                  "fidelity": 0, "audio": 0, "continuity": 4, "join": 0, "timing": 4, "lipsync": 5}   # 0 = the offline brain cannot see or hear
+                  "fidelity": 0, "audio": 0, "continuity": 4, "join": 0, "timing": 4, "lipsync": 5, "camera": 0}   # 0 = the offline brain cannot see or hear
         if m.get("node_review"):
             target, actual = float(m.get("target") or 0), float(m.get("actual") or 0)
             if target and abs(actual - target) / target > 0.15:
@@ -431,6 +432,9 @@ class FakeLLM(LLM):
         if join.get("judged"):          # the offline brain cannot see the pictures: it scores the stitch from the number the tool measured
             over = join.get("kind") == "continues" and join.get("difference") is not None and join["difference"] > float(join.get("limit") or 0.15)
             scores["join"] = 2 if over else 4
+        if meas.get("camera_follow") is not None:      # the offline brain scores the camera from the measured match
+            f = float(meas["camera_follow"])
+            scores["camera"] = 4 if f >= 0.65 else 3 if f >= 0.45 else 2
         if meas.get("flicker", 0) > 0.05:
             scores["consistency"] = 2
             issues.append({"check": "consistency", "text": "visible flicker between frames", "severity": "minor"})

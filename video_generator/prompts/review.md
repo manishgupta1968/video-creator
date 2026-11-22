@@ -22,6 +22,9 @@ ATTACHED IMAGES: {{frame_times}}
 HOW THIS CLIP IS STITCHED TO THE CLIP BEFORE IT:
 {{join}}
 
+ITS 3D CAMERA REFERENCE:
+{{camera}}
+
 EARLIER FEEDBACK ON THIS CLIP (do not repeat advice that was already applied):
 {{history}}
 
@@ -33,12 +36,13 @@ THE QUALITY BAR: the clip should look like real filmed footage of real people, a
 - fidelity: sharp, clean detail; no blur, banding, blocky compression, noise or smearing.
 - audio: voice sounds natural and clear (not robotic), at a good level, fits the character and the mouth. Use the transcript and the measurements; 0 if you cannot tell.
 - join: the STITCH with the clip before it, judged only from the join evidence above (the last two attached images), by the rule for its kind. Does the cut look sensible, or does it look discontinuous, as if two different videos were glued together? Give 5 only when the two pictures flow as the plan says; 1 for a clear jump. Use 0 when there is no evidence (first clip, or the clip before cannot be compared). Say what jumps (pose, place, light, clothing, size, framing) in an issue with check "join".
+- camera: only for a clip made from a 3D camera reference (see above): did it follow the reference camera's move, framing and timing, and is each character where its coloured shape was? Use camera_follow from the measurements (1 = the measured camera path matches closely, below 0.45 = clearly not followed). Give 0 when the clip had no reference.
 - continuity: the story fits the previous clip (facts, order, what was said). timing: matches the target length, no dead air.
 - lipsync: only if someone speaks on camera: mouth shapes follow the words. 5 if nobody speaks on camera; 0 if you cannot tell.
 If it looks like a text card, storyboard or slideshow, say so plainly and give realism 1 and motion 1.
 
 List concrete issues with the time in seconds. Make each suggestion specific and actionable (change the prompt, settings or model; for example 'add "slow blink, subtle head turn, breathing"', 'negative prompt: warped face, extra fingers', 'use Kling 3 for stronger human motion').
-verdict: meets_goal only if every checked score is 4 or more; does_not_meet_goal if goal, script, realism, motion or join is 2 or less; otherwise minor_issues.
+verdict: meets_goal only if every checked score is 4 or more; does_not_meet_goal if goal, script, realism, motion, join or camera is 2 or less; otherwise minor_issues.
 
 
 {{english_line}}
