@@ -252,6 +252,51 @@ class FakeLLM(LLM):
                               "reason": "offline helper: the last sentence of each long text is dropped", "kept": "the first sentences carry the main point (the offline helper cannot judge meaning; check it)"})
         return {"edits": edits, "note": "offline helper: simple sentence trimming" if edits else "nothing here has two sentences to trim"}
 
+    def _scene_plan(self, m: dict) -> dict:
+        """Offline fallback for the 3D camera reference: the clip's characters in a row as plain shapes, moving if the
+        script says they move, and a camera move read from the script's camera words. Plain, but every check passes."""
+        sc = m.get("script") or {}
+        secs = float(m.get("seconds") or 5)
+        actors = {a["id"]: a for a in m.get("actors") or []}
+        in_shot = [a.get("actor_id") for a in sc.get("actors_in_shot") or [] if a.get("actor_id") in actors] or list(actors)[:3]
+        words = " ".join([sc.get("camera") or "", sc.get("visual") or "", " ".join(sc.get("action_beats") or [])]).lower()
+        moving = any(w in words for w in ("run", "walk", "chase", "flee", "race", "drive", "fly", "move"))
+        travel = (4.0 if any(w in words for w in ("run", "chase", "flee", "race")) else 1.4) * secs if moving else 0.0
+        length = max(20.0, travel + 12)
+        things = []
+        for i, aid in enumerate(in_shot[:4]):
+            kind = actors[aid].get("kind", "")
+            shape, size = (("creature", [2.0, 0.8, 1.2]) if kind == "animal" else ("box", [0.6, 0.6, 0.6]) if kind == "product"
+                           else ("person", [0.5, 0.4, 1.75]))
+            y = (i - (len(in_shot[:4]) - 1) / 2) * 1.5
+            start = [-travel / 2, y, 0.0]
+            things.append({"id": f"a{i + 1}", "label": actors[aid].get("title") or f"character {i + 1}", "actor_id": aid,
+                           "kind": "figure", "shape": shape, "size": size,
+                           "keys": [{"t": 0, "at": start}, {"t": secs, "at": [start[0] + travel, y, 0.0]}]})
+        if not things:
+            things.append({"id": "subject", "label": m.get("title") or "the subject", "kind": "figure", "shape": "box",
+                           "size": [1, 1, 1], "keys": [{"t": 0, "at": [0, 0, 0]}]})
+        mid_end = travel / 2
+
+        def follow(x: float) -> float:          # the camera looks where the figures are
+            return x if moving else 0.0
+        if any(w in words for w in ("above", "overhead", "aerial", "comes down", "descend", "bird")):
+            cam = [{"t": 0, "at": [follow(-mid_end), -6, 12], "look_at": [follow(-mid_end), 0, 0]},
+                   {"t": secs, "at": [follow(mid_end), -7, 1.7], "look_at": [follow(mid_end), 0, 1.0]}]
+        elif "pan" in words:
+            cam = [{"t": 0, "at": [0, -9, 1.7], "look_at": [-mid_end - 2, 0, 1.0]},
+                   {"t": secs, "at": [0, -9, 1.7], "look_at": [mid_end + 2, 0, 1.0]}]
+        elif any(w in words for w in ("push in", "zoom in", "dolly in", "close")):
+            cam = [{"t": 0, "at": [follow(-mid_end), -10, 1.7], "look_at": [follow(-mid_end), 0, 1.0]},
+                   {"t": secs, "at": [follow(mid_end), -4, 1.6], "look_at": [follow(mid_end), 0, 1.2]}]
+        else:                                     # follow the action from the side, or hold with a slow push
+            cam = [{"t": 0, "at": [follow(-mid_end), -9, 1.7], "look_at": [follow(-mid_end), 0, 1.0]},
+                   {"t": secs, "at": [follow(mid_end), -8 if not moving else -9, 1.7], "look_at": [follow(mid_end), 0, 1.0]}]
+        return {"set_id": "set", "set": {"name": "the place of this clip", "size": [length, 14, 6]},
+                "things": things, "camera": {"lens_mm": 35, "keys": cam, "move": sc.get("camera") or "a steady camera"},
+                "lights": [{"kind": "sun", "at": [-6, -6, 10], "look_at": [0, 0, 0], "strength": 3}],
+                "seconds": secs, "fps": 24, "aspect": m.get("aspect") or "16:9"}
+
     def _split_clip(self, m: dict) -> dict:
         """Offline fallback: split at the script's own structure. The spoken part (all dialogue) becomes a face-only clip about as long
         as the speech; the action steps become the other clip(s)."""

@@ -117,6 +117,10 @@ class VideoRequest:
     camera: str = ""
     label: str = ""
     params: dict = field(default_factory=dict)      # the catalogue row's `params` (field names, allowed lengths …)
+    # a rough video whose camera path, framing and movement the model must follow (for example a 3D blocking render);
+    # only models whose catalogue row has the `reference_video` capability are given one
+    reference_video: Optional[Path] = None
+    reference_labels: list[str] = field(default_factory=list)   # what each of `references` shows, in the same order
 
 
 class VideoGenerator(Plugin):

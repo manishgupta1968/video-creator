@@ -145,6 +145,8 @@ class Registry:
                 continue
             if mode == "free" and not e.is_free:
                 continue
+            if any(not need.get(r) for r in (e.capabilities.get("requires") or [])):
+                continue        # a model that only works with an input this clip does not have (e.g. a reference video)
             if all(capability_covers(job, e.capabilities, cap, want) for cap, want in need.items()):
                 out.append(e)
 

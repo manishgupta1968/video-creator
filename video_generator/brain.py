@@ -532,6 +532,22 @@ class Brain:
         return await self.ask("split_clip", prompt, ClipSplit, {"title": node.title, "goal": node.goal, "seconds": secs,
                                                                   "script": sc.model_dump() if sc else {}})
 
+    async def scene_plan(self, project: Project, node: Node, shared_set: str = "", previous: str = ""):
+        """A rough 3D plan of one clip (the "3D camera reference" add-on): plain shapes, their paths and the camera path."""
+        from .scene3d.spec import ScenePlan
+        nums = numbering(project)
+        sc = node.script
+        secs = node.duration.likely_s or node.target_seconds or (sc.target_seconds if sc else None) or 6
+        prompt = render("scene_plan", outline=outline(project), number=nums.get(node.id, ""), title=node.title, goal=node.goal,
+                        seconds=f"{secs:g}", aspect=project.settings.aspect, actors=self._actor_list(project, node.id),
+                        script=sc.model_dump_json(indent=1) if sc else "(none)",
+                        shared_set=shared_set or "(none yet: this clip decides the set)", previous=previous or "(not a continuation)")
+        return await self.ask("scene_plan", prompt, ScenePlan,
+                              {"title": node.title, "goal": node.goal, "seconds": secs, "aspect": project.settings.aspect,
+                               "script": sc.model_dump() if sc else {},
+                               "actors": [{"id": a.id, "title": a.title, "kind": a.actor.kind if a.actor else ""}
+                                          for a in project.context if a.type == ContextType.actor]})
+
     async def write_clip_script(self, project: Project, node: Node, feedback: str = "") -> ClipScriptDraft:
         nums = numbering(project)
         prev = _previous_leaf(project, node)

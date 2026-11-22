@@ -52,6 +52,10 @@ class Config(BaseModel):
     projects_dir: str = ""
     max_parallel_jobs: int = 4
     user_name: str = ""
+    # the 3D camera reference add-on: the Blender program ("" = found by itself) and the render engines to try in order
+    # (Workbench is fast but needs graphics libraries; Cycles on the CPU works on any machine, more slowly)
+    blender_path: str = ""
+    blender_engines: list[str] = Field(default_factory=lambda: ["BLENDER_WORKBENCH", "CYCLES"])
     policy: Policy = Field(default_factory=Policy)     # every quality threshold in one place: see `vg policy`
 
     # ------------------------------------------------------------------ io
