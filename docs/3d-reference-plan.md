@@ -45,7 +45,7 @@ those steps automatically inside the tool.
 | 9 | You approve the 3D preview, or auto-approve does it | You / setting | done (`vg scene3d approve`) |
 | 10 | Turn the first frame into a realistic start picture with the character and location pictures | image model | done |
 | 11 | Make the video from the reference, the pictures and the prompt | video model (reference-to-video) | done |
-| 12 | Review: "Did it follow the camera?" | Review Agent | phase 5 |
+| 12 | Review: "Did it follow the camera?" | Review Agent + free measurement | done |
 | 13 | Pick takes, join with music | as today | exists |
 
 ## Phases
@@ -107,12 +107,29 @@ those steps automatically inside the tool.
      problems are shown to you and nothing is changed.
    - **The whole chain** for a clip, or for every clip in story order: plan (when there is none, or the length
      changed) → fix → render → approve by itself when auto-approve is on.
-5. **Screens and numbers.** A switch per video and per part, the 3D preview panel with the check pictures, the
-   cost and time of the 3D step in the estimates, and the new review check.
+5. **Screens and numbers (done).**
+   - **Screens.** The whole video has a "3D camera reference" box: the on/off switch, auto-approve, who fixes (Claude
+     Code / Codex / the pair), the money cap per clip, the renderer, and "Prepare all 3D references". A part chooses
+     On, Off or "Same as above". A clip shows its status ("Waiting for your approval", "Approved", "Out of date: …"),
+     whether the reference is used, the colour legend, the problems, the reference video and the start, middle and end
+     pictures, and the buttons: Plan, check and render · Plan again · Fix with Claude Code (+ Codex check) · Approve.
+     Slow jobs run in the background and the screen updates when they finish.
+   - **Numbers.** A clip with the add-on on shows, in its cost breakdown: the 3D plan (AI brain), the reference render
+     (free, with the time of the engine that can run on this computer), and the agent's fixes ("at most $2.00", counted
+     only in the highest figure). An approved, up-to-date reference adds nothing.
+   - **Review.** A clip made from a reference gets a "camera" score. The tool measures, for free, how the whole picture
+     moves in the reference and in the clip (left, right, up, down) and compares the two paths: `camera_follow` from 0
+     to 1. Below 0.45 is a major issue (the camera score is capped at 2, and the verdict becomes "does not meet goal");
+     below 0.65 is minor. The Review Agent also sees the reference's first and last pictures. No reference means no
+     camera score.
+   - **Known limit of the measurement:** a camera that travels with its subject keeps the subject still in the
+     picture, so such a shot reads as nearly still; a correct clip reads the same way, so the comparison stays fair.
+     Pure push-ins and zooms slide very little, so for those the Review Agent's look at the pictures matters more.
+   - **Reference renders** are 480p with a checker floor of two greys, so camera movement is easy to see.
 
 ## Render engines
 - **Workbench** is fast. On Linux it needs the `libegl1` and `libgl1-mesa-dri` packages, and then works even with
-  no graphics card. Measured on the build machine: a 4-second 640×360 clip took 35 s.
+  no graphics card. Measured on the build machine: a 4-second 640×360 clip took 21–35 s.
 - **Cycles** on the processor works on any machine, more slowly. The same clip took 82 s.
 - The order is set by `blender_engines` in the settings. The next engine is tried when one fails, and the free
   sketch is used when every engine fails.

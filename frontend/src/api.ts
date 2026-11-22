@@ -18,6 +18,23 @@ export interface Take { id: string; version: number; index: number; video: strin
 export type Join = "" | "continues" | "same_scene" | "cut";
 export interface Continuity { join: Join; join_reason: string; place: string; present: string[]; start_state: string; end_state: string; carry_over: string; difference: number | null }
 export interface Version { version: number; script: Script; feedback: string; created_at: string }
+export interface ScenePlanKey { t: number; at: number[]; look_at?: number[]; lens_mm?: number | null }
+export interface ScenePlan {
+  set_id: string; set: { name: string; size: number[]; walls: boolean; floor_colour: string; wall_colour: string };
+  things: { id: string; label: string; actor_id: string; kind: "figure" | "prop"; shape: string; size: number[]; colour: string; keys: ScenePlanKey[] }[];
+  camera: { lens_mm: number; keys: ScenePlanKey[]; move: string }; seconds: number; fps: number; aspect: string; notes: string;
+}
+export interface Scene3DClip {
+  plan: ScenePlan | null; status: "planned" | "rendered" | "approved" | "failed"; renderer: string; engine: string;
+  video: string | null; first: string | null; last: string | null; checks: Record<string, string>; blend: string | null;
+  issues: string[]; notes: string[]; approved_by: "" | "you" | "auto"; plan_hash: string;
+  agent_rounds: number; agent_cost_usd: number; agent_log: string[]; updated_at: string;
+}
+export interface Scene3DSettings { enabled: boolean; agent: "claude_code" | "codex" | "pair"; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
+export interface Scene3DInfo {
+  enabled: boolean; own_choice: boolean | null; stale: string; ready: boolean; legend: { colour: string; is: string }[]; issues: string[];
+  renderer: string; agents: { builder: string | null; checker: string | null; notes: string[] };
+}
 export interface Node {
   id: string; kind: NodeKind; title: string; goal: string; children: Node[]; target_seconds: number | null;
   style_overrides: Record<string, string>; context_add: string[]; context_off: string[]; context_override: Record<string, string>;
@@ -26,6 +43,7 @@ export interface Node {
   takes: Take[]; chosen_take: string | null; voice_audio: string | null; voice_seconds: number | null; output: string | null;
   warnings: string[]; needs_split: boolean; review_enabled: boolean;
   locked?: boolean; quality_mode?: "best" | "balanced" | "budget" | "free" | null; ambience?: boolean | null; continuity?: Continuity; blocked?: string;
+  scene3d_enabled?: boolean | null; scene3d?: Scene3DClip | null;
 }
 export interface Actor { kind: string; description: string; clothing: string; behaviour: string; voice_description: string; voice_gender: string; voice_age: string; voice_pitch: string; voice_pace: string; voice_accent: string; voice_accent_label?: string; language?: string; voice_name: string; voice_note: string; voice_sample: string | null; voice_provider: string | null; voice_id: string | null; speaking_wpm: number | null; props: string; reference_sheet: string[]; avatar_id: string | null }
 export interface Ctx {
@@ -40,7 +58,7 @@ export interface Review {
   issues: { check: string; text: string; at_s: number | null; frame: string | null; severity: string }[];
   suggestions: { id: string; text: string; accepted: boolean }[]; summary: string; reviewer_model: string; cost_usd: number;
 }
-export interface Settings { auto_photo: boolean; length_mode: "auto" | "fixed"; target_seconds: number; aspect: string; resolution: string; fps: number; format: "mp4" | "mov"; budget_usd: number; takes_people: number; takes_other: number; language: string; also_languages?: string[]; subtitle_language?: "spoken" | "english" | "both"; default_wpm: number; subtitles: boolean; auto_pick: boolean; review_enabled: boolean; music: boolean; ambience: boolean; fill: "blur" | "black" | "crop"; quality_mode: string }
+export interface Settings { auto_photo: boolean; length_mode: "auto" | "fixed"; target_seconds: number; aspect: string; resolution: string; fps: number; format: "mp4" | "mov"; budget_usd: number; takes_people: number; takes_other: number; language: string; also_languages?: string[]; subtitle_language?: "spoken" | "english" | "both"; default_wpm: number; subtitles: boolean; auto_pick: boolean; review_enabled: boolean; music: boolean; ambience: boolean; fill: "blur" | "black" | "crop"; quality_mode: string; scene3d: Scene3DSettings }
 export interface Project {
   id: string; name: string; goal: string; settings: Settings; style: { look: string; colour: string; mood: string; notes: string };
   root: Node; context: Ctx[]; dependencies: Dep[]; reviews: Review[];
@@ -226,6 +244,12 @@ export const api = {
   optimizeApply: (pid: string, body: OptRequest) => req<View>("POST", `${P(pid)}/optimize/apply`, body),
   rewriteOffer: (pid: string, nid: string) => req<{ clips: number; numbers: string[]; kept: string[]; cost_usd: number }>("GET", `${P(pid)}/nodes/${nid}/rewrite-offer`),
   modeCosts: (pid: string, nid: string) => req<ModeCosts>("GET", `${P(pid)}/nodes/${nid}/mode-costs`),
+  scene3d: (pid: string, nid: string) => req<Scene3DInfo>("GET", `${P(pid)}/nodes/${nid}/scene3d`),
+  scene3dBuild: (pid: string, nid: string, body: { fix?: boolean; renderer?: string; replan?: boolean }) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/build`, body),
+  scene3dFix: (pid: string, nid: string, body: { agent?: string; rounds?: number } = {}) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/fix`, body),
+  scene3dApprove: (pid: string, nid: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/scene3d/approve`),
+  scene3dSetPlan: (pid: string, nid: string, plan: ScenePlan) => req<View>("PUT", `${P(pid)}/nodes/${nid}/scene3d/plan`, plan),
+  scene3dAll: (pid: string, body: { fix?: boolean; renderer?: string } = {}) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/all`, body),
   fixContinuity: (pid: string, body: { action: string; node?: string; join?: string }) => req<View>("POST", `${P(pid)}/continuity/fix`, body),
   unpin: (pid: string, ids?: string[]) => req<View>("POST", `${P(pid)}/unpin`, ids ? { ids } : {}),
   pick: (pid: string, nid: string, take_id: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/pick`, { take_id }),

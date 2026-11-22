@@ -186,3 +186,45 @@ def test_a_clip_that_copies_the_reference_camera_passes_the_camera_check(svc, mo
     assert review.measurements["camera_reference_move"] >= follow.STILL
     assert review.measurements["camera_follow"] >= 0.65
     assert not [i for i in review.issues if i.check == "camera"]
+
+
+# ----------------------------------------------------------------- the screen (web routes)
+@requires_ffmpeg
+def test_the_screen_can_switch_build_approve_and_edit_the_reference(svc, monkeypatch):
+    from fastapi.testclient import TestClient
+    from video_generator.web import app as appmod
+    monkeypatch.setattr(appmod, "svc", svc)
+    monkeypatch.setattr(appmod.engine, "svc", svc)
+    p, ids = two_shot_project(svc)
+    part = p.root.children[0].id
+    with TestClient(appmod.app) as client:
+        base = f"/api/projects/{p.id}"
+        info = client.get(f"{base}/nodes/{ids[0]}/scene3d").json()
+        assert info["enabled"] is False and info["legend"] == [] and set(info["agents"]) == {"builder", "checker", "notes"}
+        # on for one part only, then for the whole video with the sketch renderer
+        r = client.patch(f"{base}/nodes/{part}", json={"scene3d_enabled": True}).json()
+        assert r["project"]["root"]["children"][0]["scene3d_enabled"] is True
+        assert client.get(f"{base}/nodes/{ids[0]}/scene3d").json()["enabled"] is True
+        assert client.patch(f"{base}/nodes/{part}", json={"scene3d_enabled": "maybe"}).status_code == 400
+        st = r["project"]["settings"]["scene3d"]
+        client.patch(base, json={"settings": {"scene3d": {**st, "enabled": True, "renderer": "sketch"}}})
+        assert svc.load(p.id).settings.scene3d.renderer == "sketch"
+        # build runs in the background and the screen is told when it is done
+        assert client.post(f"{base}/nodes/{ids[0]}/scene3d/build", json={}).json() == {"ok": True}
+        for _ in range(200):
+            s = find(svc.load(p.id), ids[0]).scene3d
+            if s and s.status == "rendered":
+                break
+            asyncio.run(asyncio.sleep(0.1))
+        info = client.get(f"{base}/nodes/{ids[0]}/scene3d").json()
+        assert [l["is"] for l in info["legend"]] == ["Dan", "Bruiser", "Lizard"] and info["renderer"] == "sketch" and not info["ready"]
+        view = client.post(f"{base}/nodes/{ids[0]}/scene3d/approve").json()
+        assert view["project"]["root"]["children"][0]["children"][0]["scene3d"]["approved_by"] == "you"
+        assert client.get(f"{base}/nodes/{ids[0]}/scene3d").json()["ready"] is True
+        # an edit by hand makes it out of date; a broken plan is refused
+        plan = find(svc.load(p.id), ids[0]).scene3d.plan.model_dump()
+        plan["camera"]["lens_mm"] = 70
+        client.put(f"{base}/nodes/{ids[0]}/scene3d/plan", json=plan)
+        assert "plan changed" in client.get(f"{base}/nodes/{ids[0]}/scene3d").json()["stale"]
+        assert client.put(f"{base}/nodes/{ids[0]}/scene3d/plan", json={"things": "no"}).status_code == 400
+        assert client.post(f"{base}/nodes/{ids[0]}/scene3d/approve").status_code == 400

@@ -8,6 +8,7 @@ import { useLanguages } from "./LanguageControls";
 import DownloadButton from "./Download";
 import ModelPicker from "./ModelPicker";
 import QualityForPart from "./QualityForPart";
+import { Scene3DClipPanel, Scene3DPartPanel } from "./Scene3DPanel";
 import { OptimizeButton } from "./OptimizeDialog";
 import { useQuery } from "@tanstack/react-query";
 import { FinalVideoDialog, PreviewBadge } from "./Banners";
@@ -57,6 +58,7 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
       </Card>
       {goalEdited && clipsBelow.some((c) => c.kind === "clip" && c.script) && <RewriteOffer node={node} onDone={() => setGoalEdited(false)} />}
       <QualityForPart node={node} isRoot={isRoot} />
+      <Scene3DPartPanel node={node} isRoot={isRoot} />
       {isRoot && p.music_advice && (
         <Card className="flex flex-wrap items-center gap-3 p-3 text-xs">
           <div className="min-w-0 flex-1"><span className="font-semibold">Music suggestion from the plan:</span> <span className="text-muted">{p.music_advice}</span></div>
@@ -326,6 +328,8 @@ function ClipEditor({ node }: { node: Node }) {
           </Button>
         </div>
       </Card>
+
+      {node.kind === "clip" && <Scene3DClipPanel node={node} />}
 
       {shownTakes.length > 0 && node.kind === "clip" && <Takes node={node} takes={shownTakes} />}
 

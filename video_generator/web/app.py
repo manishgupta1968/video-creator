@@ -659,6 +659,84 @@ async def compare(pid: str, nid: str, body: dict = Body(...)):
     return {"ok": True}
 
 
+# ===================================================================== 3D camera reference
+@app.get("/api/projects/{pid}/nodes/{nid}/scene3d")
+async def scene3d_info(pid: str, nid: str):
+    """What the 3D panel shows for a clip: on or off (and why), whether the reference is used, the colour legend, and
+    what can run on this computer."""
+    from ..scene3d import service as s3
+    from ..scene3d import render as render_mod
+    from ..scene3d.spec import legend
+    from ..scene3d.agent import pick_agents
+    p = svc.load(pid)
+    n = find(p, nid)
+    st = p.settings.scene3d
+    s = n.scene3d
+    builder, checker, notes = pick_agents(svc, st.agent)
+    return {"enabled": s3.enabled_for(p, n), "own_choice": n.scene3d_enabled,
+            "stale": s3.stale_reason(n) if s and s.video else "", "ready": bool(s3.ready_reference(p, n)),
+            "legend": [{"colour": c, "is": who} for c, who in legend(s.plan)] if s and s.plan else [],
+            "issues": s3.issues_text(s.plan)[0] if s and s.plan else [],
+            "renderer": render_mod.likely_engine(svc.config.blender_path, svc.config.blender_engines, st.renderer),
+            "agents": {"builder": builder, "checker": checker, "notes": notes}}
+
+
+def _scene3d_call(fn, *args):
+    from ..scene3d import service as s3
+
+    async def run():
+        try:
+            return await fn(*args) if asyncio.iscoroutinefunction(fn) else fn(*args)
+        except s3.Scene3DError as exc:
+            raise ValueError(str(exc)) from exc
+    return run
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/scene3d/build")
+async def scene3d_build(pid: str, nid: str, body: dict = Body(default={})):
+    """Plan (if needed), fix (if a check finds a problem) and render one clip's reference, in the background."""
+    from ..scene3d import agent as ag
+    bg(_scene3d_call(ag.prepare_clip, svc, pid, nid, bool(body.get("fix", True)), body.get("renderer") or None,
+                     bool(body.get("replan", False)))(), pid, f"3D reference {numbering(svc.load(pid)).get(nid, '')}")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/scene3d/fix")
+async def scene3d_fix(pid: str, nid: str, body: dict = Body(default={})):
+    from ..scene3d import agent as ag
+    bg(_scene3d_call(ag.fix_clip, svc, pid, nid, body.get("rounds"), body.get("agent") or None)(), pid,
+       f"3D fix {numbering(svc.load(pid)).get(nid, '')}")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/scene3d/approve")
+async def scene3d_approve(pid: str, nid: str):
+    from ..scene3d import service as s3
+    await guard(_scene3d_call(s3.approve, svc, pid, nid))()
+    return view(pid)
+
+
+@app.put("/api/projects/{pid}/nodes/{nid}/scene3d/plan")
+async def scene3d_set_plan(pid: str, nid: str, body: dict = Body(...)):
+    """Replace the plan (an edit by hand). The rendered reference becomes out of date."""
+    from ..scene3d import service as s3
+    from ..scene3d.spec import ScenePlan
+    try:
+        plan = ScenePlan.model_validate(body)
+    except Exception as exc:
+        raise HTTPException(400, f"not a valid 3D plan: {str(exc)[:300]}")
+    await guard(_scene3d_call(s3.set_plan, svc, pid, nid, plan))()
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/scene3d/all")
+async def scene3d_all(pid: str, body: dict = Body(default={})):
+    """Plan, fix and render every clip that has the 3D camera reference on, in story order, in the background."""
+    from ..scene3d import agent as ag
+    bg(ag.prepare_all(svc, pid, bool(body.get("fix", True)), body.get("renderer") or None), pid, "3D references")
+    return {"ok": True}
+
+
 # ===================================================================== review & versions
 @app.patch("/api/projects/{pid}/reviews/{rid}/suggestions/{sid}")
 async def patch_suggestion(pid: str, rid: str, sid: str, body: dict = Body(...)):
