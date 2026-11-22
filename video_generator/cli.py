@@ -721,7 +721,7 @@ def doctor():
     from .config import load_env
     load_env()                       # keys saved in the GUI live in ~/.video-generator/.env
     marks = {dr.OK: "[green]✓[/]", dr.WARN: "[yellow]![/]", dr.BAD: "[red]✗[/]", dr.SKIP: "[dim]-[/]"}
-    checks = asyncio.run(dr.run_checks(catalog=Catalog.load())) + dr.check_blender(Config.load().blender_path)
+    checks = asyncio.run(dr.run_checks(catalog=Catalog.load())) + dr.check_blender(Config.load().blender_path) + dr.check_agents()
     for c in checks:
         con.print(f"{marks[c.status]} [bold]{c.name}[/]: {c.message}", highlight=False)
     bad = [c for c in checks if c.status == dr.BAD]
@@ -885,6 +885,8 @@ def _scene3d_show(svc, pid: str, nid: str) -> None:
         con.print(f"  {colour} shape = {label}")
     for i in s.issues:
         con.print(f"  [yellow]! {i}[/]")
+    if s.agent_rounds:
+        con.print(f"  agent: {s.agent_rounds} round(s), ${s.agent_cost_usd:.2f} spent on this clip")
     for note in s.notes:
         con.print(f"  [dim]{note}[/]")
     if s.video:
@@ -947,25 +949,76 @@ def scene3d_plan(clip: str, project: Optional[str] = typer.Option(None, "-p")):
     _scene3d_show(svc, pid, nid)
 
 
+def _fix_lines(rep) -> None:
+    if not rep:
+        return
+    who = rep.builder + (f" + {rep.checker} looking" if rep.checker else "")
+    con.print(f"  fixing ({who or 'no agent'}): {rep.rounds} round(s), ${rep.cost_usd:.2f}, "
+              + ("[green]fixed[/]" if rep.fixed else "[yellow]not fully fixed[/]"))
+    for line in rep.log:
+        con.print(f"    {line}")
+
+
 @scene3d_app.command("build")
 def scene3d_build(clip: str, project: Optional[str] = typer.Option(None, "-p"),
-                  renderer: str = typer.Option("", help="auto | blender | sketch (default: the project's setting)")):
-    """Render a clip's 3D plan into its reference video (makes the plan first if there is none)."""
+                  renderer: str = typer.Option("", help="auto | blender | sketch (default: the project's setting)"),
+                  fix: bool = typer.Option(True, "--fix/--no-fix", help="let the agent fix the plan first when a check finds a problem")):
+    """Plan (if needed), fix (if a check finds a problem), and render a clip's 3D reference."""
+    from .scene3d import agent as ag
     from .scene3d import service as s3
     svc = _svc()
     pid = _pid(project)
     nid = _node(svc, pid, clip)
-    n = find(svc.load(pid), nid)
-    if not n.scene3d or not n.scene3d.plan:
-        with con.status("Planning the 3D scene…"):
-            asyncio.run(s3.plan_clip(svc, pid, nid))
-    with con.status("Rendering the 3D reference (Blender can take a few minutes)…"):
+    with con.status("Planning, checking and rendering the 3D reference (Blender and the agent can take a few minutes)…"):
         try:
-            asyncio.run(s3.build_clip(svc, pid, nid, renderer or None))
+            rep = asyncio.run(ag.prepare_clip(svc, pid, nid, fix=fix, renderer=renderer or None))
         except s3.Scene3DError as exc:
             con.print(f"[red]{exc}[/]")
             raise typer.Exit(1)
+    _fix_lines(rep.fix)
     _scene3d_show(svc, pid, nid)
+
+
+@scene3d_app.command("fix")
+def scene3d_fix(clip: str, project: Optional[str] = typer.Option(None, "-p"),
+                agent: str = typer.Option("", help="claude_code | codex | pair (default: the project's setting)"),
+                rounds: Optional[int] = typer.Option(None, help="the most check-and-fix rounds (default: the project's setting)")):
+    """Let Claude Code / Codex fix a clip's 3D plan until the checks pass. Build it again afterwards."""
+    from .scene3d import agent as ag
+    from .scene3d import service as s3
+    if agent and agent not in ("claude_code", "codex", "pair"):
+        raise typer.BadParameter("use claude_code, codex or pair", param_hint="--agent")
+    svc = _svc()
+    pid = _pid(project)
+    nid = _node(svc, pid, clip)
+    with con.status("The agent is fixing the 3D plan…"):
+        try:
+            rep = asyncio.run(ag.fix_clip(svc, pid, nid, rounds=rounds, agent=agent or None))
+        except s3.Scene3DError as exc:
+            con.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+    _fix_lines(rep)
+    _scene3d_show(svc, pid, nid)
+
+
+@scene3d_app.command("all")
+def scene3d_all(project: Optional[str] = typer.Option(None, "-p"),
+                renderer: str = typer.Option("", help="auto | blender | sketch"),
+                fix: bool = typer.Option(True, "--fix/--no-fix", help="let the agent fix plans that fail a check")):
+    """Plan, fix and render the 3D reference of every clip that has it switched on, in story order."""
+    from .scene3d import agent as ag
+    svc = _svc()
+    pid = _pid(project)
+    with con.status("Preparing the 3D references…"):
+        reports = asyncio.run(ag.prepare_all(svc, pid, fix=fix, renderer=renderer or None))
+    if not reports:
+        con.print("No clip has the 3D camera reference switched on (use `vg scene3d on`), or no clip has a script yet.")
+    for rep in reports:
+        if rep.error:
+            con.print(f"[red]{numbering(svc.load(pid)).get(rep.nid, rep.nid)}: {rep.error}[/]")
+            continue
+        _fix_lines(rep.fix)
+        _scene3d_show(svc, pid, rep.nid)
 
 
 @scene3d_app.command("approve")

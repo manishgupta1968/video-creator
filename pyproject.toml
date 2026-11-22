@@ -76,6 +76,9 @@ openai_transcribe = "video_generator.plugins.transcribe.whisper:OpenAITranscribe
 flicker = "video_generator.plugins.quality.scorers:FlickerScorer"
 face_similarity = "video_generator.plugins.quality.scorers:FaceSimilarityScorer"
 ffmpeg = "video_generator.plugins.assemble.ffmpeg_assembler:FFmpegAssembler"
+fake_agent = "video_generator.plugins.fake.fake_agent:FakeAgent"
+claude_code = "video_generator.plugins.agent.cli_agents:ClaudeCodeAgent"
+codex = "video_generator.plugins.agent.cli_agents:CodexAgent"
 
 [tool.setuptools.packages.find]
 include = ["video_generator*"]

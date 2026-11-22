@@ -310,6 +310,9 @@ class Scene3DClip(BaseModel):
     notes: list[str] = Field(default_factory=list)
     approved_by: Literal["", "you", "auto"] = ""
     plan_hash: str = ""                 # the plan the files were rendered from (a changed plan makes them out of date)
+    agent_rounds: int = 0               # check-and-fix rounds the agent has run on this clip
+    agent_cost_usd: float = 0.0         # what the agent has spent on this clip
+    agent_log: list[str] = Field(default_factory=list)       # what happened in each round, in plain words
     updated_at: str = Field(default_factory=now_iso)
 
 
@@ -404,6 +407,7 @@ class Scene3DSettings(BaseModel):
     agent: Literal["claude_code", "codex", "pair"] = "claude_code"   # who builds and fixes scenes the fixed builder cannot
     auto_approve: bool = False          # True = a rendered 3D preview whose checks pass is approved by itself
     max_fix_rounds: int = 3             # automatic check-and-fix rounds before the preview is shown to you
+    agent_max_usd: float = 2.0          # the most the agent may spend on one clip (all rounds together)
     renderer: Literal["auto", "blender", "sketch"] = "auto"   # auto = Blender when installed, else the free sketch
 
 

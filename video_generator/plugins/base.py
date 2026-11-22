@@ -254,6 +254,34 @@ class QualityScorer(Plugin):
         raise NotImplementedError
 
 
+@dataclass
+class AgentTask:
+    """One job for a coding agent (Claude Code, Codex) in a locked work folder. The agent may only change the files the
+    instructions name, and may only run the check command they name."""
+    folder: Path
+    instructions: str
+    role: str = "builder"          # builder: changes plan.json | checker: only looks and writes verdict.json
+    allowed_command: str = ""      # the one command the agent may run (e.g. the free plan check)
+    max_usd: float = 1.0           # the most this one run may spend
+    timeout_s: int = 900
+
+
+@dataclass
+class AgentResult:
+    ok: bool
+    summary: str = ""              # what the agent says it did, in its own words
+    cost_usd: float = 0.0
+    raw: dict = field(default_factory=dict)
+
+
+class SceneAgent(Plugin):
+    """A coding agent that fixes a clip's rough 3D plan (the 3D camera reference add-on)."""
+    job = "scene_agent"
+
+    async def run(self, task: AgentTask) -> AgentResult:
+        raise NotImplementedError
+
+
 # ----------------------------------------------------------------------- helpers
 def data_uri(path: Path) -> str:
     mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"

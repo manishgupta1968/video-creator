@@ -222,3 +222,15 @@ def check_blender(configured: str = "") -> list[Check]:
                                                         "minute or more per few seconds of video). Installing the libegl1 and libgl1-mesa-dri packages lets "
                                                         "Workbench run, which is about twice as fast even with no graphics card."))
     return out
+
+
+def check_agents() -> list[Check]:
+    """The 3D camera reference add-on: which coding agents can fix 3D plans (only checks that the commands exist)."""
+    from .plugins.agent.cli_agents import ClaudeCodeAgent, CodexAgent
+    out = []
+    for cls, what in ((ClaudeCodeAgent, "Claude Code"), (CodexAgent, "Codex")):
+        exe = cls().exe()
+        out.append(Check(what, OK, f"found at {exe}.") if exe else
+                   Check(what, SKIP, f"not installed. (Optional: fixes 3D plans for the 3D camera reference. Install the "
+                                     f"`{cls.program}` command, or set {cls.env_override} to its path.)"))
+    return out

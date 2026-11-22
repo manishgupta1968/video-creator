@@ -41,7 +41,7 @@ those steps automatically inside the tool.
 | 5 | Scene plan for each clip: shapes, colours, sizes in metres, paths, camera path, light | AI brain | done |
 | 6 | Measured checks: a figure never in view, the camera inside a shape, shapes outside the set | plain Python, free | done |
 | 7 | Render the reference in background Blender; the free sketch when Blender is missing or fails | Blender / sketch | done |
-| 8 | Automatic check-and-fix rounds (up to `max_fix_rounds`) with Claude Code / Codex | agent | phase 4 |
+| 8 | Automatic check-and-fix rounds (up to `max_fix_rounds`) with Claude Code / Codex | agent | done |
 | 9 | You approve the 3D preview, or auto-approve does it | You / setting | done (`vg scene3d approve`) |
 | 10 | Turn the first frame into a realistic start picture with the character and location pictures | image model | done |
 | 11 | Make the video from the reference, the pictures and the prompt | video model (reference-to-video) | done |
@@ -82,9 +82,31 @@ those steps automatically inside the tool.
        reference video and start from a picture. The hand-over rule wins.
      - The speech needs a model that speaks the line itself.
    - **A clip made before its reference was approved** is marked out of date, so you can make it again.
-4. **The agent (Claude Code / Codex / pair).** A `scene_agent` plugin kind, run through the command-line tools
-   (`claude -p …`, `codex exec …`) in a locked folder, allowed only to edit the plan and run Blender. Used when a check
-   fails, or when a shape needs more than the fixed builder makes.
+4. **The agent: Claude Code, Codex or the pair (done).**
+   - **When it runs:** only when a measured check finds a major problem, or always in pair mode (the checker looks
+     at the pictures). A plan that is already rendered and unchanged is never fixed, or paid for, again.
+   - **The locked work folder** (`clips/<clip>/scene3d/agent/round_N/`) holds `plan.json` (the only file the builder
+     may change), `clip.json` (what the shot must show, and which colour is which character), `problems.txt`, and
+     preview pictures.
+   - **The free check command** the agent may run as often as it likes:
+     `python -m video_generator.scene3d.check plan.json`. It lists the problems, says where each character is in the
+     picture at the start, middle and end, and redraws the preview pictures. No Blender, no AI, no cost.
+   - **Claude Code** runs as `claude -p … --output-format json --permission-mode acceptEdits` with only the file tools and
+     that one check command allowed, web tools refused, and `--max-budget-usd` set to what is left of the clip's cap.
+     It reports what it spent.
+   - **Codex** runs as `codex exec --skip-git-repo-check --sandbox workspace-write --cd <folder> --json`. **To verify:**
+     Codex is not installed on the build machine, so these flags come from its documentation and were tested only with
+     a stand-in program. Codex does not report a price.
+   - **Pair:** Claude Code fixes; Codex then looks at the preview pictures against the script and writes
+     `verdict.json`. Its problems go back to Claude Code in the next round.
+   - **After each round** the tool checks the plan is still valid, puts back what must not change (length, frame
+     shape, the characters' ids, labels and colours, and any character the agent dropped), and measures it again.
+   - **It stops** when nothing is wrong, after `max_fix_rounds` rounds, when the same problems are left twice, or when
+     the money cap (`agent_max_usd`, default $2 per clip) is reached. Every cent an agent reports goes to the spending log.
+   - **A missing agent** is replaced by the one that is installed, and the clip says so. With none installed, the
+     problems are shown to you and nothing is changed.
+   - **The whole chain** for a clip, or for every clip in story order: plan (when there is none, or the length
+     changed) → fix → render → approve by itself when auto-approve is on.
 5. **Screens and numbers.** A switch per video and per part, the 3D preview panel with the check pictures, the
    cost and time of the 3D step in the estimates, and the new review check.
 
@@ -107,6 +129,14 @@ vg scene3d approve 1.1
 ```
 ```bash
 vg scene3d show
+```
+Fix one clip's plan with the agent:
+```bash
+vg scene3d fix 1.1
+```
+Plan, fix and render every clip that has it switched on:
+```bash
+vg scene3d all
 ```
 `vg scene3d on --auto-approve` approves a passing preview by itself. `--agent codex` or `--agent pair` changes the
 agent. `--renderer sketch` never uses Blender.
