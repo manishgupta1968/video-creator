@@ -51,13 +51,13 @@ def test_a_reference_model_gets_the_video_the_pictures_and_a_guide_to_what_each_
     assert len(body["video_urls"]) == 1 and body["video_urls"][0].startswith("data:video/mp4;base64,")
     assert len(body["image_urls"]) == 1
     assert body["duration"] == "5"                      # the next length the model accepts
-    assert body["prompt"].startswith("[Video1] is the camera and movement reference")
+    assert body["prompt"].startswith("@Video1 is the camera and movement reference")
     assert "Do not copy its look" in body["prompt"]
-    assert "[Image1] is Dan, the red figure." in body["prompt"]
+    assert "@Image1 is Dan, the red figure." in body["prompt"]
     assert body["prompt"].endswith("Two friends run from a giant lizard.")
 
 
-def test_the_fast_reference_model_names_references_its_own_way(svc, tmp_path):
+def test_the_fast_reference_model_names_references_the_same_way(svc, tmp_path):
     e = svc.catalog.get("seedance_2_fast_reference")
     ref = tmp_path / "ref.mp4"
     ref.write_bytes(b"video")
@@ -285,8 +285,8 @@ def test_an_approved_reference_is_followed_and_the_first_picture_is_made_from_th
     assert Path(call.references[0]) == Path(first_pic.out)               # the realistic first picture, not the grey layout
     assert "In the camera reference, the red shape is Dan" in call.prompt
     body = fal_video.build_payload(call)
-    assert body["prompt"].startswith("[Video1] is the camera and movement reference")
-    assert "[Image1] is the first picture of the clip" in body["prompt"]
+    assert body["prompt"].startswith("@Video1 is the camera and movement reference")
+    assert "@Image1 is the first picture of the clip" in body["prompt"]
     # the second clip has no approved reference: it is made the usual way
     other = [c for c in v.calls["video"] if not c.reference_video]
     assert other and all(c.start_frame for c in other)

@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 Vec = list[float]
 
-# Distinct flat colours for the stand-in shapes. The prompt names them ("the red figure is Dan in [Image1]"), so the video
+# Distinct flat colours for the stand-in shapes. The prompt names them ("the red figure is Dan in @Image1"), so the video
 # model can tell the characters apart. Order matters: the first colours are the easiest to tell apart.
 PALETTE: list[tuple[str, str]] = [
     ("red", "#d62828"), ("blue", "#1f6feb"), ("green", "#2a9d3f"), ("yellow", "#f2c500"), ("purple", "#8338ec"),

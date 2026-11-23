@@ -52,12 +52,12 @@ those steps automatically inside the tool.
 1. **Reference video support (done).**
    - `VideoRequest` has `reference_video` and `reference_labels`.
    - The fal plugin sends reference pictures and videos as lists, and starts the prompt with a guide to what each
-     reference is: "[Video1] is the camera and movement reference … Do not copy its look. [Image1] is Dan."
+     reference is: "@Video1 is the camera and movement reference … Do not copy its look. @Image1 is Dan."
    - Catalogue rows `seedance_2_reference` and `seedance_2_fast_reference`. They carry
      `requires: [reference_video]`, so they are never chosen for an ordinary clip.
-   - **To verify:** the field names and limits came from fal's listing as shown in search results (the page could not
-     be opened from the build machine). Check https://fal.ai/models/bytedance/seedance-2.0/reference-to-video/api
-     before a big project.
+   - **Checked on 2026-11-23** against fal's own README and example (github.com/fal-ai/seedance-2.0-api): the fields
+     `image_urls` and `video_urls`, the prompt tags `@Image1` / `@Video1`, lengths "4" to "15", and the price
+     ($0.3024/s, fast $0.2419/s, and 0.6 × that when a video is given).
 2. **Scene plan and background Blender (done).**
    - `video_generator/scene3d/spec.py`: the scene plan, the camera maths and the measured checks.
    - `video_generator/scene3d/blender_build.py`: the script Blender runs.
