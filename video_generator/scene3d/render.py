@@ -94,6 +94,17 @@ def find_blender(configured: str = "") -> Optional[str]:
     return None
 
 
+@functools.lru_cache(maxsize=8)
+def blender_version(exe: str) -> str:
+    """'Blender 4.2.1' for a Blender program ('' when it does not start). Read once per program while the tool runs."""
+    import subprocess
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return next((l.strip() for l in out.splitlines() if l.startswith("Blender")), "")
+
+
 def build_script() -> Path:
     return Path(str(resources.files("video_generator.scene3d").joinpath("blender_build.py")))
 

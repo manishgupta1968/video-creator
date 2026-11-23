@@ -39,6 +39,31 @@ function Choice({ value, onChange, inherit }: { value: boolean | null | undefine
   );
 }
 
+/** "On this computer: Blender 4.2 ✓ (fast engine) · Claude Code ✓ · Codex not installed": what the add-on can use here. */
+function ComputerStatus() {
+  const q = useQuery({ queryKey: ["scene3d-status"], queryFn: () => api.scene3dStatus(), staleTime: 60_000 });
+  const d = q.data;
+  if (!d) return <p className="text-[11px] text-muted">On this computer: checking…</p>;
+  const ok = <span className="text-ok">✓</span>;
+  const b = d.blender;
+  const engine = b.engine === "BLENDER_WORKBENCH" ? "fast engine" : b.engine === "CYCLES" ? "slow engine: run `vg doctor` to see how to make it faster" : "";
+  const noAgent = !d.claude_code.found && !d.codex.found;
+  return (
+    <div className="space-y-1 rounded-lg bg-sunken px-2.5 py-1.5 text-[11px]" aria-label="What this computer can use">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className="text-muted">On this computer:</span>
+        {b.found ? <span title={b.path}>{b.version || "Blender"} {ok}{engine && <span className="text-muted"> ({engine})</span>}</span>
+          : <span className="text-warn">Blender not installed: a free sketch is drawn instead (get it free at blender.org)</span>}
+        <span className="text-muted">·</span>
+        {d.claude_code.found ? <span title={d.claude_code.path}>Claude Code {ok}</span> : <span className="text-muted">Claude Code not installed</span>}
+        <span className="text-muted">·</span>
+        {d.codex.found ? <span title={d.codex.path}>Codex {ok}</span> : <span className="text-muted">Codex not installed</span>}
+      </div>
+      {noAgent && <div className="text-warn">No agent can fix 3D plans that fail a check. Install Claude Code (the `claude` command) or Codex, then restart the app.</div>}
+    </div>
+  );
+}
+
 /** For the whole video (all the settings) or for one part (on, off, or the same as the part above). */
 export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean }) {
   const P = useP();
@@ -54,6 +79,7 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
       </p>
       {isRoot ? (
         <div className="space-y-2">
+          <ComputerStatus />
           <div><Switch checked={st.enabled} onChange={(enabled) => saveSettings({ enabled }, enabled ? "3D camera reference is on" : "3D camera reference is off")}
             label={st.enabled ? "On for the whole video" : "Off"} /></div>
           {st.enabled && (

@@ -660,6 +660,20 @@ async def compare(pid: str, nid: str, body: dict = Body(...)):
 
 
 # ===================================================================== 3D camera reference
+@app.get("/api/scene3d/status")
+async def scene3d_status():
+    """What the 3D camera reference can use on this computer: Blender (and its fastest working engine), Claude Code
+    and Codex. Only looks for the programs; nothing is run or paid for (Blender's version is read once)."""
+    from ..plugins.agent.cli_agents import ClaudeCodeAgent, CodexAgent
+    from ..scene3d import render as render_mod
+    exe = render_mod.find_blender(svc.config.blender_path)
+    version = await asyncio.to_thread(render_mod.blender_version, exe) if exe else ""
+    engine = render_mod.likely_engine(svc.config.blender_path, svc.config.blender_engines, "auto")
+    return {"blender": {"found": bool(exe), "path": exe or "", "version": version, "engine": engine},
+            "claude_code": {"found": bool(ClaudeCodeAgent().exe()), "path": ClaudeCodeAgent().exe() or ""},
+            "codex": {"found": bool(CodexAgent().exe()), "path": CodexAgent().exe() or ""}}
+
+
 @app.get("/api/projects/{pid}/nodes/{nid}/scene3d")
 async def scene3d_info(pid: str, nid: str):
     """What the 3D panel shows for a clip: on or off (and why), whether the reference is used, the colour legend, and

@@ -35,6 +35,10 @@ export interface Scene3DInfo {
   enabled: boolean; own_choice: boolean | null; stale: string; ready: boolean; legend: { colour: string; is: string }[]; issues: string[];
   renderer: string; agents: { builder: string | null; checker: string | null; notes: string[] };
 }
+export interface Scene3DStatus {
+  blender: { found: boolean; path: string; version: string; engine: string };
+  claude_code: { found: boolean; path: string }; codex: { found: boolean; path: string };
+}
 export interface Node {
   id: string; kind: NodeKind; title: string; goal: string; children: Node[]; target_seconds: number | null;
   style_overrides: Record<string, string>; context_add: string[]; context_off: string[]; context_override: Record<string, string>;
@@ -244,6 +248,7 @@ export const api = {
   optimizeApply: (pid: string, body: OptRequest) => req<View>("POST", `${P(pid)}/optimize/apply`, body),
   rewriteOffer: (pid: string, nid: string) => req<{ clips: number; numbers: string[]; kept: string[]; cost_usd: number }>("GET", `${P(pid)}/nodes/${nid}/rewrite-offer`),
   modeCosts: (pid: string, nid: string) => req<ModeCosts>("GET", `${P(pid)}/nodes/${nid}/mode-costs`),
+  scene3dStatus: () => req<Scene3DStatus>("GET", "/api/scene3d/status"),
   scene3d: (pid: string, nid: string) => req<Scene3DInfo>("GET", `${P(pid)}/nodes/${nid}/scene3d`),
   scene3dBuild: (pid: string, nid: string, body: { fix?: boolean; renderer?: string; replan?: boolean }) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/build`, body),
   scene3dFix: (pid: string, nid: string, body: { agent?: string; rounds?: number } = {}) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/fix`, body),
