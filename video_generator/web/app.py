@@ -743,6 +743,25 @@ async def scene3d_set_plan(pid: str, nid: str, body: dict = Body(...)):
     return view(pid)
 
 
+@app.post("/api/projects/{pid}/nodes/{nid}/scene3d/change")
+async def scene3d_change(pid: str, nid: str, body: dict = Body(...)):
+    """Describe the scene (no scene yet) or ask for a change in plain words; it is applied, checked, fixed if needed and
+    rendered in the background."""
+    from ..scene3d import agent as ag
+    request = str(body.get("request") or "").strip()
+    if not request:
+        raise HTTPException(400, "Say what you want to see or change.")
+    bg(_scene3d_call(ag.change_clip, svc, pid, nid, request)(), pid, f"3D change {numbering(svc.load(pid)).get(nid, '')}")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/scene3d/open")
+async def scene3d_open(pid: str, nid: str):
+    """Open the clip's scene in your own Blender, looking through the camera (for looking; changes there are not used)."""
+    from ..scene3d import viewer
+    return await guard(_scene3d_call(viewer.open_in_blender, svc, pid, nid))()
+
+
 @app.post("/api/projects/{pid}/scene3d/all")
 async def scene3d_all(pid: str, body: dict = Body(default={})):
     """Plan, fix and render every clip that has the 3D camera reference on, in story order, in the background."""

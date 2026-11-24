@@ -144,11 +144,14 @@ def _previews(plan: ScenePlan, folder: Path) -> None:
         sketch_frame(p, t, (640, 360)).save(folder / "preview" / f"{name}.png")
 
 
-def _kept(before: ScenePlan, after: ScenePlan) -> ScenePlan:
-    """The agent's plan with what must not change put back: length, fps, frame shape, and who each shape is."""
+def _kept(before: ScenePlan, after: ScenePlan, strict: bool = True) -> ScenePlan:
+    """The agent's plan with what must not change put back: length, fps, frame shape, and (strict, for fixes) who each
+    shape is and every character. A change YOU asked for (strict=False) may rename, recolour, add or remove shapes."""
     a = after.model_copy(deep=True)
     a.seconds, a.fps, a.aspect = before.seconds, before.fps, before.aspect
     a.set_id = before.set_id or a.set_id
+    if not strict:
+        return normalise(a)
     old = {t.id: t for t in before.things}
     for t in a.things:
         if t.id in old:
@@ -324,3 +327,129 @@ async def prepare_all(svc, pid: str, fix: bool = True, renderer: Optional[str] =
         except (s3.Scene3DError, PluginError) as exc:
             out.append(PrepareReport(nid=leaf.id, error=str(exc)))
     return out
+
+
+# =========================================================== changes you ask for in plain words
+CHANGE_TASK = """You change the rough 3D plan of ONE shot of a video, exactly as the user asks. Work only in this folder.
+
+Files:
+- plan.json: the plan. This is the ONLY file you may change.
+- clip.json: what the shot is about (goal, camera words, action, length, frame shape, which colour is which character).
+- preview/start.png, middle.png, end.png: what the camera sees now (plain coloured shapes).
+
+The plan, in short: metres and seconds, Z is up, the floor is Z = 0, the set is centred on X = 0, Y = 0.
+things[] are plain shapes (kind figure = a character, prop = scenery); keys[] = where each one's base is over time
+{{t, at:[x,y,z]}}; movement between keys is straight and even. camera.keys[] = {{t, at:[x,y,z], look_at:[x,y,z], lens_mm}}.
+
+THE USER ASKS:
+{request}
+
+Rules:
+- Do what the user asks, and change nothing else.
+- Keep seconds, fps and aspect. Keep every shape's id. Keep labels, colours and actor_id unless the user asks otherwise.
+- A new character is a figure with a colour no other figure has (red, blue, green, yellow, purple, orange, cyan, pink).
+- The camera must never be inside a shape. Every character must stay in the frame unless the user asks otherwise.
+- If the change affects the camera, update camera.move to describe the camera in one plain sentence.
+- Check your work with:  {check} plan.json
+  It lists problems and redraws the preview pictures. Stop when the pictures show the change and nothing major is wrong.
+- Do not create, change or delete any other file. Do not use the internet.
+- When you finish, reply with one or two plain sentences saying what you changed.
+"""
+
+
+@dataclass
+class ChangeReport:
+    request: str
+    changed: bool = False             # the plan is different from before
+    summary: str = ""                 # what was done, in plain words
+    by: str = ""                      # claude_code | codex | the AI brain
+    cost_usd: float = 0.0
+    planned: bool = False             # there was no scene yet: it was planned from your words
+    fix: Optional[FixReport] = None   # the automatic check-and-fix after the change, if a check found a problem
+    status: str = ""                  # the 3D preview's status at the end (rendered / approved / planned / failed)
+
+
+async def change_clip(svc, pid: str, nid: str, request: str, render: bool = True, agent: Optional[str] = None) -> ChangeReport:
+    """The video's way of working, automated: you say what you want, and the scene follows.
+
+    - No 3D scene yet: it is planned from the script AND your words ("a big empty kitchen, the chef at the far end").
+    - A scene exists: Claude Code (or Codex) changes it as you ask and nothing else, in the locked work folder, measuring
+      its own work with the free check. With no agent installed, the AI brain makes the change.
+    Then, by itself: the checks run (and the fixer repairs a major problem), and Blender renders the new preview.
+    One Undo takes the change back."""
+    request = (request or "").strip()
+    if not request:
+        raise s3.Scene3DError("Say what you want to see or change, for example: \"make the lizard twice as big\".")
+    rep = ChangeReport(request=request)
+    p = svc.load(pid)
+    mark = ProjectStore.history_mark(p)          # the whole change (plan, check, fix, render) becomes ONE undo step
+    try:
+        return await _change(svc, pid, nid, request, render, agent, rep)
+    finally:
+        ProjectStore.collapse_history(pid, mark)
+
+
+async def _change(svc, pid: str, nid: str, request: str, render: bool, agent: Optional[str], rep: ChangeReport) -> ChangeReport:
+    p = svc.load(pid)
+    n = find(p, nid)
+    if not n.scene3d or not n.scene3d.plan:
+        await s3.plan_clip(svc, pid, nid, wishes=request)
+        rep.planned, rep.changed, rep.by = True, True, "the AI brain"
+        rep.summary = "Planned the 3D scene from the script and your words."
+    else:
+        before = normalise(n.scene3d.plan)
+        builder, _, notes = pick_agents(svc, agent or p.settings.scene3d.agent)
+        st = p.settings.scene3d
+        budget = max(st.agent_max_usd - (n.scene3d.agent_cost_usd or 0), 0.0)
+        new: Optional[ScenePlan] = None
+        if builder and budget > 0:
+            folder = _folder(pid, nid, n.scene3d.agent_rounds + 1)
+            (folder / "plan.json").write_text(before.model_dump_json(indent=1))
+            (folder / "clip.json").write_text(json.dumps(_clip_brief(p, n), indent=1))
+            _previews(before, folder)
+            task = AgentTask(folder=folder, instructions=CHANGE_TASK.format(request=request, check=check_command()),
+                             role="change", request=request, allowed_command=check_command(), max_usd=budget)
+            try:
+                res = await _call(svc, pid, builder, task, f"3D change {nid}")
+                rep.cost_usd += res.cost_usd
+                rep.summary, rep.by = res.summary, builder
+                new = ScenePlan.model_validate(json.loads((folder / "plan.json").read_text()))
+            except PluginError as exc:
+                rep.summary = f"{builder} could not make the change ({exc}); the AI brain made it instead."
+            except (OSError, ValueError, ValidationError) as exc:
+                rep.summary = f"{builder} left plan.json broken ({str(exc)[:120]}); the AI brain made the change instead."
+        elif builder and budget <= 0:
+            rep.summary = f"The money cap for this clip's agent (${st.agent_max_usd:.2f}) is used up, so the AI brain made the change."
+        if new is None:                     # no agent (or it failed): the AI brain makes the change
+            new = await svc.brain.scene_change(p, n, before, request)
+            p = svc.load(pid)
+            svc._ledger_llm(p, f"3D change {nid}")
+            svc.save(p, snapshot=False)
+            rep.by = "the AI brain"
+            rep.summary = rep.summary or "The AI brain changed the plan."     # (or the reason the agent did not)
+        plan = _kept(before, new, strict=False)
+        rep.changed = plan.model_dump() != before.model_dump()
+        if rep.changed:
+            s3.set_plan(svc, pid, nid, plan)
+        elif not rep.summary.lower().startswith("i did not"):
+            rep.summary = (rep.summary + " " if rep.summary else "") + "The plan did not change."
+        p = svc.load(pid)
+        n = find(p, nid)
+        n.scene3d.changes = (n.scene3d.changes + [request])[-30:]
+        n.scene3d.agent_cost_usd = round(n.scene3d.agent_cost_usd + rep.cost_usd, 4)
+        line = f"Change \"{request[:80]}\" by {rep.by}: {rep.summary}" + (f" (${rep.cost_usd:.2f})" if rep.cost_usd else "")
+        n.scene3d.agent_log = (n.scene3d.agent_log + [f"{now_iso()[:16]} " + line] + [f"{now_iso()[:16]} {x}" for x in notes])[-40:]
+        svc.save(p)
+    # then by itself: check (and fix a major problem), render, approve when that is switched on
+    p = svc.load(pid)
+    n = find(p, nid)
+    if any(i.severity == "major" for i in check(n.scene3d.plan)):
+        rep.fix = await fix_clip(svc, pid, nid)
+    if render:
+        p = svc.load(pid)
+        n = find(p, nid)
+        if s3.stale_reason(n) or n.scene3d.status in ("planned", "failed"):
+            rep.status = (await s3.build_clip(svc, pid, nid)).status
+        else:
+            rep.status = n.scene3d.status
+    return rep

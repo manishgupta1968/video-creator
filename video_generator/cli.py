@@ -1001,6 +1001,41 @@ def scene3d_fix(clip: str, project: Optional[str] = typer.Option(None, "-p"),
     _scene3d_show(svc, pid, nid)
 
 
+@scene3d_app.command("change")
+def scene3d_change(clip: str, request: str, project: Optional[str] = typer.Option(None, "-p"),
+                   render: bool = typer.Option(True, "--render/--no-render", help="render the new preview afterwards")):
+    """Describe the 3D scene, or change it in plain words: vg scene3d change 1.1 "make the lizard twice as big"."""
+    from .scene3d import agent as ag
+    from .scene3d import service as s3
+    svc = _svc()
+    pid = _pid(project)
+    nid = _node(svc, pid, clip)
+    with con.status("Changing the 3D scene, checking it and rendering the new preview…"):
+        try:
+            rep = asyncio.run(ag.change_clip(svc, pid, nid, request, render=render))
+        except s3.Scene3DError as exc:
+            con.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+    con.print(f"  {rep.summary} [dim]({rep.by}{f', ${rep.cost_usd:.2f}' if rep.cost_usd else ''})[/]")
+    _fix_lines(rep.fix)
+    _scene3d_show(svc, pid, nid)
+
+
+@scene3d_app.command("open")
+def scene3d_open(clip: str, project: Optional[str] = typer.Option(None, "-p")):
+    """Open a clip's 3D scene in your own Blender, looking through the camera (to look; changes there are not used)."""
+    from .scene3d import service as s3
+    from .scene3d import viewer
+    svc = _svc()
+    pid = _pid(project)
+    try:
+        r = viewer.open_in_blender(svc, pid, _node(svc, pid, clip))
+    except s3.Scene3DError as exc:
+        con.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    con.print(r["note"])
+
+
 @scene3d_app.command("all")
 def scene3d_all(project: Optional[str] = typer.Option(None, "-p"),
                 renderer: str = typer.Option("", help="auto | blender | sketch"),

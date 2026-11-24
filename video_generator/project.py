@@ -159,6 +159,30 @@ class ProjectStore:
             s.unlink()
 
     @classmethod
+    def history_mark(cls, project: Project) -> int:
+        """Save the project as it is now as an undo step, and return that step. Pass it to collapse_history when a
+        longer action (which saves several times) is done, so one Undo takes the whole action back."""
+        cls.save(project, snapshot=True)
+        return cls._pointer(project.id)
+
+    @classmethod
+    def collapse_history(cls, project_id: str, mark: int) -> None:
+        """Every undo step saved after `mark` becomes ONE step (the latest state)."""
+        with _LOCK:
+            h = cls._hist(project_id)
+            ptr = cls._pointer(project_id)
+            if ptr <= mark + 1:
+                return
+            last = h / f"{ptr:05d}.json"
+            if not last.exists():
+                return
+            data = last.read_text()
+            for i in range(mark + 1, ptr + 1):
+                (h / f"{i:05d}.json").unlink(missing_ok=True)
+            (h / f"{mark + 1:05d}.json").write_text(data)
+            cls._set_pointer(project_id, mark + 1)
+
+    @classmethod
     def undo(cls, project_id: str) -> Optional[Project]:
         return cls._step(project_id, -1)
 

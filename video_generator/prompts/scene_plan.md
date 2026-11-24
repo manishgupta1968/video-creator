@@ -19,6 +19,9 @@ CHARACTERS AND THINGS (use these ids in actor_id):
 THE SET THIS CLIP SHARES WITH OTHER CLIPS (reuse its set_id and size when this clip happens in the same place):
 {{shared_set}}
 
+WHAT THE USER WANTS IN THIS 3D SCENE (their own words; follow them wherever they do not contradict the rules below):
+{{wishes}}
+
 HOW THE CLIP BEFORE ENDED (for a clip that continues it, start the camera and every shared figure exactly there):
 {{previous}}
 

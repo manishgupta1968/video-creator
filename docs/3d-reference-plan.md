@@ -127,6 +127,28 @@ those steps automatically inside the tool.
      Pure push-ins and zooms slide very little, so for those the Review Agent's look at the pictures matters more.
    - **Reference renders** are 480p with a checker floor of two greys, so camera movement is easy to see.
 
+## Like the video: describe it, change it in plain words, look at it in Blender
+The video's way of working is prompt → look → prompt a change → look again. The add-on keeps that loop, and does
+the rest by itself.
+
+1. **Describe the scene** (optional). Before a clip has a 3D scene, its box says "Describe the 3D scene". What you
+   type (for example "a big empty kitchen, the chef at the far end, the camera starts high and comes down") is
+   given to the planner together with the script. Leave it empty to plan from the script alone.
+2. **Change it in plain words.** Once a scene exists, the same box says "Change the 3D scene". For example: "make the
+   lizard twice as big", "end the camera closer to the chef", "move the rock to the left".
+   - Claude Code (or Codex) makes the change in the locked work folder, changing only what you asked, and measures
+     its own work with the free check. With no agent installed, or the clip's money cap used up, the AI brain makes it.
+   - Then, by itself: the checks run, the fixer repairs any major problem the change caused, and Blender renders the
+     new preview. While this runs, the box says "Working on it".
+   - Your changes are listed under "Your changes so far". **One Undo (Ctrl/⌘ Z) takes a whole change back**: the
+     change, its check and its render are one undo step.
+3. **Open in Blender** opens the clip's scene in your own Blender, looking through the camera; press Play to watch
+   the shot. It is for looking: the reference is built from the tool's own scene plan, so changes saved in Blender are
+   not used (the app says so). Ask for changes in the box instead. A preview drawn as a free sketch has no Blender
+   file to open.
+
+Commands: `vg scene3d change 1.1 "make the lizard twice as big"` and `vg scene3d open 1.1`.
+
 ## Render engines
 - **Workbench** is fast. On Linux it needs the `libegl1` and `libgl1-mesa-dri` packages, and then works even with
   no graphics card. Measured on the build machine: a 4-second 640×360 clip took 21–35 s.

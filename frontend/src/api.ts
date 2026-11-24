@@ -28,7 +28,7 @@ export interface Scene3DClip {
   plan: ScenePlan | null; status: "planned" | "rendered" | "approved" | "failed"; renderer: string; engine: string;
   video: string | null; first: string | null; last: string | null; checks: Record<string, string>; blend: string | null;
   issues: string[]; notes: string[]; approved_by: "" | "you" | "auto"; plan_hash: string;
-  agent_rounds: number; agent_cost_usd: number; agent_log: string[]; updated_at: string;
+  agent_rounds: number; agent_cost_usd: number; agent_log: string[]; updated_at: string; wishes?: string; changes?: string[];
 }
 export interface Scene3DSettings { enabled: boolean; agent: "claude_code" | "codex" | "pair"; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
 export interface Scene3DInfo {
@@ -254,6 +254,8 @@ export const api = {
   scene3dFix: (pid: string, nid: string, body: { agent?: string; rounds?: number } = {}) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/fix`, body),
   scene3dApprove: (pid: string, nid: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/scene3d/approve`),
   scene3dSetPlan: (pid: string, nid: string, plan: ScenePlan) => req<View>("PUT", `${P(pid)}/nodes/${nid}/scene3d/plan`, plan),
+  scene3dChange: (pid: string, nid: string, request: string) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/change`, { request }),
+  scene3dOpen: (pid: string, nid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/nodes/${nid}/scene3d/open`),
   scene3dAll: (pid: string, body: { fix?: boolean; renderer?: string } = {}) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/all`, body),
   fixContinuity: (pid: string, body: { action: string; node?: string; join?: string }) => req<View>("POST", `${P(pid)}/continuity/fix`, body),
   unpin: (pid: string, ids?: string[]) => req<View>("POST", `${P(pid)}/unpin`, ids ? { ids } : {}),
