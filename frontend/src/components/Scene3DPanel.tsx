@@ -4,11 +4,13 @@ import { useState } from "react";
 import { api, fileUrl, Node } from "../api";
 import { fmtUsd, useP, useToast } from "../lib";
 import { Badge, Button, cn, Select, Switch } from "../ui";
+import { SubscriptionModelSelect } from "./SubscriptionModel";
 
 /* The optional "3D camera reference": a rough 3D version of a clip made of plain coloured shapes, whose camera path the
    video model follows. Off unless switched on, so nothing else changes. */
 
 const AGENTS = [
+  { value: "brain", label: "The same tool as the AI brain fixes" },
   { value: "claude_code", label: "Claude Code fixes" },
   { value: "codex", label: "Codex fixes" },
   { value: "pair", label: "Claude Code fixes, Codex checks" },
@@ -91,6 +93,7 @@ function WholeFilm() {
           </Button>
         )}
       </div>
+      {has && <FilmPrompt working={working} />}
       <p className="text-[11px] text-muted">
         Every clip's 3D preview, one after another, before anything is paid for. Missing previews are made first (free); a clip without one shows a
         card of the same length saying why.
@@ -108,6 +111,35 @@ function WholeFilm() {
           {f!.notes.map((n) => <p key={n} className="text-[11px] text-muted">{n}</p>)}
         </>
       )}
+    </div>
+  );
+}
+
+/** One request for the whole 3D film. The AI brain decides which clips and which 3D models it affects; each is changed,
+ *  checked and rendered, and the film is joined again. One Undo takes it all back. */
+function FilmPrompt({ working }: { working: boolean }) {
+  const P = useP();
+  const [text, setText] = useState("");
+  const send = async () => {
+    const request = text.trim();
+    if (!request) return;
+    const r = await P.act("Whole 3D film", () => api.scene3dChangeFilm(P.pid, request),
+      "Changing the 3D film: each affected clip is changed, checked and rendered, then the film is joined again");
+    if (r) setText("");
+  };
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] font-medium">Change the whole 3D film</div>
+      <div className="flex items-end gap-2">
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} disabled={working} aria-label="Change the whole 3D film"
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+          placeholder="e.g. keep the camera low, at the guru's eye level, in every clip · give the guru a long white beard · in clip 1.2 the disciple walks slower"
+          className="min-h-[2.5rem] flex-1 resize-y rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs" />
+        <Button size="sm" variant="primary" disabled={working || !text.trim()} onClick={send}>
+          {working ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}Change
+        </Button>
+      </div>
+      <p className="text-[10px] text-muted">The AI decides which clips and characters this affects and changes only those. To change one clip, use the box in that clip.</p>
     </div>
   );
 }
@@ -144,16 +176,13 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
                 <span className="text-muted">$ per clip</span>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-muted">Model for 3D work:</span>
+                <span className="text-muted">Model for 3D work (“its usual model” = the one chosen in Settings → AI brain):</span>
                 <span>Claude Code</span>
-                <Select value={st.agent_models?.claude_code || ""} title="The model Claude Code uses to build characters, fix and change 3D scenes"
-                  onChange={(v) => saveSettings({ agent_models: { ...(st.agent_models || {}), claude_code: v } })}
-                  options={[{ value: "", label: "its usual model" }, { value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet (faster)" }, { value: "fable", label: "Fable" }]} />
+                <SubscriptionModelSelect which="claude_code" value={st.agent_models?.claude_code || ""} title="The model Claude Code uses to build characters, fix and change 3D scenes"
+                  onChange={(v) => saveSettings({ agent_models: { ...(st.agent_models || {}), claude_code: v } })} />
                 <span>Codex</span>
-                <input defaultValue={st.agent_models?.codex || ""} placeholder="its usual model" aria-label="Codex model for 3D work"
-                  title="Type a Codex model name, or leave empty for its usual model"
-                  onBlur={(e) => { const v = e.target.value.trim(); if (v !== (st.agent_models?.codex || "")) saveSettings({ agent_models: { ...(st.agent_models || {}), codex: v } }); }}
-                  className="w-36 rounded-md border border-line bg-panel px-1.5 py-1 text-xs" />
+                <SubscriptionModelSelect which="codex" value={st.agent_models?.codex || ""} title="The model Codex uses to build characters, fix and change 3D scenes"
+                  onChange={(v) => saveSettings({ agent_models: { ...(st.agent_models || {}), codex: v } })} />
               </div>
               <div><Switch checked={st.models !== false} onChange={(models) => saveSettings({ models })}
                 label="Build a low-poly 3D model of each character and object (else plain shapes)" /></div>

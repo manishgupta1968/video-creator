@@ -68,6 +68,7 @@ class Thing(BaseModel):
     keys: list[Key] = Field(default_factory=lambda: [Key()])
     must_be_seen: bool = True           # figures: should be in the frame for most of the clip
     model: str = ""                     # the context item whose 3D model is used for this shape ("" = a plain shape)
+    scale: float = 1.0                  # a 3D model shown bigger or smaller than its real size ("make the guru bigger")
 
 
 class CameraKey(BaseModel):
@@ -220,7 +221,7 @@ def corners(thing: Thing, t: float, plan: Optional["ScenePlan"] = None) -> list[
     w, dpt, h = (list(thing.size) + [1, 1, 1])[:3]
     ref = plan.models.get(thing.model) if plan is not None and thing.model else None
     if ref:                                    # a 3D model in a pose is as tall as that pose (kneeling is lower)
-        h = ref.pose_heights.get(pose_at(thing, t) or "stand", h)
+        h = ref.pose_heights.get(pose_at(thing, t) or "stand", h / max(thing.scale, 0.01)) * thing.scale
     return [[cx + sx * w / 2, cy + sy * dpt / 2, cz + sz * h] for sx in (-1, 1) for sy in (-1, 1) for sz in (0, 1)]
 
 

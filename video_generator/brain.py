@@ -324,6 +324,23 @@ def system_prompt() -> str:
     return SYSTEM
 
 
+class FilmClipChange(BaseModel):
+    number: str
+    request: str
+
+
+class FilmModelChange(BaseModel):
+    name: str
+    request: str
+
+
+class FilmChange(BaseModel):
+    """One request for the whole 3D film, split into a change per clip and per 3D model (prompts/film_change.md)."""
+    clips: list[FilmClipChange] = Field(default_factory=list)
+    models: list[FilmModelChange] = Field(default_factory=list)
+    note: str = ""
+
+
 class BrainTest(BaseModel):
     answer: str = ""
 
@@ -384,7 +401,8 @@ class Brain:
                                                   user='Put the word "ready" in the field answer.', schema=BrainTest,
                                                   model=model, meta={"task": "brain_test"})
             ok = (r.answer or "").strip().lower().startswith("ready") or name == "fake_llm"
-            return {"plugin": name, "model": model or "(its usual model)", "ok": ok, "seconds": round(time.monotonic() - t0, 1),
+            used = (usage.raw or {}).get("model_used") or ""
+            return {"plugin": name, "model": (model or "(its usual model)") + (f" → answered by {used}" if used else ""), "ok": ok, "seconds": round(time.monotonic() - t0, 1),
                     "answer": r.answer, "error": "" if ok else f"it answered {r.answer!r} instead of 'ready'"}
         except Exception as exc:          # every problem is reported, in its own words
             return {"plugin": name, "model": model or "(its usual model)", "ok": False, "seconds": round(time.monotonic() - t0, 1),
@@ -641,6 +659,21 @@ class Brain:
                               {"title": item.title, "kind": a.kind if a else item.type.value,
                                "description": (a.description if a else item.text) or "", "clothing": a.clothing if a else "",
                                "actions": actions})
+
+    async def film_change(self, project: Project, clips: list, request: str) -> FilmChange:
+        """Which clips and which 3D models one request for the whole film affects, and the change for each."""
+        nums = numbering(project)
+        lines = []
+        for n in clips:
+            camera = (getattr(getattr(n.scene3d.plan, "camera", None), "move", "") if n.scene3d and n.scene3d.plan else "") or \
+                (n.script.camera if n.script else "")
+            lines.append(f"{nums.get(n.id, '')} · {n.title}: {n.script.visual if n.script else n.goal}"
+                         + (f" | camera: {camera}" if camera else "") + ("" if n.scene3d and n.scene3d.plan else " | (no 3D scene yet)"))
+        models = [f"{c.title}: {(c.model3d.brief or {}).get('description') or c.type.value}"
+                  for c in project.context if c.model3d]
+        prompt = render("film_change", clips="\n".join(lines) or "(none)", models="\n".join(models) or "(none)", request=request.strip())
+        return await self.ask("film_change", prompt, FilmChange,
+                              {"request": request, "clips": [nums.get(n.id, "") for n in clips if n.scene3d and n.scene3d.plan]})
 
     async def scene_change(self, project: Project, node: Node, plan, request: str):
         """The 3D plan with one change you asked for in plain words ("make the lizard twice as big"), everything else kept."""

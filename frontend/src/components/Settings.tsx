@@ -5,6 +5,7 @@ import { api, FoundModel, ModelRow } from "../api";
 import { brainName, fmtUsd, useSettings, useSettingsMutation, useToast } from "../lib";
 import { Badge, Button, Dialog, HelpTip, Input, Select, Switch, TabList, TabPanel, Tabs } from "../ui";
 import { BrainPicker } from "./ModelPicker";
+import { SubscriptionModelSelect } from "./SubscriptionModel";
 
 export default function SettingsDialog({ open, onOpenChange, tab: initialTab }: { open: boolean; onOpenChange: (v: boolean) => void; tab?: string }) {
   const [tab, setTab] = useState(initialTab || "keys");
@@ -120,6 +121,7 @@ function BrainTab({ d, patch, goKeys }: { d: any; patch: (p: any) => Promise<voi
   return (
     <div className="grid max-w-3xl gap-5 text-xs">
       <p className="text-muted">Every model is listed with its price. A model that is not connected is shown with what is missing. Prices are per 1 million tokens (a token is a small piece of a word).</p>
+      <ToolSwitch llm={llm} pt={pt} models={models} patch={patch} />
       <BrainTest />
       {kinds.map((k) => (
         <Row key={k.kind} label={k.label} hint={k.hint}>
@@ -157,16 +159,55 @@ function BrainTab({ d, patch, goKeys }: { d: any; patch: (p: any) => Promise<voi
         <Switch checked={llm.anthropic_fallbacks} onChange={(v) => patch({ llm: { anthropic_fallbacks: v } })} />
       </Row>
       <details className="rounded-xl border border-line p-3">
-        <summary className="cursor-pointer font-medium">Type an exact model name (advanced)</summary>
+        <summary className="cursor-pointer font-medium">Choose the exact model (Claude Code, Codex, or a typed name)</summary>
         <p className="mt-1 text-muted">Only if a model is missing from the lists above. This is the model each vendor uses for planning when you chose “Automatic”.</p>
         <div className="mt-2 grid gap-2">
           {["claude_code_brain", "codex_brain", "anthropic", "openai", "gemini"].map((k) => (
-            <Row key={k} label={`${brainName(k)} model`} hint={k.endsWith("_brain") ? "A model this tool accepts (e.g. opus, sonnet, or a Codex model name); empty = its usual model" : "Exact model id from the vendor"}>
-              <Input defaultValue={models[k]} onBlur={(e) => e.target.value !== models[k] && patch({ llm: { models: { ...models, [k]: e.target.value } } })} className="w-56" />
+            <Row key={k} label={`${brainName(k)} model`} hint={k.endsWith("_brain") ? "The list comes from the program on this computer" : "Exact model id from the vendor"}>
+              {k.endsWith("_brain")
+                ? <SubscriptionModelSelect which={k === "codex_brain" ? "codex" : "claude_code"} value={models[k] || ""} onChange={(v) => patch({ llm: { models: { ...models, [k]: v } } })} />
+                : <Input defaultValue={models[k]} onBlur={(e) => e.target.value !== models[k] && patch({ llm: { models: { ...models, [k]: e.target.value } } })} className="w-56" />}
             </Row>
           ))}
         </div>
       </details>
+    </div>
+  );
+}
+
+/** One switch between your two subscription tools. It sets the AI brain for every kind of work, and the 3D work
+ *  follows it (when the 3D setting is “the same tool as the AI brain”, the usual choice). */
+function ToolSwitch({ llm, pt, models, patch }: { llm: any; pt: Record<string, string>; models: Record<string, string>; patch: (p: any) => Promise<void> }) {
+  const toast = useToast();
+  const using = (pt.default || "").split(":")[0] || llm.default;
+  const current = using === "codex_brain" ? "codex_brain" : using === "claude_code_brain" ? "claude_code_brain" : "";
+  const choose = async (tool: "claude_code_brain" | "codex_brain") => {
+    const other = tool === "codex_brain" ? "claude_code_brain" : "codex_brain";
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(pt)) if (k !== "default" && !v.startsWith(`${other}:`)) next[k] = v;
+    await patch({ llm: { default: tool, per_task_model: next, ...(llm.reviewer === other ? { reviewer: "same" } : {}) } });
+    toast({ text: `${brainName(tool)} is now your AI brain and does the 3D work.`, tone: "ok" });
+  };
+  const tools: ["claude_code_brain" | "codex_brain", string][] = [["claude_code_brain", "Claude Code"], ["codex_brain", "Codex"]];
+  return (
+    <div className="rounded-xl border border-line p-3">
+      <div className="font-medium">Use my subscription through</div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {tools.map(([k, label]) => (
+          <Button key={k} size="sm" variant={current === k ? "primary" : "outline"} onClick={() => current !== k && choose(k)}>{label}</Button>
+        ))}
+        {current && (
+          <>
+            <span className="text-muted">model:</span>
+            <SubscriptionModelSelect which={current === "codex_brain" ? "codex" : "claude_code"} value={models[current] || ""}
+              onChange={(v) => patch({ llm: { models: { ...models, [current]: v } } })} />
+          </>
+        )}
+      </div>
+      <p className="mt-1 text-[11px] text-muted">
+        {current ? `${brainName(current)} plans, writes the scripts, makes the changes you ask for and does the 3D work. Switch at any time.`
+          : "Not in use now (an API key or the automatic choice is in use). Click one to use your Claude or ChatGPT subscription."}
+      </p>
     </div>
   );
 }
