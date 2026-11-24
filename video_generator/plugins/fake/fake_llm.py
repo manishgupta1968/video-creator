@@ -298,6 +298,11 @@ class FakeLLM(LLM):
                 "lights": [{"kind": "sun", "at": [-6, -6, 10], "look_at": [0, 0, 0], "strength": 3}],
                 "seconds": secs, "fps": 24, "aspect": m.get("aspect") or "16:9"}
 
+    def _scene_change(self, m: dict) -> dict:
+        """Offline: the few changes the plain rules understand (bigger, closer, slower …); anything else is left as it was."""
+        from .fake_agent import simple_change
+        return simple_change(m.get("plan") or {}, m.get("request") or "")[0]
+
     def _split_clip(self, m: dict) -> dict:
         """Offline fallback: split at the script's own structure. The spoken part (all dialogue) becomes a face-only clip about as long
         as the speech; the action steps become the other clip(s)."""

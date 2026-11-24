@@ -313,6 +313,8 @@ class Scene3DClip(BaseModel):
     agent_rounds: int = 0               # check-and-fix rounds the agent has run on this clip
     agent_cost_usd: float = 0.0         # what the agent has spent on this clip
     agent_log: list[str] = Field(default_factory=list)       # what happened in each round, in plain words
+    wishes: str = ""                    # what you asked for when the scene was first planned ("" = made from the script only)
+    changes: list[str] = Field(default_factory=list)         # the changes you asked for since, in order
     updated_at: str = Field(default_factory=now_iso)
 
 

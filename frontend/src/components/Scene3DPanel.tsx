@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Box, CheckCircle2, RefreshCw, Sparkles, Wand2 } from "lucide-react";
+import { Box, CheckCircle2, ExternalLink, RefreshCw, Send, Sparkles, Wand2 } from "lucide-react";
+import { useState } from "react";
 import { api, fileUrl, Node } from "../api";
-import { fmtUsd, useP } from "../lib";
+import { fmtUsd, useP, useToast } from "../lib";
 import { Badge, Button, cn, Select, Switch } from "../ui";
 
 /* The optional "3D camera reference": a rough 3D version of a clip made of plain coloured shapes, whose camera path the
@@ -115,6 +116,48 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
   );
 }
 
+/** The prompt box, as in the video: describe the scene (before there is one) or say what to change. Each request is
+ *  applied, checked (and fixed when needed) and rendered by itself; the new preview appears when it is ready. */
+function ScenePrompt({ node, working }: { node: Node; working: boolean }) {
+  const P = useP();
+  const [text, setText] = useState("");
+  const s = node.scene3d;
+  const hasPlan = !!s?.plan;
+  const label = `3D change ${P.numbers[node.id] || ""}`;
+  const send = async () => {
+    const request = text.trim();
+    if (!request) return;
+    const r = await P.act(label, () => api.scene3dChange(P.pid, node.id, request),
+      hasPlan ? "Changing the 3D scene. The new preview appears when it is ready." : "Making the 3D scene from the script and your words.");
+    if (r) setText("");
+  };
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[11px] font-medium">{hasPlan ? "Change the 3D scene" : "Describe the 3D scene (optional)"}</div>
+      <div className="flex items-end gap-2">
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} disabled={working} aria-label={hasPlan ? "Change the 3D scene" : "Describe the 3D scene"}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+          placeholder={hasPlan ? "e.g. make the lizard twice as big · end the camera closer to the chef · move the rock to the left"
+            : "e.g. a big empty kitchen, the chef at the far end, the camera starts high and comes down"}
+          className="min-h-[2.5rem] flex-1 resize-y rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs" />
+        <Button size="sm" variant="primary" disabled={working || !text.trim()} onClick={send}>
+          {working ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}{hasPlan ? "Change" : "Make it"}
+        </Button>
+      </div>
+      <p className="text-[10px] text-muted">
+        {hasPlan ? "Only what you ask for changes. It is checked and rendered by itself; Undo (Ctrl/⌘ Z) takes it back."
+          : "Leave it empty to make the scene from the script alone (\"Plan, check and render\" below)."}
+      </p>
+      {!!s?.changes?.length && (
+        <details className="text-[11px]">
+          <summary className="cursor-pointer text-muted">Your changes so far ({s.changes.length})</summary>
+          <ol className="mt-1 list-decimal space-y-0.5 pl-4">{s.changes.map((c, i) => <li key={i}>{c}</li>)}</ol>
+        </details>
+      )}
+    </div>
+  );
+}
+
 /** For one clip: is it on, the plan's colour legend, the checks, the preview pictures and video, and the actions. */
 export function Scene3DClipPanel({ node }: { node: Node }) {
   const P = useP();
@@ -122,13 +165,14 @@ export function Scene3DClipPanel({ node }: { node: Node }) {
   const d = info.data;
   const s = node.scene3d;
   const label = `3D reference ${P.numbers[node.id] || ""}`;
-  const working = P.busy.some((b) => b === label || b.startsWith(`3D fix ${P.numbers[node.id] || ""}`) || b === "3D references");
+  const working = P.busy.some((b) => b === label || b.startsWith(`3D fix ${P.numbers[node.id] || ""}`) || b.startsWith(`3D change ${P.numbers[node.id] || ""}`) || b === "3D references");
+  const toast = useToast();
   if (!d) return null;
   const parentOn = P.view!.project.settings.scene3d.enabled;
   if (!d.enabled && node.scene3d_enabled == null && !s) return null;      // off and never used: the panel stays out of the way
-  const status = !s?.plan ? "No plan yet" : d.stale ? `Out of date: ${d.stale}` : s.status === "approved" ? `Approved${s.approved_by === "auto" ? " by itself" : ""}`
+  const status = working ? "Working on it: the new preview appears when it is ready" : !s?.plan ? "No plan yet" : d.stale ? `Out of date: ${d.stale}` : s.status === "approved" ? `Approved${s.approved_by === "auto" ? " by itself" : ""}`
     : s.status === "rendered" ? "Waiting for your approval" : s.status === "failed" ? "The render failed" : "Planned, not rendered";
-  const tone = d.ready ? "ok" : d.stale || s?.status === "failed" ? "bad" : s?.status === "rendered" ? "warn" : "neutral";
+  const tone = working ? "info" : d.ready ? "ok" : d.stale || s?.status === "failed" ? "bad" : s?.status === "rendered" ? "warn" : "neutral";
   return (
     <div className="space-y-3 rounded-xl border border-line p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -156,6 +200,7 @@ export function Scene3DClipPanel({ node }: { node: Node }) {
               {d.issues.map((i) => <li key={i} className={i.startsWith("major") ? "text-bad" : "text-warn"}>{i}</li>)}
             </ul>
           )}
+          <ScenePrompt node={node} working={working} />
           {s?.video && !d.stale && (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
               <video key={s.video} src={fileUrl(P.pid, s.video)} controls loop muted className="w-full rounded bg-black sm:col-span-1" />
@@ -181,6 +226,16 @@ export function Scene3DClipPanel({ node }: { node: Node }) {
               <Button size="sm" variant="ghost" disabled={working || !d.agents.builder} title={d.agents.notes.join(" ") || undefined}
                 onClick={() => P.act(`3D fix ${P.numbers[node.id] || ""}`, () => api.scene3dFix(P.pid, node.id), `${d.agents.builder} is fixing the 3D plan`)}>
                 <Wand2 className="h-3.5 w-3.5" />Fix with {d.agents.builder === "codex" ? "Codex" : "Claude Code"}{d.agents.checker ? " + Codex check" : ""}
+              </Button>
+            )}
+            {s?.plan && (
+              <Button size="sm" variant="outline" disabled={!s.blend}
+                title={s.blend ? "Open this scene in your own Blender, looking through the camera" : "Drawn as a free sketch: there is no Blender scene to open"}
+                onClick={async () => {
+                  const r = await P.act("Open in Blender", () => api.scene3dOpen(P.pid, node.id));
+                  if (r) toast({ text: (r as any).note, tone: "info" });
+                }}>
+                <ExternalLink className="h-3.5 w-3.5" />Open in Blender
               </Button>
             )}
             {s?.status === "rendered" && !d.stale && (

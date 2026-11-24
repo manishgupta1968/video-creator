@@ -260,7 +260,8 @@ class AgentTask:
     instructions name, and may only run the check command they name."""
     folder: Path
     instructions: str
-    role: str = "builder"          # builder: changes plan.json | checker: only looks and writes verdict.json
+    role: str = "builder"          # builder: fixes plan.json | change: changes plan.json as asked | checker: only writes verdict.json
+    request: str = ""              # role "change": what you asked for, in your own words
     allowed_command: str = ""      # the one command the agent may run (e.g. the free plan check)
     max_usd: float = 1.0           # the most this one run may spend
     timeout_s: int = 900

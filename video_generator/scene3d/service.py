@@ -118,8 +118,9 @@ def issues_text(plan: ScenePlan) -> tuple[list[str], bool]:
     return [f"{i.severity}: {i.text}" for i in found], any(i.severity == "major" for i in found)
 
 
-async def plan_clip(svc, pid: str, nid: str) -> Scene3DClip:
-    """Step 1 and 2: write the scene plan with the AI brain and check it."""
+async def plan_clip(svc, pid: str, nid: str, wishes: str = "") -> Scene3DClip:
+    """Step 1 and 2: write the scene plan with the AI brain and check it. `wishes` = what you want in the scene, in
+    your own words ("a big empty kitchen, the chef at the far end"); the script is used either way."""
     p = svc.load(pid)
     n = _clip(p, nid)
     if not n.script:
@@ -127,7 +128,10 @@ async def plan_clip(svc, pid: str, nid: str) -> Scene3DClip:
     prev = continues_from(p, n)
     base = shared_set(p, n)
     shared = (f"set_id {base.set_id}: {base.set.model_dump_json()}" if base else "")
-    plan = await svc.brain.scene_plan(p, n, shared_set=shared, previous=_ending(prev.scene3d.plan) if prev else "")
+    plan = await svc.brain.scene_plan(p, n, shared_set=shared, previous=_ending(prev.scene3d.plan) if prev else "",
+                                      wishes=wishes)
+    svc._ledger_llm(p, f"3D plan {nid}")
+    svc.save(p, snapshot=False)
     plan.seconds = n.duration.likely_s or plan.seconds
     plan.aspect = p.settings.aspect
     plan.fps = p.settings.fps
@@ -139,7 +143,7 @@ async def plan_clip(svc, pid: str, nid: str) -> Scene3DClip:
     texts, _ = issues_text(plan)
     p = svc.load(pid)
     n = _clip(p, nid)
-    n.scene3d = Scene3DClip(plan=plan, status="planned", issues=texts)
+    n.scene3d = Scene3DClip(plan=plan, status="planned", issues=texts, wishes=wishes.strip())
     svc.save(p)
     return n.scene3d
 
