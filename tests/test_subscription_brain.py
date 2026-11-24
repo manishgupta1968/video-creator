@@ -150,3 +150,26 @@ def test_subscription_brains_cost_nothing_per_call(svc, monkeypatch, tmp_path, l
     rows = {r["id"]: r for r in svc.model_rows()}
     assert rows["claude_code_subscription"]["usable"] and rows["claude_code_subscription"]["draft_cost_usd"] == 0
     assert not rows["codex_subscription"]["usable"] and "install the `codex` command" in rows["codex_subscription"]["why_not"]
+
+
+def test_a_failing_brain_never_hands_over_to_the_offline_rules_silently(tmp_path, monkeypatch, log, svc):
+    """'Ask AI to change this' used to finish in a second with nothing changed: Claude Code failed and the offline rules
+    answered instead. Now the real reason is shown, and nothing is changed."""
+    monkeypatch.setenv("VG_CLAUDE", str(stand_in(tmp_path, "claude", CLAUDE)))
+    monkeypatch.setenv("STAND_IN_MODE", "signed_out")
+    svc.reload()
+    with pytest.raises(PluginError, match="nothing was changed.*not signed in"):
+        asyncio.run(svc.brain.ask("write_clip_script", "Change it.", Answer, {}))
+    with pytest.raises(PluginError, match="not signed in"):     # still said next time, though Claude Code is now skipped
+        asyncio.run(svc.brain.ask("write_clip_script", "Change it.", Answer, {}))
+    r = asyncio.run(svc.brain.test())
+    assert r["plugin"] == "claude_code_brain" and not r["ok"] and "not signed in" in r["error"]
+    monkeypatch.setenv("STAND_IN_MODE", "structured")                     # signed in again: Claude Code is asked again
+    r = asyncio.run(svc.brain.test())
+    assert r["plugin"] == "claude_code_brain" and "not signed in" not in r["error"], r
+    assert svc.reg.llm_plugin_name("default") == "claude_code_brain"
+
+
+def test_brain_test_without_any_real_brain_says_it_is_the_offline_one(svc):
+    r = asyncio.run(svc.brain.test())
+    assert r["ok"] and r["plugin"] == "fake_llm" and "offline" in r["answer"]

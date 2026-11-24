@@ -284,6 +284,7 @@ export const api = {
   settings: () => req<any>("GET", "/api/settings"),
   patchSettings: (patch: any) => req<any>("PATCH", "/api/settings", patch),
   setKey: (name: string, value: string) => req<any>("POST", "/api/settings/keys", { name, value }),
+  brainTest: (kind = "default") => req<{ plugin: string; model: string; ok: boolean; seconds: number; answer: string; error: string }>("POST", "/api/settings/brain-test", { kind }),
   testPlugin: (plugin: string) => req<{ ok: boolean; message: string }>("POST", "/api/settings/test", { plugin }),
   patchCatalog: (id: string, patch: any) => req<any>("PATCH", `/api/catalog/${id}`, patch),
   refreshModels: () => req<{ models: FoundModel[]; errors: Record<string, string>; skipped: string[] }>("POST", "/api/models/llm/refresh"),

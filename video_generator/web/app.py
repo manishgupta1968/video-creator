@@ -946,6 +946,12 @@ async def set_key(body: dict = Body(...)):
     return settings_view()
 
 
+@app.post("/api/settings/brain-test")
+async def brain_test(body: dict = Body(default={})):
+    """Ask the AI brain one tiny question (no fall-back) and say who answered, how fast, and any exact problem."""
+    return await svc.brain.test(str(body.get("kind") or "default"))
+
+
 @app.post("/api/settings/test")
 async def test_plugin(body: dict = Body(...)):
     name = body["plugin"]
