@@ -31,7 +31,10 @@ export interface Scene3DClip {
   agent_rounds: number; agent_cost_usd: number; agent_log: string[]; updated_at: string; wishes?: string; changes?: string[];
 }
 export interface Scene3DSettings { enabled: boolean; agent: "claude_code" | "codex" | "pair"; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
+export interface FilmPart { nid: string; number: string; title: string; seconds: number; source: "3d" | "footage" | "card"; why: string }
+export interface Scene3DFilm { video: string | null; blend: string | null; parts: FilmPart[]; seconds: number; signature: string; notes: string[]; updated_at: string }
 export interface Scene3DInfo {
+  uses: string[];
   enabled: boolean; own_choice: boolean | null; stale: string; ready: boolean; legend: { colour: string; is: string }[]; issues: string[];
   renderer: string; agents: { builder: string | null; checker: string | null; notes: string[] };
 }
@@ -256,6 +259,9 @@ export const api = {
   scene3dSetPlan: (pid: string, nid: string, plan: ScenePlan) => req<View>("PUT", `${P(pid)}/nodes/${nid}/scene3d/plan`, plan),
   scene3dChange: (pid: string, nid: string, request: string) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/change`, { request }),
   scene3dOpen: (pid: string, nid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/nodes/${nid}/scene3d/open`),
+  scene3dFilm: (pid: string) => req<{ film: Scene3DFilm | null; stale: string }>("GET", `${P(pid)}/scene3d/film`),
+  scene3dMakeFilm: (pid: string) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/film`, { prepare: true }),
+  scene3dOpenFilm: (pid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/scene3d/film/open`),
   scene3dAll: (pid: string, body: { fix?: boolean; renderer?: string } = {}) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/all`, body),
   fixContinuity: (pid: string, body: { action: string; node?: string; join?: string }) => req<View>("POST", `${P(pid)}/continuity/fix`, body),
   unpin: (pid: string, ids?: string[]) => req<View>("POST", `${P(pid)}/unpin`, ids ? { ids } : {}),

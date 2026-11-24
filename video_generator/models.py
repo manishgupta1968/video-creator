@@ -403,6 +403,27 @@ class Settings(BaseModel):
     scene3d: "Scene3DSettings" = Field(default_factory=lambda: Scene3DSettings())
 
 
+class FilmPart(BaseModel):
+    """One clip's place in the whole 3D film."""
+    nid: str
+    number: str = ""
+    title: str = ""
+    seconds: float = 0
+    source: Literal["3d", "footage", "card"] = "card"   # its 3D preview | your own video | a card saying why there is none
+    why: str = ""                                       # for a card: why this clip has no 3D preview
+
+
+class Scene3DFilm(BaseModel):
+    """Every clip's 3D preview joined in story order, to watch (in the app or in Blender) before anything is paid for."""
+    video: Optional[str] = None         # film.mp4 (project-relative)
+    blend: Optional[str] = None         # film.blend: the clips one after another in Blender's video editor
+    parts: list[FilmPart] = Field(default_factory=list)
+    seconds: float = 0
+    signature: str = ""                 # what it was made from (a changed preview makes it out of date)
+    notes: list[str] = Field(default_factory=list)
+    updated_at: str = Field(default_factory=now_iso)
+
+
 class Scene3DSettings(BaseModel):
     """The optional "3D camera reference" add-on. Off = the tool works exactly as it did without it."""
     enabled: bool = False
@@ -427,6 +448,7 @@ class RunState(BaseModel):
     message: str = ""
     started_at: str = ""
     spent_usd: float = 0
+    scene3d_asked: list[str] = Field(default_factory=list)   # clips whose 3D preview a run already asked you to approve
 
 
 class Project(BaseModel):
@@ -444,6 +466,7 @@ class Project(BaseModel):
     run: RunState = Field(default_factory=RunState)
     music_advice: str = ""        # the planner's suggestion: none | subtle | full, mood, genre
     final_output: Optional[str] = None
+    scene3d_film: Optional["Scene3DFilm"] = None   # the whole 3D film: every clip's 3D preview joined in story order
     final_hash: str = ""
     final_notes: list[str] = Field(default_factory=list)   # what could not be added to the final video, and why (shown to the user)
     final_review_id: Optional[str] = None

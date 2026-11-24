@@ -258,10 +258,15 @@ def keyframe_of(v, nid):
     return next(r for r in v.calls["picture"] if nid in str(r.out) and "keyframe" in Path(r.out).name)
 
 
-def reference_project(svc, monkeypatch, links=()):
+def reference_project(svc, monkeypatch, links=(), only_first=True):
+    """The 3D camera reference on, with the free sketch renderer. only_first: the second clip has it switched off, so a
+    run does not stop to make (and ask you to approve) its preview; the tests here look at the first clip."""
     v = Vendors(svc, monkeypatch)
     p, ids = two_shot_project(svc, links=links)
     p.settings.scene3d.enabled = True
+    p.settings.scene3d.renderer = "sketch"
+    if only_first and not links:
+        find(p, ids[1]).scene3d_enabled = False
     svc.save(p)
     return v, p, ids
 
@@ -354,7 +359,13 @@ def test_a_reference_of_the_wrong_length_is_out_of_date(svc):
 @requires_ffmpeg
 def test_approving_a_reference_for_a_made_clip_marks_it_out_of_date(svc, monkeypatch):
     v, p, ids = reference_project(svc, monkeypatch)
+    q = svc.load(p.id)
+    q.settings.scene3d.enabled = False              # made first without the add-on, then the reference is approved
+    svc.save(q)
     run_all(svc, p.id)
+    q = svc.load(p.id)
+    q.settings.scene3d.enabled = True
+    svc.save(q)
     q = svc.load(p.id)
     assert find(q, ids[0]).status.value == "done"
     approved(svc, p.id, ids[0])
