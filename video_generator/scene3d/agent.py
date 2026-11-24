@@ -280,6 +280,7 @@ class PrepareReport:
     fix: Optional[FixReport] = None
     status: str = ""
     error: str = ""
+    rendered: bool = False            # the preview was rendered now (False = an up-to-date preview was kept)
 
 
 def _needs_fix(project, node) -> bool:
@@ -321,15 +322,16 @@ async def prepare_clip(svc, pid: str, nid: str, fix: bool = True, renderer: Opti
     n = find(p, nid)
     if s3.stale_reason(n) or n.scene3d.status in ("planned", "failed"):
         s = await s3.build_clip(svc, pid, nid, renderer)
-        rep.status = s.status
+        rep.status, rep.rendered = s.status, True
     else:
         rep.status = n.scene3d.status
     return rep
 
 
-async def prepare_all(svc, pid: str, fix: bool = True, renderer: Optional[str] = None) -> list[PrepareReport]:
+async def prepare_all(svc, pid: str, fix: bool = True, renderer: Optional[str] = None, replan: bool = False) -> list[PrepareReport]:
     """prepare_clip for every clip that has the 3D camera reference switched on, in story order (so a clip that
-    continues another is planned after it). A clip that fails is reported and the others still go on."""
+    continues another is planned after it). A clip that fails is reported and the others still go on.
+    replan: plan every scene afresh from its script (the 3D models are kept)."""
     from ..models import NodeKind
     from ..tree import leaves
     out = []
@@ -338,7 +340,7 @@ async def prepare_all(svc, pid: str, fix: bool = True, renderer: Optional[str] =
         if leaf.kind != NodeKind.clip or not s3.enabled_for(p, leaf) or not leaf.script:
             continue
         try:
-            out.append(await prepare_clip(svc, pid, leaf.id, fix=fix, renderer=renderer))
+            out.append(await prepare_clip(svc, pid, leaf.id, fix=fix, renderer=renderer, replan=replan))
         except (s3.Scene3DError, PluginError) as exc:
             out.append(PrepareReport(nid=leaf.id, error=str(exc)))
     return out
@@ -524,7 +526,7 @@ async def change_film(svc, pid: str, request: str, agent: Optional[str] = None) 
         if not rep.clips and not rep.models:
             raise s3.Scene3DError("Nothing was changed. " + (" ".join(rep.problems) or plan.note or
                                   "The AI brain found no clip or model that this request affects; try naming the clip or character."))
-        await make_film(svc, pid, prepare=True)
+        await make_film(svc, pid, prepare=True, done=[f"Changed: {request}"])
         return rep
     finally:
         ProjectStore.collapse_history(pid, mark)

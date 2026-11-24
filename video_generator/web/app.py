@@ -784,7 +784,7 @@ async def scene3d_film(pid: str):
 async def scene3d_make_film(pid: str, body: dict = Body(default={})):
     """Make every clip's missing 3D preview (plan, check, fix, render) and join them all, in the background."""
     from ..scene3d import film
-    bg(film.make_film(svc, pid, prepare=bool(body.get("prepare", True))), pid, "Whole 3D film")
+    bg(film.make_film(svc, pid, prepare=bool(body.get("prepare", True)), replan=bool(body.get("replan", False))), pid, "Whole 3D film")
     return {"ok": True}
 
 
