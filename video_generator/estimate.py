@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from .catalog import CatalogEntry
@@ -243,6 +243,7 @@ class ClipPlan:
     blocked: str = ""                      # why this clip cannot be made at all right now (empty = it can)
     reference: bool = False                # the video model follows the clip's approved 3D camera reference
     layout: bool = False                   # the clip has an approved 3D layout (its first picture is made from it)
+    uses3d: list[str] = field(default_factory=list)   # how this clip uses its 3D scene, in words (empty = it does not)
 
 
 def ambience_for(project: Project, node: Node) -> bool:
@@ -484,6 +485,10 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
             takes = 1          # free previews are identical; one take is enough
         plan_a = ClipPlan("avatar", avatar_entry, image, voice, None, takes, False, ref_images, False, warnings)
         plan_a.motion = motion
+        from .scene3d.service import ready_reference
+        if ready_reference(project, node) and not needs_start and image and mode != "free":
+            plan_a.layout = True
+            plan_a.uses3d = ["the speaking picture is made from the 3D layout (framing and place)"]
         if needs_start and not avatar_entry.is_free:                 # the speaking picture is the last picture of the clip before: it must be a real one
             plan_a.blocked = _placeholder_block(project, node, reg)
         plan_a.sfx = _sfx_for(reg, mode, project, node, plan_a)
@@ -513,6 +518,9 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
             warnings.append("This clip has an approved 3D camera reference, but no connected video model can follow a reference "
                             "video (for example Seedance 2.0 reference-to-video through fal.ai). It is made the usual way, but its "
                             "first picture is made from the 3D layout, so the framing still matches.")
+    if ref3d and video is None and mode != "free":
+        end_wanted = True           # no reference model: the clip should still END as the 3D layout ends (its last picture)
+        need["end_frame"] = True
     if video is not None:
         end_wanted = False          # the reference video already decides how the clip ends
     elif needs_start and mode != "free" and _real_video_exists(reg, shot):
@@ -557,6 +565,16 @@ def plan_clip(project: Project, node: Node, reg: Registry) -> ClipPlan:
     plan_v = ClipPlan("video", video, image, voice, lipsync, takes, needs_start, ref_images, lip, warnings)
     plan_v.reference = bool(ref3d and video.capabilities.get("reference_video"))
     plan_v.layout = bool(ref3d)
+    if ref3d and mode != "free" and not video.is_free:
+        if plan_v.reference:
+            plan_v.uses3d.append("the reference video (camera path and movement)")
+        if not needs_start:
+            plan_v.uses3d.append("the first picture is made from the 3D layout")
+        elif not plan_v.reference:
+            plan_v.uses3d.append("it starts from the clip before (smooth join)")
+        if end_pic:
+            plan_v.uses3d.append("the last picture is made from the 3D layout")
+        plan_v.uses3d.append("the camera move, written out from the 3D plan")
     if ref3d and mode != "free" and not plan_v.reference and lip and not any("3D camera reference" in w for w in warnings):
         warnings.append("This clip's 3D camera reference is not used: its speech needs a video model that speaks the line itself.")
     plan_v.motion = motion

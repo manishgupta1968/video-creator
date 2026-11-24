@@ -29,7 +29,7 @@ from .plugins.base import (AvatarRequest, ImageRequest, PluginError, Usage, Vide
 from .project import ProjectStore, slug
 from .reviewer import Reviewer
 from .scene3d import service as s3
-from .scene3d.spec import layout_words, legend_sentence
+from .scene3d.spec import camera_words, layout_words, legend_sentence
 from .tree import effective_style, find, leaves, numbering, walk
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp")
@@ -278,10 +278,52 @@ class Engine:
                 ProjectStore.save(p, snapshot=False)
 
     # ================================================================ scheduler
+    async def _prepare_3d(self, pid: str) -> bool:
+        """Before any money is spent: make the 3D preview of every clip in this run that has the 3D camera reference on
+        but no approved, up-to-date preview (plan, check, fix, render, in story order). Returns True when previews wait
+        for your approval: the run then pauses (or, started from the command line, stops) and says which ones."""
+        from .scene3d import agent as ag
+        p = self.svc.load(pid)
+        targets = set(t for t in p.run.targets if _exists(p, t))
+        todo = [n.id for n in leaves(p) if n.id in targets and n.kind == NodeKind.clip and n.script and n.status != NodeStatus.done
+                and s3.enabled_for(p, n) and not s3.ready_reference(p, n)]
+        if not todo:
+            return False
+        nums = numbering(p)
+        await self.message(pid, f"Making {len(todo)} 3D preview(s) first (free) …")
+        for nid in todo:
+            self.step(pid, nid, "Making the 3D preview (plan, check, render)", 60)
+            try:
+                await ag.prepare_clip(self.svc, pid, nid)
+            except (s3.Scene3DError, PluginError) as exc:
+                await self.message(pid, f"Clip {nums.get(nid, '')}: the 3D preview could not be made ({exc}); it is made the usual way.")
+            finally:
+                self.end_step(pid, nid)
+        p = self.svc.load(pid)
+        waiting = [nid for nid in todo if find(p, nid).scene3d and find(p, nid).scene3d.status == "rendered"
+                   and not s3.stale_reason(find(p, nid)) and nid not in p.run.scene3d_asked]
+        if not waiting:
+            return False                        # (a preview you were already asked about and left is made the usual way)
+        text = (f"{len(waiting)} 3D preview(s) wait for your approval (clip {', '.join(nums.get(w, '') for w in waiting)}). "
+                "Approve each one in its clip's 3D box (or watch them all in the whole 3D film first), then press Resume. "
+                "A clip you do not approve is made the usual way.")
+        ctl = self.runs.get(pid)
+        if ctl:
+            ctl.resume.clear()
+
+        def f(pr: Project):
+            pr.run.status = "paused"
+            pr.run.message = text
+            pr.run.scene3d_asked = sorted(set(pr.run.scene3d_asked) | set(waiting))
+        await self.mutate(pid, f)
+        return True
+
     async def _run(self, pid: str) -> None:
         ctl = self.runs[pid]
         parallel = max(self.svc.config.max_parallel_jobs, 1)
         try:
+            if await self._prepare_3d(pid) and self.stop_when_waiting:
+                return                          # started from the command line: stop here and say what waits
             while True:
                 if ctl.stop:
                     break
@@ -816,6 +858,9 @@ class Engine:
         ref3d = s3.ready_reference(p, n)                      # the approved 3D camera reference, or None (the usual way)
         layout_first = self.abs(pid, ref3d.first) if ref3d and ref3d.first else None
         prompt = build_visual_prompt(p, n)
+        if ref3d and plan.uses3d:
+            prompt += " " + camera_words(ref3d.plan)              # the planned camera move, in words any model can follow
+        layout_last = self.abs(pid, ref3d.last) if ref3d and ref3d.last else None
         label = f"Clip {numbering(p).get(nid, '')} · {n.title}"
         speaker = est.speaking_actor(p, n)
         if plan.route == "avatar" and speaker and speaker.actor and speaker.actor.kind in ("animal", "product"):
@@ -837,6 +882,15 @@ class Engine:
                     # the picture that speaks: where the previous clip ended (continuity), else the look this character
                     # already has in the video, else their photo; always fitted to the video's shape
                     photo = handoff or (self._anchor(p, speaker) if speaker else None) or self._actor_photo(p, n)
+                    if not handoff and plan.layout and layout_first and plan.image:
+                        # the speaking picture is made from the 3D layout: the framing and the place you planned
+                        lay = d / f"{tag}_speaker_layout.png"
+                        compose = f" Compose for a {p.settings.aspect} frame."
+                        await self._make_image(pid, plan.image, lambda e, lay=lay, compose=compose: ImageRequest(
+                            prompt=layout_words(ref3d.plan) + " " + prompt + compose, out=lay, model=e.model,
+                            references=[layout_first] + refs[: max(int(e.capabilities.get("reference_images", 0) or 0) - 1, 0)],
+                            aspect=p.settings.aspect, negative=negative, label=label), f"speaking picture {tag}", nid)
+                        photo = lay
                     if photo:
                         fitted_photo = d / f"{tag}_speaker.png"
                         media.fit_image(photo, fitted_photo, p.settings.aspect, mode=p.settings.fill if p.settings.fill != "crop" else "cover")
@@ -881,11 +935,24 @@ class Engine:
                         # the clip should END as planned: make a picture of that ending from the start picture, hand it to
                         # the video model, and the next clip (which continues from here) starts from the same look
                         end_used = d / f"{tag}_end.png"
-                        end_prompt = (f"The same scene, subject, place and light as the reference picture. {n.script.end_state.strip()} "
-                                      f"Compose for a {p.settings.aspect} frame.")
-                        await self._make_image(pid, plan.image, lambda e: ImageRequest(
-                            prompt=end_prompt, out=end_used, model=e.model, references=[start],
-                            aspect=p.settings.aspect, negative=negative, label=label), f"end picture {tag}", nid)
+                        if layout_last:
+                            # the clip ends as the 3D layout ends: its last picture made realistic, looking like the start
+                            end_prompt = (layout_words(ref3d.plan) + " This is the LAST picture of the clip; picture 2 is its "
+                                          f"first picture (same people, clothes, place and light). {n.script.end_state.strip()} "
+                                          f"Compose for a {p.settings.aspect} frame.")
+
+                            def end_req(e, end_used=end_used, end_prompt=end_prompt, start=start):
+                                cap = int(e.capabilities.get("reference_images", 0) or 0)
+                                return ImageRequest(prompt=end_prompt, out=end_used, model=e.model,
+                                                    references=([layout_last, start] + refs)[: max(cap, 1)],
+                                                    aspect=p.settings.aspect, negative=negative, label=label)
+                            await self._make_image(pid, plan.image, end_req, f"end picture {tag}", nid)
+                        else:
+                            end_prompt = (f"The same scene, subject, place and light as the reference picture. {n.script.end_state.strip()} "
+                                          f"Compose for a {p.settings.aspect} frame.")
+                            await self._make_image(pid, plan.image, lambda e: ImageRequest(
+                                prompt=end_prompt, out=end_used, model=e.model, references=[start],
+                                aspect=p.settings.aspect, negative=negative, label=label), f"end picture {tag}", nid)
                         media.fit_image(end_used, end_used, p.settings.aspect, mode="cover")
                     if ref3d and ventry and ventry.capabilities.get("reference_video"):
                         # follow the 3D camera reference: the reference video gives the camera and the movement, the first

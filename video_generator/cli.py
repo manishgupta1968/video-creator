@@ -1036,6 +1036,35 @@ def scene3d_open(clip: str, project: Optional[str] = typer.Option(None, "-p")):
     con.print(r["note"])
 
 
+@scene3d_app.command("film")
+def scene3d_film(project: Optional[str] = typer.Option(None, "-p"),
+                 prepare: bool = typer.Option(True, "--prepare/--no-prepare", help="make missing 3D previews first"),
+                 open_it: bool = typer.Option(False, "--open", help="open the film in Blender when it is made")):
+    """Join every clip's 3D preview into the whole 3D film, to watch before anything is paid for."""
+    from .scene3d import film as film_mod
+    from .scene3d import service as s3
+    from .scene3d import viewer
+    svc = _svc()
+    pid = _pid(project)
+    with con.status("Making the whole 3D film (previews first, then joining them)…"):
+        try:
+            f = asyncio.run(film_mod.make_film(svc, pid, prepare=prepare))
+        except (film_mod.FilmError, s3.Scene3DError) as exc:
+            con.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+    for part in f.parts:
+        con.print(f"  {part.number} {part.title}: {part.seconds:g} s · "
+                  + ("3D preview" if part.source == "3d" else "your video" if part.source == "footage" else f"[yellow]card: {part.why}[/]"))
+    con.print(f"Whole 3D film: {svc_path(pid, f.video)} ({f.seconds:g} s)" + (f"\nBlender file: {svc_path(pid, f.blend)}" if f.blend else ""))
+    for n in f.notes:
+        con.print(f"[dim]{n}[/]")
+    if open_it:
+        try:
+            con.print(viewer.open_film(svc, pid)["note"])
+        except s3.Scene3DError as exc:
+            con.print(f"[red]{exc}[/]")
+
+
 @scene3d_app.command("all")
 def scene3d_all(project: Optional[str] = typer.Option(None, "-p"),
                 renderer: str = typer.Option("", help="auto | blender | sketch"),

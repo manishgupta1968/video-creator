@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Box, CheckCircle2, ExternalLink, RefreshCw, Send, Sparkles, Wand2 } from "lucide-react";
+import { Box, CheckCircle2, ExternalLink, Film, RefreshCw, Send, Sparkles, Wand2 } from "lucide-react";
 import { useState } from "react";
 import { api, fileUrl, Node } from "../api";
 import { fmtUsd, useP, useToast } from "../lib";
@@ -65,6 +65,53 @@ function ComputerStatus() {
   );
 }
 
+/** The whole 3D film: every clip's 3D preview joined in story order, to watch here or in Blender before paying anything. */
+function WholeFilm() {
+  const P = useP();
+  const toast = useToast();
+  const q = useQuery({ queryKey: ["scene3d-film", P.pid, P.view?.project.updated_at], queryFn: () => api.scene3dFilm(P.pid), staleTime: 0 });
+  const working = P.busy.includes("Whole 3D film");
+  const f = q.data?.film;
+  const stale = q.data?.stale || "";
+  const has = !!f?.video;
+  return (
+    <div className="space-y-2 rounded-lg border border-line p-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <Film className="h-3.5 w-3.5 text-brand" /><span className="text-xs font-semibold">Whole 3D film</span>
+        {has && <Badge tone={working ? "info" : stale ? "warn" : "ok"}>{working ? "Working on it" : stale ? `Out of date: ${stale}` : `${f!.seconds.toFixed(0)} s, up to date`}</Badge>}
+        <div className="flex-1" />
+        <Button size="sm" variant={has && !stale ? "outline" : "primary"} disabled={working}
+          onClick={() => P.act("Whole 3D film", () => api.scene3dMakeFilm(P.pid), "Making every 3D preview and joining them, in the background")}>
+          {working ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Film className="h-3.5 w-3.5" />}{has ? "Make it again" : "Make the whole 3D film"}
+        </Button>
+        {has && (
+          <Button size="sm" variant="outline" disabled={!f!.blend} title={f!.blend ? "Watch it in your own Blender's video editor" : "Made without Blender: no Blender file"}
+            onClick={async () => { const r = await P.act("Open in Blender", () => api.scene3dOpenFilm(P.pid)); if (r) toast({ text: (r as any).note, tone: "info" }); }}>
+            <ExternalLink className="h-3.5 w-3.5" />Open the whole film in Blender
+          </Button>
+        )}
+      </div>
+      <p className="text-[11px] text-muted">
+        Every clip's 3D preview, one after another, before anything is paid for. Missing previews are made first (free); a clip without one shows a
+        card of the same length saying why.
+      </p>
+      {has && (
+        <>
+          <video key={f!.video! + f!.updated_at} src={fileUrl(P.pid, f!.video)} controls className="w-full max-w-xl rounded bg-black" />
+          <div className="flex flex-wrap gap-1.5 text-[11px]">
+            {f!.parts.map((pt) => (
+              <span key={pt.nid} title={pt.why || "3D preview"} className={cn("rounded-md px-1.5 py-0.5", pt.source === "card" ? "bg-warn/15 text-warn" : "bg-sunken")}>
+                {pt.number} · {pt.source === "3d" ? "3D" : pt.source === "footage" ? "your video" : pt.why}
+              </span>
+            ))}
+          </div>
+          {f!.notes.map((n) => <p key={n} className="text-[11px] text-muted">{n}</p>)}
+        </>
+      )}
+    </div>
+  );
+}
+
 /** For the whole video (all the settings) or for one part (on, off, or the same as the part above). */
 export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean }) {
   const P = useP();
@@ -105,6 +152,7 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
                   <Sparkles className="h-3.5 w-3.5" />Prepare all 3D references
                 </Button>
               </div>
+              <WholeFilm />
             </>
           )}
         </div>
@@ -199,6 +247,10 @@ export function Scene3DClipPanel({ node }: { node: Node }) {
             <ul className="space-y-0.5 text-[11px]">
               {d.issues.map((i) => <li key={i} className={i.startsWith("major") ? "text-bad" : "text-warn"}>{i}</li>)}
             </ul>
+          )}
+          {d.uses.length > 0 && (
+            <div className="text-[11px]"><span className="font-medium">Used when this clip is made: </span>
+              <span className="text-muted">{d.uses.join(" · ")}</span></div>
           )}
           <ScenePrompt node={node} working={working} />
           {s?.video && !d.stale && (

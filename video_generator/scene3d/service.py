@@ -196,6 +196,8 @@ async def build_clip(svc, pid: str, nid: str, renderer: Optional[str] = None) ->
     s.issues, s.notes = texts, result.notes
     s.plan_hash = plan_hash(plan)
     s.approved_by = ""
+    if nid in p.run.scene3d_asked:              # a new preview: the next run asks about it again
+        p.run.scene3d_asked.remove(nid)
     if settings.auto_approve and not major and not stale_reason(n):
         s.status, s.approved_by = "approved", "auto"
         _outdate_made_clip(n)

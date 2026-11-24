@@ -329,3 +329,43 @@ def layout_words(plan: ScenePlan) -> str:
     return ("Picture 1 is a rough 3D layout made of plain coloured shapes. Make a realistic, cinematic still with exactly the "
             "same framing, camera angle, lens and positions as picture 1, and none of its plain look. "
             + legend_sentence(plan, "picture 1") + " The other pictures show how they really look.")
+
+
+def _h(v: Vec) -> float:
+    return math.sqrt(v[0] ** 2 + v[1] ** 2)
+
+
+def camera_words(plan: ScenePlan) -> str:
+    """The planned camera move in plain words, measured from the plan, for ANY video model (also those that cannot take
+    a reference video). Example: "Camera (from the 3D plan): starts far above the scene (12.0 m) looking down, comes
+    down to knee height (0.5 m), moves in from 14 m to 6 m away; wide lens (28 mm)." """
+    p = normalise(plan)
+    (e0, t0, l0), (e1, t1, l1) = camera_at(p.camera, 0.0), camera_at(p.camera, p.seconds)
+
+    def height(z: float) -> str:
+        return ("at ground level" if z < 0.3 else "at knee height" if z < 0.8 else "at waist height" if z < 1.3 else
+                "at eye level" if z < 2.1 else "just above eye level" if z < 4 else "high up" if z < 10 else "far above the scene")
+
+    def to(z: float) -> str:
+        return height(z).removeprefix("at ")
+    d0 = math.dist(e0, t0)
+    d1 = math.dist(e1, t1)
+    parts = [f"starts {height(e0[2])} ({e0[2]:.1f} m)" + (" looking down" if t0[2] < e0[2] - 1 else "")]
+    if abs(e1[2] - e0[2]) > 0.4:
+        parts.append(f"{'comes down' if e1[2] < e0[2] else 'rises'} to {to(e1[2])} ({e1[2]:.1f} m)")
+    if abs(d1 - d0) > max(0.5, 0.15 * d0):
+        parts.append(f"moves {'in' if d1 < d0 else 'back'} from {d0:.0f} m to {d1:.0f} m away")
+    a0 = math.atan2(t0[1] - e0[1], t0[0] - e0[0])
+    a1 = math.atan2(t1[1] - e1[1], t1[0] - e1[0])
+    turn = (math.degrees(a1 - a0) + 180) % 360 - 180
+    if abs(turn) > 8:
+        parts.append(f"turns to the {'left' if turn > 0 else 'right'} (about {abs(turn):.0f}°)")
+    side = [e1[i] - e0[i] for i in range(2)]
+    if _h(side) > 0.8 and abs(d1 - d0) <= max(0.5, 0.15 * d0):
+        parts.append(f"travels {_h(side):.0f} m alongside the action")
+    if len(parts) == 1:
+        parts.append("holds still")
+    lens = l1 if abs(l1 - l0) < 1 else None
+    lens_text = (f"{'wide' if lens < 35 else 'normal' if lens < 50 else 'long'} lens ({lens:.0f} mm)" if lens
+                 else f"zooms from {l0:.0f} mm to {l1:.0f} mm")
+    return "Camera (from the 3D plan): " + ", ".join(parts) + f"; {lens_text}."

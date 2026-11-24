@@ -63,3 +63,44 @@ def open_in_blender(svc, pid: str, nid: str) -> dict:
     if why:
         note = f"This Blender file is from before your last change ({why}); render the preview again to see it. " + note
     return {"path": str(blend), "note": note}
+
+
+# runs inside Blender once its window is up: the largest area shows the video editor's preview, so Play shows the film
+SHOW_FILM = """
+import bpy
+def _show_film():
+    for window in bpy.context.window_manager.windows:
+        areas = sorted(window.screen.areas, key=lambda a: a.width * a.height, reverse=True)
+        if areas:
+            area = areas[0]
+            area.type = "SEQUENCE_EDITOR"
+            for space in area.spaces:
+                if space.type == "SEQUENCE_EDITOR":
+                    space.view_type = "PREVIEW"
+    return None
+bpy.app.timers.register(_show_film, first_interval=1.0)
+"""
+
+
+def open_film(svc, pid: str) -> dict:
+    """Start Blender on the whole 3D film (film.blend). Returns {path, note}; raises Scene3DError with the reason."""
+    from .film import stale_reason
+    p = svc.load(pid)
+    f = p.scene3d_film
+    if not f or not f.video:
+        raise s3.Scene3DError("The whole 3D film has not been made yet. Press \"Make the whole 3D film\" first.")
+    if not f.blend:
+        raise s3.Scene3DError("The film has no Blender file (Blender was not installed when it was made). "
+                              "Install Blender and make the film again; you can still watch it here.")
+    blend = ProjectStore.path_for(pid) / f.blend
+    exe = find_blender(svc.config.blender_path)
+    if not exe or not blend.exists():
+        raise s3.Scene3DError("Blender (or the film's Blender file) was not found. Make the film again.")
+    detach = {"creationflags": 0x00000008} if os.name == "nt" else {"start_new_session": True}
+    subprocess.Popen([exe, str(blend), "--python-expr", SHOW_FILM], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **detach)
+    note = ("Blender is opening the whole 3D film in its video editor. Press Play (space bar) to watch every clip in "
+            "order. It is for watching: ask for changes in each clip's \"Change the 3D scene\" box.")
+    why = stale_reason(p)
+    if why:
+        note = f"This film is out of date ({why}); make it again to see the latest previews. " + note
+    return {"path": str(blend), "note": note}

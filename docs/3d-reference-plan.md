@@ -149,6 +149,32 @@ the rest by itself.
 
 Commands: `vg scene3d change 1.1 "make the lizard twice as big"` and `vg scene3d open 1.1`.
 
+## The 3D scene in every clip, and the whole 3D film
+**Every clip uses its approved 3D scene in every way its model allows:**
+
+| Way | What it fixes | Which clips |
+|---|---|---|
+| The reference video | the whole camera path and all movement | clips made by a reference-to-video model (Seedance reference) |
+| The first picture, made from the layout | framing and positions at the start | every clip that does not continue the one before |
+| The last picture, made from the layout | framing and positions at the end | every clip whose model takes an end picture (when no reference model is used) |
+| The camera move in words, measured from the plan | e.g. "starts far above the scene, comes down to knee height, moves in from 14 m to 6 m away" | every clip |
+| The speaking picture, made from the layout | the framing of a talking-to-camera clip | talking clips that do not continue the one before |
+
+A clip that continues the one before still starts from that clip's real last picture (the smooth join wins), and now
+ends on its own layout's last picture. Each clip's 3D box says how it is used ("Used when this clip is made: …").
+
+**Generate entire video makes missing previews first.** Before anything is paid for, every clip in the run that has
+the add-on on but no approved, up-to-date preview gets one (plan, check, fix, render). With auto-approve off the run
+then pauses: "2 3D preview(s) wait for your approval (clip 1.1, 1.2)". Approve them (or watch the whole 3D film
+first) and press Resume. A preview you were asked about and left is made the usual way on the next run.
+
+**The whole 3D film.** "Make the whole 3D film" in the Whole video box makes every missing preview and joins them all
+in story order: clips with a preview show it, your own video clips show your footage, and any other clip shows a card
+of the same length saying why (for example "3D camera reference off for this clip"), so the timing is right. Watch it
+in the app, or press "Open the whole film in Blender": film.blend has every clip one after another in Blender's video
+editor, each with its number and title on top. It goes out of date when a clip or its preview changes.
+Command: `vg scene3d film --open`.
+
 ## Render engines
 - **Workbench** is fast. On Linux it needs the `libegl1` and `libgl1-mesa-dri` packages, and then works even with
   no graphics card. Measured on the build machine: a 4-second 640×360 clip took 21–35 s.

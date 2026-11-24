@@ -692,7 +692,17 @@ async def scene3d_info(pid: str, nid: str):
             "legend": [{"colour": c, "is": who} for c, who in legend(s.plan)] if s and s.plan else [],
             "issues": s3.issues_text(s.plan)[0] if s and s.plan else [],
             "renderer": render_mod.likely_engine(svc.config.blender_path, svc.config.blender_engines, st.renderer),
+            "uses": _uses3d(p, n),
             "agents": {"builder": builder, "checker": checker, "notes": notes}}
+
+
+def _uses3d(p, n) -> list[str]:
+    """How this clip uses its 3D scene when it is made (empty when it does not)."""
+    from .. import estimate as est
+    try:
+        return est.plan_clip(p, n, svc.reg).uses3d if n.kind.value == "clip" else []
+    except Exception:
+        return []
 
 
 def _scene3d_call(fn, *args):
@@ -760,6 +770,28 @@ async def scene3d_open(pid: str, nid: str):
     """Open the clip's scene in your own Blender, looking through the camera (for looking; changes there are not used)."""
     from ..scene3d import viewer
     return await guard(_scene3d_call(viewer.open_in_blender, svc, pid, nid))()
+
+
+@app.get("/api/projects/{pid}/scene3d/film")
+async def scene3d_film(pid: str):
+    """The whole 3D film (every clip's 3D preview joined in story order) and whether it is out of date."""
+    from ..scene3d import film
+    p = svc.load(pid)
+    return {"film": p.scene3d_film.model_dump(mode="json") if p.scene3d_film else None, "stale": film.stale_reason(p)}
+
+
+@app.post("/api/projects/{pid}/scene3d/film")
+async def scene3d_make_film(pid: str, body: dict = Body(default={})):
+    """Make every clip's missing 3D preview (plan, check, fix, render) and join them all, in the background."""
+    from ..scene3d import film
+    bg(film.make_film(svc, pid, prepare=bool(body.get("prepare", True))), pid, "Whole 3D film")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/scene3d/film/open")
+async def scene3d_open_film(pid: str):
+    from ..scene3d import viewer
+    return await guard(_scene3d_call(viewer.open_film, svc, pid))()
 
 
 @app.post("/api/projects/{pid}/scene3d/all")
