@@ -116,7 +116,8 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
     if exe:
         spec = out / "film.json"
         spec.write_text(json.dumps({"fps": fps, "width": size[0], "height": size[1],
-                                    "clips": [{"path": str(pc.resolve()), "label": f"{pt.number} · {pt.title}"}
+                                    "clips": [{"path": str(pc.resolve()), "label": f"{pt.number} · {pt.title}",
+                                               "frames": int(round(pt.seconds * fps))}
                                               for pc, pt in zip(pieces, parts)]}))
         script = Path(__file__).with_name("blender_film.py")
         proc = await asyncio.create_subprocess_exec(exe, "--background", "--factory-startup", "-noaudio", "--python", str(script),

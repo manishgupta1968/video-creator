@@ -12,7 +12,25 @@ import bpy
 
 
 def strips_of(se):
-    return getattr(se, "strips", None) or se.sequences      # Blender 4.4+ calls them strips; older versions sequences
+    """The editor's strips. Blender 4.4+ calls them `strips` (and Blender 5 removed the old name `sequences`).
+    An empty collection counts as false in Python, so test for the attribute, never for its contents."""
+    return se.strips if hasattr(se, "strips") else se.sequences
+
+
+def length_of(strip, fallback):
+    for name in ("frame_final_duration", "frame_duration"):
+        value = getattr(strip, name, None)
+        if value:
+            return int(value)
+    return int(fallback)
+
+
+def add_title(strips, name, frame, length):
+    """A text strip over [frame, frame + length). Blender 5 takes `length`; older versions take `frame_end`."""
+    try:
+        return strips.new_effect(name=name, type="TEXT", channel=2, frame_start=frame, length=length)
+    except TypeError:
+        return strips.new_effect(name=name, type="TEXT", channel=2, frame_start=frame, frame_end=frame + length)
 
 
 def main():
@@ -32,10 +50,9 @@ def main():
     frame = 1
     for i, clip in enumerate(film.get("clips") or []):
         movie = strips.new_movie(name=f"clip_{i + 1:02d}", filepath=clip["path"], channel=1, frame_start=frame)
-        length = movie.frame_final_duration
+        length = length_of(movie, clip.get("frames") or 1)
         try:                                     # the clip's number and title, small, at the bottom
-            text = strips.new_effect(name=f"label_{i + 1:02d}", type="TEXT", channel=2, frame_start=frame,
-                                     frame_end=frame + length)
+            text = add_title(strips, f"label_{i + 1:02d}", frame, length)
             text.text = clip.get("label", "")
             text.font_size = 28
             text.location = (0.5, 0.06)

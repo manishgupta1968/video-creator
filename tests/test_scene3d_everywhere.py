@@ -150,7 +150,7 @@ def test_the_whole_film_opens_in_blender_one_clip_after_another(svc, monkeypatch
     f = asyncio.run(film_mod.make_film(svc, p.id))
     blend = ProjectStore.path_for(p.id) / f.blend
     out = subprocess.run([R.find_blender(), "-b", str(blend), "--python-expr",
-                          "import bpy; se=bpy.context.scene.sequence_editor; st=getattr(se,'strips',None) or se.sequences; "
+                          "import bpy; se=bpy.context.scene.sequence_editor; st=se.strips if hasattr(se,'strips') else se.sequences; "
                           "print('STRIPS', sorted((s.type, s.frame_final_start) for s in st))"],
                          capture_output=True, text=True, timeout=180).stdout
     line = next(l for l in out.splitlines() if l.startswith("STRIPS"))
@@ -197,3 +197,44 @@ def test_the_screen_makes_and_shows_the_film(svc, monkeypatch):
         assert r.status_code == 400 and "no Blender file" in r.json()["detail"]
         info = client.get(f"/api/projects/{p.id}/nodes/{ids[0]}/scene3d").json()
         assert info["uses"] == []                                     # rendered but not approved yet: nothing is used
+
+
+def _film_helpers():
+    """strips_of, length_of and add_title from the Blender film script, without Blender (they only use what they are given)."""
+    import ast
+    src = Path(R.__file__).with_name("blender_film.py").read_text()
+    tree = ast.parse(src)
+    code = {n.name: ast.get_source_segment(src, n) for n in tree.body if isinstance(n, ast.FunctionDef)}
+    ns: dict = {}
+    for name in ("strips_of", "length_of", "add_title"):
+        exec(code[name], ns)
+    return ns
+
+
+def test_the_film_script_works_with_blender_5_and_older():
+    h = _film_helpers()
+
+    class Empty(list):          # an empty strips collection is "false", as in Blender
+        pass
+
+    class Blender5Editor:       # Blender 5: only `strips`, and it starts empty
+        strips = Empty()
+
+    class Blender4Editor:       # Blender 4.0: only `sequences`
+        sequences = Empty()
+    assert h["strips_of"](Blender5Editor()) is Blender5Editor.strips
+    assert h["strips_of"](Blender4Editor()) is Blender4Editor.sequences
+
+    class Strips5:              # Blender 5 takes `length`
+        def new_effect(self, name, type, channel, frame_start, length):
+            return ("length", frame_start, length)
+
+    class Strips4:              # older versions take `frame_end`
+        def new_effect(self, name, type, channel, frame_start, frame_end):
+            return ("frame_end", frame_start, frame_end)
+    assert h["add_title"](Strips5(), "t", 61, 60) == ("length", 61, 60)
+    assert h["add_title"](Strips4(), "t", 61, 60) == ("frame_end", 61, 121)
+
+    class NoLength:
+        pass
+    assert h["length_of"](NoLength(), 48) == 48
