@@ -43,9 +43,9 @@ def test_describing_a_scene_plans_and_renders_it_from_your_words(svc, monkeypatc
     seen = {}
     real = svc.brain.scene_plan
 
-    async def spy(project_, node, shared_set="", previous="", wishes=""):
+    async def spy(project_, node, shared_set="", previous="", wishes="", **more):
         seen["wishes"] = wishes
-        return await real(project_, node, shared_set=shared_set, previous=previous, wishes=wishes)
+        return await real(project_, node, shared_set=shared_set, previous=previous, wishes=wishes, **more)
     monkeypatch.setattr(svc.brain, "scene_plan", spy)
     rep = asyncio.run(ag.change_clip(svc, p.id, ids[0], "a big empty terrarium, the lizard far behind them"))
     assert rep.planned and rep.changed and rep.status == "rendered"
