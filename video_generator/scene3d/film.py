@@ -33,6 +33,7 @@ def signature(p: Project) -> str:
     h = hashlib.sha1()
     for leaf in leaves(p):
         s = leaf.scene3d
+        h.update(f"{s3.models_changed(p, leaf)}|".encode())
         h.update(f"{leaf.id}|{leaf.kind.value}|{leaf.duration.likely_s:.2f}|{s3.enabled_for(p, leaf)}|"
                  f"{s.plan_hash if s and s.video else ''}|{s3.stale_reason(leaf) if s and s.video else ''}|{leaf.media}\n".encode())
     h.update(p.settings.aspect.encode())
@@ -116,7 +117,8 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
     if exe:
         spec = out / "film.json"
         spec.write_text(json.dumps({"fps": fps, "width": size[0], "height": size[1],
-                                    "clips": [{"path": str(pc.resolve()), "label": f"{pt.number} · {pt.title}"}
+                                    "clips": [{"path": str(pc.resolve()), "label": f"{pt.number} · {pt.title}",
+                                               "frames": int(round(pt.seconds * fps))}
                                               for pc, pt in zip(pieces, parts)]}))
         script = Path(__file__).with_name("blender_film.py")
         proc = await asyncio.create_subprocess_exec(exe, "--background", "--factory-startup", "-noaudio", "--python", str(script),

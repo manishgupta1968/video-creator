@@ -794,6 +794,29 @@ async def scene3d_open_film(pid: str):
     return await guard(_scene3d_call(viewer.open_film, svc, pid))()
 
 
+@app.post("/api/projects/{pid}/context/{cid}/model3d/build")
+async def model3d_build(pid: str, cid: str, body: dict = Body(default={})):
+    """Build (or, with `change`, change) one character's or object's 3D model, in the background."""
+    from ..scene3d import models3d
+    title = next((c.title for c in svc.load(pid).context if c.id == cid), cid)
+    bg(_scene3d_call(models3d.build_model, svc, pid, cid, str(body.get("change") or "").strip())(), pid, f"3D model {title}")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/context/{cid}/model3d/brief")
+async def model3d_brief(pid: str, cid: str):
+    """Write (again) what the model must look like and which poses the script needs."""
+    from ..scene3d import models3d
+    await guard(_scene3d_call(models3d.write_brief, svc, pid, cid))()
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/context/{cid}/model3d/open")
+async def model3d_open(pid: str, cid: str):
+    from ..scene3d import viewer
+    return await guard(_scene3d_call(viewer.open_model, svc, pid, cid))()
+
+
 @app.post("/api/projects/{pid}/scene3d/all")
 async def scene3d_all(pid: str, body: dict = Body(default={})):
     """Plan, fix and render every clip that has the 3D camera reference on, in story order, in the background."""

@@ -18,7 +18,7 @@ from typing import Optional
 
 from .. import deps as deps_mod
 from .. import media
-from ..models import DependencyType, Node, NodeKind, Project, Scene3DClip, now_iso
+from ..models import DependencyType, Node, NodeKind, Project, Scene3DClip, now_iso  # noqa: F401
 from ..project import ProjectStore
 from ..tree import ancestors, find, leaves
 from . import render as render_mod
@@ -128,8 +128,12 @@ async def plan_clip(svc, pid: str, nid: str, wishes: str = "") -> Scene3DClip:
     prev = continues_from(p, n)
     base = shared_set(p, n)
     shared = (f"set_id {base.set_id}: {base.set.model_dump_json()}" if base else "")
+    from .models3d import describe, refs as model_refs
+    models = model_refs(p)
+    poses_text = describe(p, models)
     plan = await svc.brain.scene_plan(p, n, shared_set=shared, previous=_ending(prev.scene3d.plan) if prev else "",
-                                      wishes=wishes)
+                                      wishes=wishes, poses=poses_text,
+                                      pose_map={cid: r.poses for cid, r in models.items()})
     svc._ledger_llm(p, f"3D plan {nid}")
     svc.save(p, snapshot=False)
     plan.seconds = n.duration.likely_s or plan.seconds
@@ -139,7 +143,7 @@ async def plan_clip(svc, pid: str, nid: str, wishes: str = "") -> Scene3DClip:
         plan = continue_from(prev.scene3d.plan, plan)
     elif base and plan.set_id == base.set_id:
         plan.set = base.set.model_copy(deep=True)            # the same place keeps exactly the same size and colours
-    plan = normalise(plan)
+    plan = normalise(attach_models(plan, models))
     texts, _ = issues_text(plan)
     p = svc.load(pid)
     n = _clip(p, nid)
@@ -148,11 +152,41 @@ async def plan_clip(svc, pid: str, nid: str, wishes: str = "") -> Scene3DClip:
     return n.scene3d
 
 
+def attach_models(plan: ScenePlan, models: dict) -> ScenePlan:
+    """Every shape that stands for a character or object with a built 3D model uses that model (its real size, and
+    only poses it knows); the others stay plain shapes."""
+    p = plan.model_copy(deep=True)
+    used = {}
+    for th in p.things:
+        ref = models.get(th.actor_id) or models.get(th.model)
+        if not ref:
+            th.model = ""
+            for k in th.keys:
+                k.pose = None
+            continue
+        cid = th.actor_id if th.actor_id in models else th.model
+        th.model = cid
+        used[cid] = ref
+        th.size = [max(ref.depth, 0.2), max(ref.width, 0.2), max(ref.height, 0.2)] if th.kind == "figure" else \
+            [max(ref.width, 0.1), max(ref.depth, 0.1), max(ref.height, 0.1)]
+        for k in th.keys:
+            if k.pose and k.pose not in ref.poses:
+                k.pose = None
+    p.models = used
+    return p
+
+
+def refresh_models(project: Project, plan: ScenePlan) -> ScenePlan:
+    """The plan with the models as they are now (a rebuilt model has a new version, so the preview goes out of date)."""
+    from .models3d import refs as model_refs
+    return attach_models(plan, model_refs(project))
+
+
 def set_plan(svc, pid: str, nid: str, plan: ScenePlan) -> Scene3DClip:
     """Replace a clip's plan (an edit by you or by an agent). The rendered files become out of date."""
     p = svc.load(pid)
     n = _clip(p, nid)
-    plan = normalise(plan)
+    plan = normalise(refresh_models(p, plan))
     texts, _ = issues_text(plan)
     old = n.scene3d or Scene3DClip()
     n.scene3d = old.model_copy(update={"plan": plan, "status": "planned", "issues": texts, "approved_by": "",
@@ -167,7 +201,7 @@ async def build_clip(svc, pid: str, nid: str, renderer: Optional[str] = None) ->
     n = _clip(p, nid)
     if not n.scene3d or not n.scene3d.plan:
         raise Scene3DError(f"Clip '{n.title}' has no 3D plan yet. Make the plan first.")
-    plan = normalise(n.scene3d.plan)
+    plan = normalise(refresh_models(p, n.scene3d.plan))        # the 3D models as they are now
     settings = p.settings.scene3d
     how = renderer or settings.renderer
     size = media.frame_size(p.settings.aspect, render_mod.REFERENCE_RESOLUTION)
@@ -188,6 +222,7 @@ async def build_clip(svc, pid: str, nid: str, renderer: Optional[str] = None) ->
     p = svc.load(pid)
     n = _clip(p, nid)
     s = n.scene3d
+    s.plan = plan
     s.status = "rendered"
     s.renderer, s.engine = result.renderer, result.engine
     s.video, s.first, s.last = _rel(pid, result.video), _rel(pid, result.first), _rel(pid, result.last)
@@ -231,9 +266,23 @@ def _outdate_made_clip(n: Node) -> None:
 
 
 
+def models_changed(project: Project, node: Node) -> str:
+    """'' when the 3D models the preview was rendered with are still the same; else which one was rebuilt."""
+    from .models3d import refs as model_refs
+    s = node.scene3d
+    if not s or not s.plan or not s.plan.models:
+        return ""
+    now = model_refs(project)
+    for cid, ref in s.plan.models.items():
+        if cid not in now or now[cid].version != ref.version:
+            title = next((c.title for c in project.context if c.id == cid), cid)
+            return f"the 3D model of {title} changed after the preview was rendered"
+    return ""
+
+
 def ready_reference(project: Project, node: Node) -> Optional[Scene3DClip]:
     """The approved, up-to-date reference of a clip, or None (the clip is then made the usual way)."""
     s = node.scene3d
-    if enabled_for(project, node) and s and s.status == "approved" and not stale_reason(node):
+    if enabled_for(project, node) and s and s.status == "approved" and not stale_reason(node) and not models_changed(project, node):
         return s
     return None

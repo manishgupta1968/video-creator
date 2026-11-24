@@ -30,7 +30,7 @@ export interface Scene3DClip {
   issues: string[]; notes: string[]; approved_by: "" | "you" | "auto"; plan_hash: string;
   agent_rounds: number; agent_cost_usd: number; agent_log: string[]; updated_at: string; wishes?: string; changes?: string[];
 }
-export interface Scene3DSettings { enabled: boolean; agent: "claude_code" | "codex" | "pair"; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
+export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; enabled: boolean; agent: "claude_code" | "codex" | "pair"; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
 export interface FilmPart { nid: string; number: string; title: string; seconds: number; source: "3d" | "footage" | "card"; why: string }
 export interface Scene3DFilm { video: string | null; blend: string | null; parts: FilmPart[]; seconds: number; signature: string; notes: string[]; updated_at: string }
 export interface Scene3DInfo {
@@ -53,8 +53,13 @@ export interface Node {
   scene3d_enabled?: boolean | null; scene3d?: Scene3DClip | null;
 }
 export interface Actor { kind: string; description: string; clothing: string; behaviour: string; voice_description: string; voice_gender: string; voice_age: string; voice_pitch: string; voice_pace: string; voice_accent: string; voice_accent_label?: string; language?: string; voice_name: string; voice_note: string; voice_sample: string | null; voice_provider: string | null; voice_id: string | null; speaking_wpm: number | null; props: string; reference_sheet: string[]; avatar_id: string | null }
+export interface Model3D {
+  status: "needed" | "building" | "built" | "failed"; brief: { kind?: string; description?: string; height_m?: number; colours?: Record<string, string>; parts?: string[]; poses?: { name: string; description: string }[] };
+  script: string | null; blend: string | null; previews: Record<string, string>; height: number; width: number; depth: number;
+  poses: string[]; pose_heights: Record<string, number>; missing: string[]; issues: string[]; changes: string[]; agent_log: string[]; agent_cost_usd: number; version: string; updated_at: string;
+}
 export interface Ctx {
-  id: string; type: CtxType; title: string; text: string; files: string[]; role: CtxRole; scope: string; actor: Actor | null;
+  id: string; type: CtxType; title: string; text: string; files: string[]; role: CtxRole; scope: string; actor: Actor | null; model3d?: Model3D | null;
   consent: { confirmed: boolean; statement: string; confirmed_by: string; confirmed_at: string; files: string[] }; analysis: Record<string, any>;
 }
 export interface Dep { id: string; from_id: string; to_id: string; type: string; source: string; note: string; payload: Record<string, any> }
@@ -259,6 +264,9 @@ export const api = {
   scene3dSetPlan: (pid: string, nid: string, plan: ScenePlan) => req<View>("PUT", `${P(pid)}/nodes/${nid}/scene3d/plan`, plan),
   scene3dChange: (pid: string, nid: string, request: string) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/change`, { request }),
   scene3dOpen: (pid: string, nid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/nodes/${nid}/scene3d/open`),
+  model3dBuild: (pid: string, cid: string, change = "") => req<{ ok: boolean }>("POST", `${P(pid)}/context/${cid}/model3d/build`, { change }),
+  model3dBrief: (pid: string, cid: string) => req<View>("POST", `${P(pid)}/context/${cid}/model3d/brief`),
+  model3dOpen: (pid: string, cid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/context/${cid}/model3d/open`),
   scene3dFilm: (pid: string) => req<{ film: Scene3DFilm | null; stale: string }>("GET", `${P(pid)}/scene3d/film`),
   scene3dMakeFilm: (pid: string) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/film`, { prepare: true }),
   scene3dOpenFilm: (pid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/scene3d/film/open`),

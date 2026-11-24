@@ -162,6 +162,8 @@ def _kept(before: ScenePlan, after: ScenePlan, strict: bool = True) -> ScenePlan
 
 
 async def _call(svc, pid: str, name: str, task: AgentTask, what: str) -> AgentResult:
+    if not task.model:                  # the model you chose for this agent's 3D work ("" = its usual model)
+        task.model = svc.load(pid).settings.scene3d.agent_models.get(name, "")
     plugin = svc.reg.plugin(name)
     result = await plugin.run(task)
     if result.cost_usd:
@@ -270,6 +272,7 @@ async def fix_clip(svc, pid: str, nid: str, rounds: Optional[int] = None, agent:
 @dataclass
 class PrepareReport:
     nid: str
+    notes: list[str] = field(default_factory=list)
     planned: bool = False
     fix: Optional[FixReport] = None
     status: str = ""
@@ -291,9 +294,18 @@ async def prepare_clip(svc, pid: str, nid: str, fix: bool = True, renderer: Opti
     """The whole automatic chain for one clip: plan (when there is none, or the clip's length changed), fix (when the
     checks find a problem), render, and approve by itself when auto-approve is on and nothing major is left."""
     rep = PrepareReport(nid=nid)
+    from .models3d import ensure_models, needed_items, refs as model_refs
+    rep.notes = await ensure_models(svc, pid, [nid])          # the characters' and objects' 3D models, built once
     p = svc.load(pid)
     n = find(p, nid)
     why = s3.stale_reason(n) if n.scene3d else ""
+    have = set(model_refs(p))
+    wanted = {c.id for c in needed_items(p, [nid])} & have
+    if n.scene3d and n.scene3d.plan and wanted - set(n.scene3d.plan.models):
+        replan = True                                         # a character gained a 3D model: plan again, with its poses
+    if n.scene3d and n.scene3d.status not in ("planned", "failed") and s3.models_changed(p, n):
+        n.scene3d.status = "planned"                          # a model was rebuilt: render the preview again
+        svc.save(p, snapshot=False)
     if replan or not n.scene3d or not n.scene3d.plan or "plan it again" in why:
         await s3.plan_clip(svc, pid, nid)
         rep.planned = True

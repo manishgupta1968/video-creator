@@ -54,6 +54,7 @@ class Key(BaseModel):
     t: float = 0
     at: Vec = Field(default_factory=lambda: [0.0, 0.0, 0.0])
     yaw_deg: Optional[float] = None     # which way it faces, 0 = towards +X; None = the way it moves
+    pose: Optional[str] = None          # a pose its 3D model knows ("walk", "kneel", "bow" …); None = keep the pose before
 
 
 class Thing(BaseModel):
@@ -66,6 +67,7 @@ class Thing(BaseModel):
     colour: str = ""                    # "" = given a distinct palette colour
     keys: list[Key] = Field(default_factory=lambda: [Key()])
     must_be_seen: bool = True           # figures: should be in the frame for most of the clip
+    model: str = ""                     # the context item whose 3D model is used for this shape ("" = a plain shape)
 
 
 class CameraKey(BaseModel):
@@ -96,8 +98,20 @@ class SetSpec(BaseModel):
     wall_colour: str = NEUTRAL["wall"]
 
 
+class ModelRef(BaseModel):
+    """A built 3D model a scene can use: the script that builds it inside Blender, its size and the poses it knows."""
+    script: str                         # absolute path of its model.py
+    height: float = 1.7
+    width: float = 0.5
+    depth: float = 0.4
+    poses: list[str] = Field(default_factory=list)
+    pose_heights: dict[str, float] = Field(default_factory=dict)   # how tall it is in each pose
+    version: str = ""                   # changes when the model is rebuilt (so scenes that use it go out of date)
+
+
 class ScenePlan(BaseModel):
-    set_id: str = ""                    # clips with the same set_id share one set (same place in every shot)
+    set_id: str = ""
+    models: dict[str, ModelRef] = Field(default_factory=dict)   # context id -> its 3D model (filled by the tool)                    # clips with the same set_id share one set (same place in every shot)
     set: SetSpec = Field(default_factory=SetSpec)
     things: list[Thing] = Field(default_factory=list)
     camera: Camera = Field(default_factory=Camera)
@@ -192,16 +206,28 @@ def project(eye: Vec, target: Vec, lens_mm: float, aspect: str, point: Vec) -> O
     return 0.5 + x / z / half_w / 2, 0.5 - y / z / half_h / 2, z
 
 
-def corners(thing: Thing, t: float) -> list[Vec]:
+def pose_at(thing: Thing, t: float) -> Optional[str]:
+    """The pose a shape is in at time t: the last key at or before t that names one."""
+    pose = None
+    for k in sorted(thing.keys, key=lambda k: k.t):
+        if k.t <= t + 1e-6 and k.pose:
+            pose = k.pose
+    return pose
+
+
+def corners(thing: Thing, t: float, plan: Optional["ScenePlan"] = None) -> list[Vec]:
     cx, cy, cz = thing_at(thing, t)
     w, dpt, h = (list(thing.size) + [1, 1, 1])[:3]
+    ref = plan.models.get(thing.model) if plan is not None and thing.model else None
+    if ref:                                    # a 3D model in a pose is as tall as that pose (kneeling is lower)
+        h = ref.pose_heights.get(pose_at(thing, t) or "stand", h)
     return [[cx + sx * w / 2, cy + sy * dpt / 2, cz + sz * h] for sx in (-1, 1) for sy in (-1, 1) for sz in (0, 1)]
 
 
 def visibility(plan: ScenePlan, thing: Thing, t: float) -> tuple[str, float]:
     """How much of a thing the camera sees at time t: ('in' | 'partly' | 'out' | 'behind', share of its box in frame)."""
     eye, target, lens = camera_at(plan.camera, t)
-    pts = [project(eye, target, lens, plan.aspect, c) for c in corners(thing, t)]
+    pts = [project(eye, target, lens, plan.aspect, c) for c in corners(thing, t, plan)]
     front = [p for p in pts if p]
     if not front:
         return "behind", 0.0
@@ -299,10 +325,11 @@ def continue_from(previous: ScenePlan, plan: ScenePlan) -> ScenePlan:
     eye, target, lens = camera_at(prev.camera, prev.seconds)
     first = CameraKey(t=0.0, at=eye, look_at=target, lens_mm=lens)
     p.camera.keys = [first] + [k for k in p.camera.keys if k.t > 0]
-    ends = {th.id: thing_at(th, prev.seconds) for th in prev.things}
+    ends = {th.id: (thing_at(th, prev.seconds), pose_at(th, prev.seconds)) for th in prev.things}
     for th in p.things:
         if th.id in ends:
-            th.keys = [Key(t=0.0, at=ends[th.id])] + [k for k in th.keys if k.t > 0]
+            at, pose = ends[th.id]
+            th.keys = [Key(t=0.0, at=at, pose=pose)] + [k for k in th.keys if k.t > 0]   # same place, same pose
     p.set_id, p.set = prev.set_id, prev.set.model_copy(deep=True)     # a continuing shot is always in the same place
     return p
 
