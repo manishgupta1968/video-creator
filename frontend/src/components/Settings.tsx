@@ -159,8 +159,8 @@ function BrainTab({ d, patch, goKeys }: { d: any; patch: (p: any) => Promise<voi
         <summary className="cursor-pointer font-medium">Type an exact model name (advanced)</summary>
         <p className="mt-1 text-muted">Only if a model is missing from the lists above. This is the model each vendor uses for planning when you chose “Automatic”.</p>
         <div className="mt-2 grid gap-2">
-          {["anthropic", "openai", "gemini"].map((k) => (
-            <Row key={k} label={`${k} model`} hint="Exact model id from the vendor">
+          {["claude_code_brain", "codex_brain", "anthropic", "openai", "gemini"].map((k) => (
+            <Row key={k} label={`${brainName(k)} model`} hint={k.endsWith("_brain") ? "A model this tool accepts (e.g. opus, sonnet, or a Codex model name); empty = its usual model" : "Exact model id from the vendor"}>
               <Input defaultValue={models[k]} onBlur={(e) => e.target.value !== models[k] && patch({ llm: { models: { ...models, [k]: e.target.value } } })} className="w-56" />
             </Row>
           ))}

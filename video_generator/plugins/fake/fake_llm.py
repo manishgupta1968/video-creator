@@ -271,9 +271,22 @@ class FakeLLM(LLM):
             # side by side as the camera sees them (staggered along X, a little apart in depth), so no one hides another
             y = (i % 2) * 0.8
             start = [-travel / 2 + (i - (len(in_shot[:4]) - 1) / 2) * 1.6, y, 0.0]
+            known = (m.get("pose_map") or {}).get(aid) or []
+            if i > 0 and known:                  # offline: only the first character acts; the others wait where they are
+                start = [travel / 2 + 1.2 * i, y, 0.0]
+                rest = "sit" if "sit" in known and "sit" in words else ("stand" if "stand" in known else None)
+                things.append({"id": f"a{i + 1}", "label": actors[aid].get("title") or f"character {i + 1}", "actor_id": aid,
+                               "kind": "figure", "shape": shape, "size": size, "keys": [{"t": 0, "at": start, "pose": rest, "yaw_deg": 180}]})
+                continue
+            first = "walk" if moving and "walk" in known else ("stand" if "stand" in known else None)
+            last = next((p for key, p in (("touch", "touch_ground"), ("kneel", "kneel"), ("bow", "bow"), ("sit", "sit"),
+                                          ("bless", "raise_hand"), ("namaste", "namaste")) if key in words and p in known),
+                        "stand" if "stand" in known else None)
+            keys = [{"t": 0, "at": start, "pose": first}, {"t": secs, "at": [start[0] + travel, y, 0.0], "pose": last}]
+            if first and last and first != last and secs > 1.5:      # walk, then change pose for the last part
+                keys.insert(1, {"t": round(secs * 0.6, 2), "at": [start[0] + travel * 0.9, y, 0.0], "pose": first})
             things.append({"id": f"a{i + 1}", "label": actors[aid].get("title") or f"character {i + 1}", "actor_id": aid,
-                           "kind": "figure", "shape": shape, "size": size,
-                           "keys": [{"t": 0, "at": start}, {"t": secs, "at": [start[0] + travel, y, 0.0]}]})
+                           "kind": "figure", "shape": shape, "size": size, "keys": keys})
         if not things:
             things.append({"id": "subject", "label": m.get("title") or "the subject", "kind": "figure", "shape": "box",
                            "size": [1, 1, 1], "keys": [{"t": 0, "at": [0, 0, 0]}]})
@@ -297,6 +310,34 @@ class FakeLLM(LLM):
                 "things": things, "camera": {"lens_mm": 35, "keys": cam, "move": sc.get("camera") or "a steady camera"},
                 "lights": [{"kind": "sun", "at": [-6, -6, 10], "look_at": [0, 0, 0], "strength": 3}],
                 "seconds": secs, "fps": 24, "aspect": m.get("aspect") or "16:9"}
+
+    def _model_brief(self, m: dict) -> dict:
+        """Offline brief: size from the kind, colours from colour words, and the poses the action words ask for."""
+        words = " ".join([m.get("description") or "", m.get("clothing") or "", " ".join(m.get("actions") or [])]).lower()
+        kind = m.get("kind") or ""
+        character = kind in ("ai_person", "real_person", "digital_twin", "animal")
+        named = {"saffron": "#f4a62a", "orange": "#f08a24", "white": "#f2f2f2", "black": "#222222", "blue": "#2f5fb3",
+                 "red": "#c0392b", "green": "#3c8d40", "yellow": "#e6c229", "brown": "#7a4b2a", "grey": "#8a8a8a",
+                 "gray": "#8a8a8a", "maroon": "#7b1e2b", "navy": "#1f2d5a"}
+        found = [h for w, h in named.items() if w in words]
+        colours = {"clothes": found[0]} if found else {}
+        if "beard" in words or "white hair" in words:
+            colours["hair"] = "#e6e6e6"
+        poses = [{"name": "stand", "description": "standing upright"}]
+        for key, name, text in (("walk", "walk", "mid-stride"), ("kneel", "kneel", "on both knees"),
+                                ("bow", "bow", "bent forward from the waist"), ("touch", "touch_ground", "kneeling, bent forward, hands on the ground"),
+                                ("sit", "sit", "sitting"), ("bless", "raise_hand", "right hand raised"),
+                                ("namaste", "namaste", "palms together"), ("reach", "reach", "arm stretched forward")):
+            if key in words and all(p["name"] != name for p in poses):
+                poses.append({"name": name, "description": text})
+        if not character:
+            return {"kind": "object", "description": m.get("description") or m.get("title") or "an object", "height_m": 0.5,
+                    "width_m": 0.5, "depth_m": 0.5, "colours": colours, "parts": ["a simple block shape"],
+                    "poses": [{"name": "stand", "description": "as it is"}]}
+        return {"kind": "character", "description": m.get("description") or f"{m.get('title', 'a person')}",
+                "height_m": 1.0 if kind == "animal" else 1.72, "width_m": 0.5, "depth_m": 0.35, "colours": colours,
+                "parts": ["blocky head with eyes, nose and hair", "clothes as simple blocks", "arms with hands", "legs with feet"],
+                "poses": poses}
 
     def _scene_change(self, m: dict) -> dict:
         """Offline: the few changes the plain rules understand (bigger, closer, slower …); anything else is left as it was."""

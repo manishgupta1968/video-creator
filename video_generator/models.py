@@ -125,6 +125,28 @@ class ActorDetails(BaseModel):
     avatar_id: Optional[str] = None
 
 
+class Model3D(BaseModel):
+    """The low-poly 3D model of a character or object, built once in Blender by Claude Code (or Codex) and reused in
+    every clip's 3D scene. Nothing is hard-wired: what it looks like and which poses it needs come from the plan."""
+    status: Literal["needed", "building", "built", "failed"] = "needed"
+    brief: dict[str, Any] = Field(default_factory=dict)     # look, size and poses the script needs (from the planner)
+    script: Optional[str] = None        # model.py (project-relative): builds the model inside Blender
+    blend: Optional[str] = None         # model.blend, to open in Blender
+    previews: dict[str, str] = Field(default_factory=dict)  # front | side | back | three_quarter | pose_<name> -> picture
+    height: float = 0
+    width: float = 0
+    depth: float = 0
+    poses: list[str] = Field(default_factory=list)          # the poses the built model really has
+    pose_heights: dict[str, float] = Field(default_factory=dict)   # how tall it is in each pose (the planner frames with it)
+    missing: list[str] = Field(default_factory=list)        # poses the plan needs that the model does not have
+    issues: list[str] = Field(default_factory=list)
+    changes: list[str] = Field(default_factory=list)        # the changes you asked for
+    agent_log: list[str] = Field(default_factory=list)
+    agent_cost_usd: float = 0
+    version: str = ""
+    updated_at: str = Field(default_factory=now_iso)
+
+
 class ContextItem(BaseModel):
     id: str = Field(default_factory=lambda: new_id("ctx_"))
     type: ContextType = ContextType.text
@@ -134,6 +156,7 @@ class ContextItem(BaseModel):
     role: ContextRole = ContextRole.knowledge
     scope: str = "project"                            # project | node:<id> | clip:<id>
     actor: Optional[ActorDetails] = None
+    model3d: Optional[Model3D] = None   # its 3D model for the 3D camera reference (characters and objects)
     consent: Consent = Field(default_factory=Consent)
     analysis: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=now_iso)
@@ -428,8 +451,10 @@ class Scene3DSettings(BaseModel):
     """The optional "3D camera reference" add-on. Off = the tool works exactly as it did without it."""
     enabled: bool = False
     agent: Literal["claude_code", "codex", "pair"] = "claude_code"   # who builds and fixes scenes the fixed builder cannot
+    agent_models: dict[str, str] = Field(default_factory=dict)       # the model each agent uses for 3D work: {"claude_code": "opus", "codex": "…"}; "" = its usual
     auto_approve: bool = False          # True = a rendered 3D preview whose checks pass is approved by itself
     max_fix_rounds: int = 3             # automatic check-and-fix rounds before the preview is shown to you
+    models: bool = True                 # build a low-poly 3D model of each character and object (needs Blender and an agent)
     agent_max_usd: float = 2.0          # the most the agent may spend on one clip (all rounds together)
     renderer: Literal["auto", "blender", "sketch"] = "auto"   # auto = Blender when installed, else the free sketch
 

@@ -22,6 +22,9 @@ THE SET THIS CLIP SHARES WITH OTHER CLIPS (reuse its set_id and size when this c
 WHAT THE USER WANTS IN THIS 3D SCENE (their own words; follow them wherever they do not contradict the rules below):
 {{wishes}}
 
+3D MODELS OF THE CHARACTERS (their real size, and every pose each one knows, with its height in that pose):
+{{models}}
+
 HOW THE CLIP BEFORE ENDED (for a clip that continues it, start the camera and every shared figure exactly there):
 {{previous}}
 
@@ -36,6 +39,13 @@ Rules:
   its own colour from: red, blue, green, yellow, purple, orange, cyan, pink (as #rrggbb). Scenery is a `prop`.
   label = who or what it stands for, in a few words. keys = where its base is over time: {t, at:[x,y,z]}.
   Movement between keys is straight and even. Add more keys for a curve or a stop.
+- Poses: a character with a 3D model takes the poses the script asks for, in order, by naming them in its keys:
+  {t, at:[x,y,z], pose:"walk"}, then {t, at, pose:"kneel"}, then {t, at, pose:"touch_ground"}. Use only the poses listed
+  for that character. Give each pose time (about 0.5-1 s to change pose). A pose stays until the next key names another.
+- YOU DECIDE THE CAMERA, as a film director would: where it stands, how high, what it looks at, which lens, and how it
+  moves, for every moment of the shot. Frame the action at each moment using the real heights above (a person who
+  kneels is lower: bring the camera down and closer, look at their head and hands, not at empty air above them).
+  Follow the script's camera words when it has them; when it does not, choose the camera that tells the story best.
 - camera: lens_mm (24-35 wide, 50-85 close), keys = {t, at:[x,y,z], look_at:[x,y,z]}. The FIRST key is at t = 0 and
   the LAST at t = {{seconds}}. Follow the script's camera words exactly (comes down from above, pans right, tilts up,
   follows them, pushes in...). `move` = the camera move in one plain sentence.

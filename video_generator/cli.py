@@ -1065,6 +1065,42 @@ def scene3d_film(project: Optional[str] = typer.Option(None, "-p"),
             con.print(f"[red]{exc}[/]")
 
 
+@scene3d_app.command("model")
+def scene3d_model(name: str = typer.Argument(..., help="the character's or object's name (or its id)"),
+                  project: Optional[str] = typer.Option(None, "-p"),
+                  change: str = typer.Option("", help="what to change, e.g. \"give him a longer white beard\""),
+                  open_it: bool = typer.Option(False, "--open", help="open the model in Blender afterwards")):
+    """Build (or change) the low-poly 3D model of a character or object; Claude Code / Codex builds it in Blender."""
+    from .scene3d import models3d
+    from .scene3d import service as s3
+    from .scene3d import viewer
+    svc = _svc()
+    pid = _pid(project)
+    p = svc.load(pid)
+    item = next((c for c in p.context if c.id == name or c.title.lower() == name.lower()), None)
+    if not item:
+        con.print(f"[red]No character or object called {name}.[/] Known: " + ", ".join(c.title for c in p.context if c.type.value in ("actor", "object")))
+        raise typer.Exit(1)
+    with con.status(f"Building the 3D model of {item.title} (this can take a few minutes)…"):
+        try:
+            m = asyncio.run(models3d.build_model(svc, pid, item.id, change))
+        except s3.Scene3DError as exc:
+            con.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+    con.print(f"{item.title}: [bold]{m.status}[/] · {m.height:.2f} m · poses: {', '.join(m.poses) or '-'}")
+    for i in m.issues:
+        con.print(f"  [yellow]! {i}[/]")
+    for line in m.agent_log[-6:]:
+        con.print(f"  [dim]{line}[/]")
+    for k, v in m.previews.items():
+        con.print(f"  {k}: {svc_path(pid, v)}")
+    if open_it and m.status == "built":
+        try:
+            con.print(viewer.open_model(svc, pid, item.id)["note"])
+        except s3.Scene3DError as exc:
+            con.print(f"[red]{exc}[/]")
+
+
 @scene3d_app.command("all")
 def scene3d_all(project: Optional[str] = typer.Option(None, "-p"),
                 renderer: str = typer.Option("", help="auto | blender | sketch"),

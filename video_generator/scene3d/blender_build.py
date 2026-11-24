@@ -96,6 +96,46 @@ def build_thing(th):
     return root
 
 
+def build_model(th, ref):
+    """A character or object built from its own model.py (written by Claude Code / Codex for this video), under an
+    empty that carries the shape's path. Returns (root empty, armature or None, POSES) or None when the script fails."""
+    ns = {"__name__": "model", "bpy": bpy}
+    try:
+        with open(ref["script"]) as f:
+            exec(compile(f.read(), ref["script"], "exec"), ns)
+        model_root = ns["build"](th["id"] + "_model")
+    except Exception as exc:
+        print("MODEL_FAILED", th["id"], exc)
+        return None
+    root = bpy.data.objects.new(th["id"], None)
+    bpy.context.collection.objects.link(root)
+    model_root.parent = root
+    model_root.location = (0, 0, 0)
+    arm = model_root if model_root.type == "ARMATURE" else None
+    return root, arm, ns.get("POSES") or {}
+
+
+def animate_poses(arm, model_root, poses, keys, fps):
+    """Each key that names a pose: every bone takes that pose at that moment (in-between moments blend evenly)."""
+    if not poses:
+        return
+    for k in sorted(keys, key=lambda k: k["t"]):
+        name = k.get("pose")
+        if not name or name not in poses:
+            continue
+        pose = poses[name] or {}
+        f = frame_of(k["t"], fps)
+        model_root.location.z = float(pose.get("__lift__", 0) or 0)
+        model_root.keyframe_insert("location", frame=f)
+        if arm is None:
+            continue
+        for pb in arm.pose.bones:
+            pb.rotation_mode = "XYZ"
+            rot = pose.get(pb.name)
+            pb.rotation_euler = tuple(math.radians(float(v)) for v in (list(rot) + [0, 0, 0])[:3]) if rot else (0, 0, 0)
+            pb.keyframe_insert("rotation_euler", frame=f)
+
+
 def yaw_for(keys, i):
     k = keys[i]
     if k.get("yaw_deg") is not None:
@@ -235,8 +275,16 @@ def main():
     frames = max(1, int(round(float(plan.get("seconds") or 5) * fps)))
     scene.unit_settings.system = "METRIC"
     build_set(plan.get("set") or {})
+    models = plan.get("models") or {}
     for th in plan.get("things") or []:
-        animate(build_thing(th), th.get("keys") or [{"t": 0, "at": [0, 0, 0]}], fps)
+        keys = th.get("keys") or [{"t": 0, "at": [0, 0, 0]}]
+        built = build_model(th, models[th["model"]]) if th.get("model") in models else None
+        if built:
+            root, arm, poses = built
+            animate(root, keys, fps)
+            animate_poses(arm, root.children[0], poses, keys, fps)
+        else:
+            animate(build_thing(th), keys, fps)
     build_camera(plan.get("camera") or {}, fps)
     build_lights(plan.get("lights"))
     setup_render(scene, engine, width, height, fps, frames, out_dir)

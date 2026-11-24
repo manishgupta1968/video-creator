@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, Ctx, fileUrl } from "../api";
 import { CTX_ROLES, CTX_TYPES, useP, useSettings } from "../lib";
+import Model3DSection from "./Model3DSection";
 import StockSearch from "./StockSearch";
 import { RecordVoiceDialog } from "./VoiceRecorder";
 import { Badge, Button, cn, Dialog, DropZone, Editable, HelpTip, Select, Switch, Tip } from "../ui";
@@ -237,6 +238,7 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
             )}
           </div>
         )}
+        {(item.type === "actor" || item.type === "object") && <Model3DSection item={item} />}
       </div>
       <RecordVoiceDialog item={item} open={recording} onOpenChange={setRecording} />
       <StockSearch item={item} open={finding} onOpenChange={setFinding} />

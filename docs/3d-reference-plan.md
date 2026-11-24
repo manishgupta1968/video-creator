@@ -175,6 +175,40 @@ in the app, or press "Open the whole film in Blender": film.blend has every clip
 editor, each with its number and title on top. It goes out of date when a clip or its preview changes.
 Command: `vg scene3d film --open`.
 
+## 3D models of the characters and objects (nothing hard-wired)
+Like the video, people and things in the 3D scenes are low-poly models made for this story, not fixed shapes.
+
+1. **Brief.** The planner reads every moment a character or object appears in the scripts and writes its brief:
+   what it looks like (it fills in what the story does not say, and never contradicts it), its real size, its
+   colours, its parts (face with eyes, eyebrows and beard; robe; hands …) and every pose the script needs, each with
+   one sentence (walk, kneel, touch_ground, sit_cross_legged, bless …).
+2. **Build.** Claude Code (or Codex) writes `model.py`, a Blender script that builds the model low-poly but
+   recognisable, with bones and those poses. The only contract: `POSES = {name: {bone: [x, y, z] degrees}}` (an
+   optional `"__lift__"` moves the whole body, for kneeling or sitting) and `build(name)`, which returns the root at
+   the origin, on the floor, facing +X, at real size. It works in a locked folder with the brief and the character's
+   pictures, and runs the free model check (`python -m video_generator.scene3d.model_check model.py`) as often as it
+   likes: the check builds the model in Blender, measures it, checks every pose uses real bones, renders it from four
+   sides and in every pose, and lists problems.
+3. **Check.** The tool runs the same check itself. Problems go back to the agent for another round (up to
+   `max_fix_rounds`). A model that passes is kept: `model.py`, `model.blend`, the pictures, its size, its poses and
+   **how tall it is in each pose**.
+4. **Use.** Every clip's scene builds its characters from their `model.py` and moves them through the poses its plan
+   names, in order (walk → kneel → touch_ground). Built once, reused everywhere, so a character looks the same in
+   every clip. A rebuilt model makes the previews (and the whole film) that use it out of date.
+5. **The planner decides the camera.** It is given every model's size and its height in each pose, and places the
+   camera (position, height, look-at, lens, path) to frame each moment, for example lower and closer when someone
+   kneels. The "in view" check uses the pose heights too.
+
+Models are built automatically before a clip's 3D scene is planned (switch: "Build a low-poly 3D model of each
+character and object"). Each character's card has a **3D model** section: the four-side and pose pictures, Build
+again, Change ("give him a longer white beard"), and Open in Blender. Without Blender or an agent, or for a model
+that keeps failing, the clip uses plain shapes. Command: `vg scene3d model Guru [--change "…"] [--open]`.
+
+**Choosing the models the tools use.** Settings → AI brain chooses the brain (Claude Code: its usual model, Opus or
+Sonnet; Codex), separately for planning, the Review Agent and simple jobs, and "Type an exact model name" takes any
+model name for Claude Code or Codex. The Whole video box chooses the model for the 3D work (building models, fixing
+and changing scenes): Claude Code's usual model, Opus, Sonnet or Fable, and any Codex model name.
+
 ## Render engines
 - **Workbench** is fast. On Linux it needs the `libegl1` and `libgl1-mesa-dri` packages, and then works even with
   no graphics card. Measured on the build machine: a 4-second 640×360 clip took 21–35 s.

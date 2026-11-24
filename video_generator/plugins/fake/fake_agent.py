@@ -62,6 +62,18 @@ class FakeAgent(SceneAgent):
             problems = self.checker_problems.pop(0) if self.checker_problems else []
             (task.folder / "verdict.json").write_text(json.dumps({"ok": not problems, "problems": problems}))
             return AgentResult(ok=True, summary="looked at the pictures: " + ("; ".join(problems) or "the camera matches"))
+        if task.role == "model":                  # the offline stand-in figure, sized and coloured from the brief
+            brief = json.loads((task.folder / "brief.json").read_text())
+            if task.request:
+                for word, hexc in (("saffron", "#f4a62a"), ("white", "#f2f2f2"), ("blue", "#2f5fb3"), ("red", "#c0392b")):
+                    if word in task.request.lower():
+                        brief.setdefault("colours", {})["clothes"] = hexc
+            if brief.get("kind") == "object":
+                (task.folder / "model.py").write_text(object_script(brief))
+            else:
+                (task.folder / "model.py").write_text(mannequin_script(brief))
+            return AgentResult(ok=True, summary="Built a simple jointed figure from the brief." if brief.get("kind") != "object"
+                               else "Built a simple block object from the brief.")
         if task.role == "change":
             data, done = simple_change(json.loads((task.folder / "plan.json").read_text()), task.request)
             (task.folder / "plan.json").write_text(json.dumps(data, indent=1))
@@ -79,3 +91,140 @@ class FakeAgent(SceneAgent):
         data["camera"]["keys"] = keys
         (task.folder / "plan.json").write_text(json.dumps(data, indent=1))
         return AgentResult(ok=True, summary="moved the camera back so every figure is in view")
+
+
+MANNEQUIN = '''# A simple jointed figure (the offline stand-in for a model Claude Code or Codex would build from the brief).
+# Contract: POSES = {name: {bone: [x, y, z] degrees}} (optional "__lift__": metres up/down for the whole body),
+# build(name) -> root object, at the origin, on the floor, facing +X, real size.
+import bpy
+from mathutils import Matrix, Vector
+
+H = __HEIGHT__
+COLOURS = __COLOURS__
+s = H / 1.75
+POSES = __POSES__
+
+
+def _material(name, hex_colour):
+    h = hex_colour.lstrip("#")
+    rgb = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    m = bpy.data.materials.new(name)
+    m.diffuse_color = (*lin, 1)
+    m.use_nodes = True
+    bsdf = m.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        bsdf.inputs["Base Color"].default_value = (*lin, 1)
+    return m
+
+
+def _box(name, size, centre, material, arm, bone):
+    sx, sy, sz = size
+    v = [(x * sx / 2, y * sy / 2, z * sz / 2) for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]
+    f = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    me = bpy.data.meshes.new(name)
+    me.from_pydata(v, [], f)
+    me.materials.append(material)
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.collection.objects.link(ob)
+    ob.parent, ob.parent_type, ob.parent_bone = arm, "BONE", bone
+    bpy.context.view_layer.update()
+    ob.matrix_world = Matrix.Translation(Vector(centre))
+    return ob
+
+
+def build(name):
+    arm = bpy.data.objects.new(name, bpy.data.armatures.new(name))
+    bpy.context.collection.objects.link(arm)
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode="EDIT")
+    eb = arm.data.edit_bones
+    def bone(n, head, tail, parent=None):
+        b = eb.new(n)
+        b.head, b.tail = [v * s for v in head], [v * s for v in tail]
+        if parent:
+            b.parent = eb[parent]
+        return b
+    bone("hips", (0, 0, 0.95), (0, 0, 1.05))
+    bone("spine", (0, 0, 1.05), (0, 0, 1.45), "hips")
+    bone("head", (0, 0, 1.47), (0, 0, 1.75), "spine")
+    for side, y in (("L", 0.21), ("R", -0.21)):
+        bone(f"upper_arm.{side}", (0, y, 1.42), (0, y, 1.12), "spine")
+        bone(f"forearm.{side}", (0, y, 1.12), (0, y, 0.86), f"upper_arm.{side}")
+        bone(f"thigh.{side}", (0, y / 2, 0.95), (0, y / 2, 0.5), "hips")
+        bone(f"shin.{side}", (0, y / 2, 0.5), (0, y / 2, 0.06), f"thigh.{side}")
+    bpy.ops.object.mode_set(mode="OBJECT")
+    skin, cloth, hair = (_material(name + "_" + k, COLOURS.get(k, d)) for k, d in
+                         (("skin", "#c68e5c"), ("clothes", "#e8e8e8"), ("hair", "#2b2b2b")))
+    _box(name + "_torso", (0.24 * s, 0.38 * s, 0.5 * s), (0, 0, 1.2 * s), cloth, arm, "spine")
+    _box(name + "_pelvis", (0.22 * s, 0.34 * s, 0.16 * s), (0, 0, 0.97 * s), cloth, arm, "hips")
+    _box(name + "_head", (0.2 * s, 0.18 * s, 0.24 * s), (0, 0, 1.6 * s), skin, arm, "head")
+    _box(name + "_hair", (0.21 * s, 0.19 * s, 0.06 * s), (-0.01 * s, 0, 1.73 * s), hair, arm, "head")
+    _box(name + "_nose", (0.04 * s, 0.03 * s, 0.05 * s), (0.11 * s, 0, 1.6 * s), skin, arm, "head")
+    for side, y in (("L", 0.21), ("R", -0.21)):
+        _box(f"{name}_upper_arm.{side}", (0.09 * s, 0.09 * s, 0.3 * s), (0, y * s, 1.27 * s), cloth, arm, f"upper_arm.{side}")
+        _box(f"{name}_forearm.{side}", (0.08 * s, 0.08 * s, 0.24 * s), (0, y * s, 0.99 * s), skin, arm, f"forearm.{side}")
+        _box(f"{name}_hand.{side}", (0.09 * s, 0.05 * s, 0.1 * s), (0, y * s, 0.82 * s), skin, arm, f"forearm.{side}")
+        _box(f"{name}_thigh.{side}", (0.13 * s, 0.13 * s, 0.45 * s), (0, y / 2 * s, 0.72 * s), cloth, arm, f"thigh.{side}")
+        _box(f"{name}_shin.{side}", (0.11 * s, 0.11 * s, 0.42 * s), (0, y / 2 * s, 0.28 * s), cloth, arm, f"shin.{side}")
+        _box(f"{name}_foot.{side}", (0.24 * s, 0.1 * s, 0.06 * s), (0.06 * s, y / 2 * s, 0.03 * s), skin, arm, f"shin.{side}")
+    return arm
+'''
+
+# the poses this simple figure knows (a real agent writes the poses the brief asks for, for its own bones)
+MANNEQUIN_POSES = {
+    "stand": {},
+    "walk": {"thigh.L": [0, 0, -25], "thigh.R": [0, 0, 25], "shin.R": [0, 0, 20], "upper_arm.L": [0, 0, 20], "upper_arm.R": [0, 0, -20]},
+    "sit": {"thigh.L": [0, 0, -90], "thigh.R": [0, 0, -90], "shin.L": [0, 0, 90], "shin.R": [0, 0, 90], "__lift__": -0.47},
+    "kneel": {"shin.L": [0, 0, 90], "shin.R": [0, 0, 90], "__lift__": -0.44},
+    "bow": {"spine": [0, 0, -50], "head": [0, 0, -15], "upper_arm.L": [0, 0, -15], "upper_arm.R": [0, 0, -15]},
+    "touch_ground": {"shin.L": [0, 0, 90], "shin.R": [0, 0, 90], "spine": [0, 0, -75], "head": [0, 0, -10],
+                     "upper_arm.L": [0, 0, -40], "upper_arm.R": [0, 0, -40], "__lift__": -0.44},
+    "namaste": {"upper_arm.L": [0, 0, -25], "upper_arm.R": [0, 0, -25], "forearm.L": [-25, 0, -110], "forearm.R": [25, 0, -110]},
+    "raise_hand": {"upper_arm.R": [0, 0, -150], "forearm.R": [0, 0, -10]},
+    "reach": {"upper_arm.R": [0, 0, -80]},
+}
+
+
+def mannequin_script(brief: dict) -> str:
+    """model.py for the offline stand-in figure, sized and coloured from the brief, with the poses it can do."""
+    import re
+    height = float(brief.get("height_m") or 1.75)
+    colours = {k: v for k, v in (brief.get("colours") or {}).items() if re.fullmatch(r"#[0-9a-fA-F]{6}", str(v))}
+    poses = dict(MANNEQUIN_POSES)
+    s = height / 1.75
+    for p in poses.values():
+        if "__lift__" in p:
+            p["__lift__"] = round(p["__lift__"] * s, 3)
+    return (MANNEQUIN.replace("__HEIGHT__", repr(round(height, 3))).replace("__COLOURS__", repr(colours))
+            .replace("__POSES__", json.dumps(poses)))
+
+
+OBJECT = '''# A simple block object (the offline stand-in for a model Claude Code or Codex would build from the brief).
+import bpy
+
+W, D, H = __SIZE__
+COLOUR = __COLOUR__
+POSES = {}
+
+
+def build(name):
+    h = COLOUR.lstrip("#")
+    rgb = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    m = bpy.data.materials.new(name + "_colour")
+    m.diffuse_color = (*rgb, 1)
+    v = [(x * W / 2, y * D / 2, z * H) for x in (-1, 1) for y in (-1, 1) for z in (0, 1)]
+    f = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    me = bpy.data.meshes.new(name)
+    me.from_pydata(v, [], f)
+    me.materials.append(m)
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.collection.objects.link(ob)
+    return ob
+'''
+
+
+def object_script(brief: dict) -> str:
+    size = (float(brief.get("width_m") or 0.5), float(brief.get("depth_m") or 0.5), float(brief.get("height_m") or 0.5))
+    colour = next(iter((brief.get("colours") or {}).values()), "#8a6a4a")
+    return OBJECT.replace("__SIZE__", repr(size)).replace("__COLOUR__", repr(colour))

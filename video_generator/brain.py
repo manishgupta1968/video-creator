@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import languages
 from .context import effective_context, summarize_for_llm
-from .models import (ActorInShot, ClipScript, Continuity, ContextType, DialogueLine, Node, Project, ShotType)
+from .models import (ActorInShot, ClipScript, Continuity, ContextItem, ContextType, DialogueLine, Node, Project, ShotType)
 from .plugins.base import PluginError, Usage
 from .registry import Registry
 from . import routes as routes_mod
@@ -324,6 +324,23 @@ def system_prompt() -> str:
     return SYSTEM
 
 
+class PoseNeed(BaseModel):
+    name: str
+    description: str = ""
+
+
+class ModelBrief(BaseModel):
+    """What one 3D model must look like and do (see prompts/model_brief.md)."""
+    kind: Literal["character", "object"] = "character"
+    description: str = ""
+    height_m: float = 1.7
+    width_m: float = 0.5
+    depth_m: float = 0.35
+    colours: dict[str, str] = Field(default_factory=dict)
+    parts: list[str] = Field(default_factory=list)
+    poses: list[PoseNeed] = Field(default_factory=lambda: [PoseNeed(name="stand", description="standing upright")])
+
+
 # =========================================================== brain
 class Brain:
     def __init__(self, reg: Registry):
@@ -533,7 +550,8 @@ class Brain:
         return await self.ask("split_clip", prompt, ClipSplit, {"title": node.title, "goal": node.goal, "seconds": secs,
                                                                   "script": sc.model_dump() if sc else {}})
 
-    async def scene_plan(self, project: Project, node: Node, shared_set: str = "", previous: str = "", wishes: str = ""):
+    async def scene_plan(self, project: Project, node: Node, shared_set: str = "", previous: str = "", wishes: str = "",
+                         poses: str = "", pose_map: Optional[dict] = None):
         """A rough 3D plan of one clip (the "3D camera reference" add-on): plain shapes, their paths and the camera path."""
         from .scene3d.spec import ScenePlan
         nums = numbering(project)
@@ -543,12 +561,29 @@ class Brain:
                         seconds=f"{secs:g}", aspect=project.settings.aspect, actors=self._actor_list(project, node.id),
                         script=sc.model_dump_json(indent=1) if sc else "(none)",
                         shared_set=shared_set or "(none yet: this clip decides the set)", previous=previous or "(not a continuation)",
-                        wishes=wishes.strip() or "(nothing extra: follow the script)")
+                        wishes=wishes.strip() or "(nothing extra: follow the script)",
+                        models=poses or "(none yet: every character is a plain shape, without poses)")
         return await self.ask("scene_plan", prompt, ScenePlan,
                               {"title": node.title, "goal": node.goal, "seconds": secs, "aspect": project.settings.aspect,
-                               "script": sc.model_dump() if sc else {}, "wishes": wishes,
+                               "script": sc.model_dump() if sc else {}, "wishes": wishes, "pose_map": pose_map or {},
                                "actors": [{"id": a.id, "title": a.title, "kind": a.actor.kind if a.actor else ""}
                                           for a in project.context if a.type == ContextType.actor]})
+
+    async def model_brief(self, project: Project, item: ContextItem, actions: list[str]):
+        """What one 3D model must look like and which poses the script needs it to take (nothing about it is fixed
+        by the tool): the planner fills in missing details from the story."""
+        a = item.actor
+        details = "\n".join(x for x in [
+            f"Description: {a.description}" if a and a.description else "", f"Clothing: {a.clothing}" if a and a.clothing else "",
+            f"Behaviour: {a.behaviour}" if a and a.behaviour else "", f"Props: {a.props}" if a and a.props else "",
+            f"Kind: {a.kind}" if a else "", item.text or ""] if x) or "(nothing yet: decide from the story)"
+        kind_word = "CHARACTER" if item.type == ContextType.actor else "OBJECT"
+        prompt = render("model_brief", goal=project.goal, kind_word=kind_word, title=item.title, details=details,
+                        actions="\n".join(f"- {x}" for x in actions) or "(not in any script yet)")
+        return await self.ask("model_brief", prompt, ModelBrief,
+                              {"title": item.title, "kind": a.kind if a else item.type.value,
+                               "description": (a.description if a else item.text) or "", "clothing": a.clothing if a else "",
+                               "actions": actions})
 
     async def scene_change(self, project: Project, node: Node, plan, request: str):
         """The 3D plan with one change you asked for in plain words ("make the lizard twice as big"), everything else kept."""

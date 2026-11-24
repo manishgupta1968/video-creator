@@ -144,6 +144,20 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
                 <span className="text-muted">$ per clip</span>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-muted">Model for 3D work:</span>
+                <span>Claude Code</span>
+                <Select value={st.agent_models?.claude_code || ""} title="The model Claude Code uses to build characters, fix and change 3D scenes"
+                  onChange={(v) => saveSettings({ agent_models: { ...(st.agent_models || {}), claude_code: v } })}
+                  options={[{ value: "", label: "its usual model" }, { value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet (faster)" }, { value: "fable", label: "Fable" }]} />
+                <span>Codex</span>
+                <input defaultValue={st.agent_models?.codex || ""} placeholder="its usual model" aria-label="Codex model for 3D work"
+                  title="Type a Codex model name, or leave empty for its usual model"
+                  onBlur={(e) => { const v = e.target.value.trim(); if (v !== (st.agent_models?.codex || "")) saveSettings({ agent_models: { ...(st.agent_models || {}), codex: v } }); }}
+                  className="w-36 rounded-md border border-line bg-panel px-1.5 py-1 text-xs" />
+              </div>
+              <div><Switch checked={st.models !== false} onChange={(models) => saveSettings({ models })}
+                label="Build a low-poly 3D model of each character and object (else plain shapes)" /></div>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="text-muted">Render with:</span>
                 <Select value={st.renderer} onChange={(renderer) => saveSettings({ renderer: renderer as any })} options={RENDERERS} title="Renderer" />
                 <div className="flex-1" />

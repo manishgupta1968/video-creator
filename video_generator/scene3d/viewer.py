@@ -104,3 +104,20 @@ def open_film(svc, pid: str) -> dict:
     if why:
         note = f"This film is out of date ({why}); make it again to see the latest previews. " + note
     return {"path": str(blend), "note": note}
+
+
+def open_model(svc, pid: str, cid: str) -> dict:
+    """Open one character's or object's 3D model (model.blend) in your own Blender, to look at it from every side."""
+    p = svc.load(pid)
+    item = next((c for c in p.context if c.id == cid), None)
+    m = item.model3d if item else None
+    if not m or m.status != "built" or not m.blend:
+        raise s3.Scene3DError("This 3D model has not been built yet. Press \"Build the 3D model\" first.")
+    blend = ProjectStore.path_for(pid) / m.blend
+    exe = find_blender(svc.config.blender_path)
+    if not exe or not blend.exists():
+        raise s3.Scene3DError("Blender (or the model's Blender file) was not found. Build the model again.")
+    detach = {"creationflags": 0x00000008} if os.name == "nt" else {"start_new_session": True}
+    subprocess.Popen([exe, str(blend)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **detach)
+    return {"path": str(blend), "note": f"Blender is opening the 3D model of {item.title}. Drag with the middle mouse button to "
+                                        "turn around it. Changes saved there are not used: ask for changes on the card instead."}

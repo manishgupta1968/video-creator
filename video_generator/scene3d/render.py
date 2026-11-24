@@ -239,7 +239,7 @@ def sketch_frame(plan: ScenePlan, t: float, size: tuple[int, int]) -> Image.Imag
         draw.polygon(poly, fill=dark if odd else light)
     blocks = []
     for th in plan.things:
-        pts = [to_px(c) for c in corners(th, t)]
+        pts = [to_px(c) for c in corners(th, t, plan)]
         if not all(pts):
             continue                          # partly behind the camera: left out of the sketch
         depth = sum(p_[2] for p_ in pts) / len(pts)
