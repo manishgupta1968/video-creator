@@ -49,10 +49,6 @@ class Vendors:
     def __init__(self, svc, monkeypatch, voices=None, voice_pitch: dict | None = None, list_voices_fails: bool = False):
         for k in ("FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
             monkeypatch.setenv(k, "x")
-        # the key is only for the pretend picture vendor: the AI brain is the offline one, chosen outright (a failing
-        # real brain is reported, never quietly replaced by the offline rules)
-        svc.config.llm.default = "fake_llm"
-        svc.config.save()
         svc.reload()
         self.svc = svc
         self.calls: dict[str, list] = {k: [] for k in ("voice", "clone", "picture", "video", "avatar", "sfx", "lipsync", "candidates")}
@@ -61,6 +57,9 @@ class Vendors:
         self.refuse: set[str] = set()          # voice ids the vendor refuses ("voice not found")
         self.video_seconds: float = 4.0         # how long the pretend video model's clips are (real models make fixed lengths)
         reg = svc.reg
+        # the pretend OpenAI brain answers like the offline brain (its prices still count in estimates); nothing goes
+        # to the network, and a real failure would be reported, not quietly replaced
+        reg.plugin("openai").generate_json = reg.plugin("fake_llm").generate_json
         eleven = reg.plugin("elevenlabs")
         vendors = self
 

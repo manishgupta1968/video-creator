@@ -372,6 +372,7 @@ def test_facts_and_explain_answer_from_the_projects_own_numbers(svc, monkeypatch
     for k in ("FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
         monkeypatch.setenv(k, "x")
     svc.reload()
+    svc.reg.plugin("openai").generate_json = svc.reg.plugin("fake_llm").generate_json   # a pretend OpenAI brain, no network
     p, lion, clip = lion_project(svc)
     facts = svc.facts(p.id)
     assert "MONEY: budget $50.00" in facts and "CLIP 1.1" in facts and "kling_avatar" in facts and "price $0.115" in facts
