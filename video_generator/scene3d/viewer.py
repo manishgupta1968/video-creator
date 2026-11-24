@@ -69,14 +69,22 @@ def open_in_blender(svc, pid: str, nid: str) -> dict:
 SHOW_FILM = """
 import bpy
 def _show_film():
+    scene = bpy.context.scene
+    for ws in bpy.data.workspaces:              # Blender 5: the video editor shows each workspace's own sequencer scene
+        if hasattr(ws, "sequencer_scene"):
+            ws.sequencer_scene = scene
+    scene.frame_current = scene.frame_start
     for window in bpy.context.window_manager.windows:
+        if hasattr(window, "scene"):
+            window.scene = scene
         areas = sorted(window.screen.areas, key=lambda a: a.width * a.height, reverse=True)
         if areas:
             area = areas[0]
             area.type = "SEQUENCE_EDITOR"
             for space in area.spaces:
                 if space.type == "SEQUENCE_EDITOR":
-                    space.view_type = "PREVIEW"
+                    space.view_type = "SEQUENCER_PREVIEW"     # the picture and, below it, the clips one after another
+            area.tag_redraw()
     return None
 bpy.app.timers.register(_show_film, first_interval=1.0)
 """

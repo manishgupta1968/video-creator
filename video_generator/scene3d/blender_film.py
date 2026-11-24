@@ -61,6 +61,10 @@ def main():
             pass                                 # a Blender without text strips still gets the clips
         frame += length
     scene.frame_start, scene.frame_end = 1, max(frame - 1, 1)
+    scene.frame_current = 1
+    for ws in bpy.data.workspaces:          # Blender 5: each workspace's video editor shows its own "sequencer scene"
+        if hasattr(ws, "sequencer_scene"):
+            ws.sequencer_scene = scene
     bpy.ops.wm.save_as_mainfile(filepath=out)
     print("FILM_OK", frame - 1)
 
