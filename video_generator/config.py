@@ -27,12 +27,14 @@ def vg_home() -> Path:
 
 
 class LLMConfig(BaseModel):
-    default: str = "auto"                 # auto | anthropic | openai | gemini | fake_llm
+    default: str = "auto"                 # auto (your subscriptions first, then API keys) | claude_code_brain | codex_brain | anthropic | openai | gemini | fake_llm
     models: dict[str, str] = Field(default_factory=lambda: {
         "anthropic": "claude-opus-5-5",
         "openai": "gpt-5",
         "gemini": "gemini-2.5-pro",
         "fake_llm": "rules",
+        "claude_code_brain": "",          # "" = your Claude Code's usual model
+        "codex_brain": "",                # "" = your Codex's usual model
     })
     per_task: dict[str, str] = Field(default_factory=dict)  # task -> plugin
     # the model chosen for a KIND of work, as "plugin:model" (for example "openai:gpt-5-mini"). Kinds: default (planning and

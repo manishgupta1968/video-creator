@@ -2,7 +2,7 @@ import { CheckCircle2, ExternalLink, KeyRound, RefreshCw, XCircle } from "lucide
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, FoundModel, ModelRow } from "../api";
-import { fmtUsd, useSettings, useSettingsMutation, useToast } from "../lib";
+import { brainName, fmtUsd, useSettings, useSettingsMutation, useToast } from "../lib";
 import { Badge, Button, Dialog, HelpTip, Input, Select, Switch, TabList, TabPanel, Tabs } from "../ui";
 import { BrainPicker } from "./ModelPicker";
 
@@ -113,8 +113,8 @@ function BrainTab({ d, patch, goKeys }: { d: any; patch: (p: any) => Promise<voi
     toast({ text: `${pending.m.id} added with the price you entered`, tone: "ok" });
   };
   const kinds: { kind: "default" | "review" | "simple"; label: string; hint: string; value: string; same?: string; auto?: string }[] = [
-    { kind: "default", label: "AI for planning & scripts", hint: `Now using: ${d.brain}. This does most of the thinking, so it sets most of the AI cost.`, value: planning, auto: "Automatic (the first connected vendor)" },
-    { kind: "review", label: "AI for the Review Agent", hint: `Now using: ${d.reviewer}. Gemini models can watch whole clips.`, value: review, same: "Same as the planning AI" },
+    { kind: "default", label: "AI for planning & scripts", hint: `Now using: ${brainName(d.brain)}. This does most of the thinking, so it sets most of the AI cost.`, value: planning, auto: "Automatic (your Claude Code or Codex subscription first, then API keys)" },
+    { kind: "review", label: "AI for the Review Agent", hint: `Now using: ${brainName(d.reviewer)}. Gemini models can watch whole clips.`, value: review, same: "Same as the planning AI" },
     { kind: "simple", label: "AI for simple jobs", hint: "Answering questions, choosing a photo, typed commands. A cheaper model is usually enough.", value: simple, same: "Same as the planning AI" },
   ];
   return (
@@ -238,12 +238,12 @@ function Catalog({ d }: { d: any }) {
                 <td className="py-1.5"><div className="font-medium">{e.id}</div><div className="text-[10px] text-muted">{e.model}</div></td>
                 <td>{e.plugin}</td>
                 <td>
-                  {e.price.unit === "1m_tokens" ? <span>${e.price.usd_in} / ${e.price.usd_out} per 1M</span> : (
+                  {e.price.unit === "subscription" ? <span>your subscription</span> : e.price.unit === "1m_tokens" ? <span>${e.price.usd_in} / ${e.price.usd_out} per 1M</span> : (
                     <span className="inline-flex items-center gap-1">$<input type="number" step="0.001" defaultValue={e.price.usd} className="h-6 w-20 rounded border border-line bg-panel px-1"
                       onBlur={(ev) => Number(ev.target.value) !== e.price.usd && patch(e.id, { price: { usd: Number(ev.target.value) }, last_checked: new Date().toISOString().slice(0, 10) })} />/{e.price.unit.replace("_", " ")}</span>
                   )}
                 </td>
-                <td>{e.usable ? <Badge tone="ok">yes</Badge> : <Badge>no key</Badge>}</td>
+                <td>{e.usable ? <Badge tone="ok">yes</Badge> : <Badge>{e.price.unit === "subscription" ? "not installed" : "no key"}</Badge>}</td>
                 <td><Switch checked={e.enabled} onChange={(v) => patch(e.id, { enabled: v })} /></td>
                 <td className={e.days_old > 30 && e.vendor !== "local" ? "text-warn" : "text-muted"}>{e.last_checked}</td>
                 <td>{e.pricing_url && <a href={e.pricing_url} target="_blank" rel="noreferrer" className="text-brand"><ExternalLink className="h-3 w-3" /></a>}</td>

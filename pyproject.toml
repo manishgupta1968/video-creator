@@ -79,6 +79,8 @@ ffmpeg = "video_generator.plugins.assemble.ffmpeg_assembler:FFmpegAssembler"
 fake_agent = "video_generator.plugins.fake.fake_agent:FakeAgent"
 claude_code = "video_generator.plugins.agent.cli_agents:ClaudeCodeAgent"
 codex = "video_generator.plugins.agent.cli_agents:CodexAgent"
+claude_code_brain = "video_generator.plugins.llm.cli_brain:ClaudeCodeBrain"
+codex_brain = "video_generator.plugins.llm.cli_brain:CodexBrain"
 
 [tool.setuptools.packages.find]
 include = ["video_generator*"]

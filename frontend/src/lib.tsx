@@ -202,3 +202,10 @@ export function useHotkey(combo: (e: KeyboardEvent) => boolean, fn: (e: Keyboard
     return () => window.removeEventListener("keydown", h);
   }, [combo, fn, allowInInputs]);
 }
+
+
+/** The AI brain's name in words: "Claude Code (your subscription)" rather than "claude_code_brain". */
+export function brainName(id: string): string {
+  return ({ fake_llm: "offline (free)", claude_code_brain: "Claude Code (your subscription)", codex_brain: "Codex (your subscription)",
+    anthropic: "Claude (API key)", openai: "OpenAI (API key)", gemini: "Gemini (API key)" } as Record<string, string>)[id] || id;
+}

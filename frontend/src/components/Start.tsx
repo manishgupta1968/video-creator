@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Clapperboard, FileText, Film, HelpCircle, Image as ImageIcon, Mic, Paperclip, Settings2, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, Ballpark as BallparkData } from "../api";
-import { useToast } from "../lib";
+import { brainName, useToast } from "../lib";
 import { Badge, Button, Card, cn, DropZone, HelpTip, Select, Tip } from "../ui";
 import HelpDrawer from "./HelpDrawer";
 import { mayBeNonEnglish, SpokenLanguage, SubtitleChoice } from "./LanguageControls";
@@ -114,7 +114,7 @@ export default function Start({ onOpen }: { onOpen: (id: string) => void }) {
         </div>
         <div className="flex items-center gap-2">
           {health.data && <Badge tone={health.data.brain === "fake_llm" ? "warn" : "ok"} title="The AI that plans and reviews">
-            AI brain: {health.data.brain === "fake_llm" ? "offline (free)" : health.data.brain}</Badge>}
+            AI brain: {brainName(health.data.brain)}</Badge>}
           <Button variant="ghost" help="help" onClick={() => setHelpOpen(true)}><HelpCircle className="h-4 w-4" />Help</Button>
           <Button variant="ghost" help="settings" onClick={() => setSettings(true)}><Settings2 className="h-4 w-4" />Settings</Button>
         </div>

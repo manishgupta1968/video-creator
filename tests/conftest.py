@@ -13,6 +13,10 @@ KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "GEMINI_A
 def isolated_home(tmp_path, monkeypatch):
     """Every test gets its own ~/.video-generator and no real API keys."""
     monkeypatch.setenv("VG_HOME", str(tmp_path / "vg"))
+    # never run the real Claude Code or Codex from a test (they would use a real subscription); tests that need them
+    # point these at stand-in programs
+    monkeypatch.setenv("VG_CLAUDE", str(tmp_path / "no-claude"))
+    monkeypatch.setenv("VG_CODEX", str(tmp_path / "no-codex"))
     for k in KEYS:
         monkeypatch.delenv(k, raising=False)
     monkeypatch.chdir(tmp_path)
