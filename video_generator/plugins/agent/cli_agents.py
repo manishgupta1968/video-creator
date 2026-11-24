@@ -22,6 +22,7 @@ import os
 import shutil
 from typing import Optional
 
+from ..llm.cli_models import codex_slug
 from ..base import AgentResult, AgentTask, PluginError, SceneAgent
 
 
@@ -94,7 +95,7 @@ class CodexAgent(_CLIAgent):
 
     def command(self, task: AgentTask) -> list[str]:
         return [self.exe() or self.program, "exec", "--skip-git-repo-check", "--sandbox", "workspace-write",
-                "--cd", str(task.folder), "--json"] + (["-m", task.model] if task.model else []) + [task.instructions]
+                "--cd", str(task.folder), "--json"] + (["-m", codex_slug(task.model)] if task.model else []) + [task.instructions]
 
     async def run(self, task: AgentTask) -> AgentResult:
         code, out = await _run(self.command(task), task.folder, None, task.timeout_s)

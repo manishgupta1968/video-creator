@@ -30,7 +30,7 @@ export interface Scene3DClip {
   issues: string[]; notes: string[]; approved_by: "" | "you" | "auto"; plan_hash: string;
   agent_rounds: number; agent_cost_usd: number; agent_log: string[]; updated_at: string; wishes?: string; changes?: string[];
 }
-export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; enabled: boolean; agent: "claude_code" | "codex" | "pair"; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
+export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; enabled: boolean; agent: "brain" | "claude_code" | "codex" | "pair"; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
 export interface FilmPart { nid: string; number: string; title: string; seconds: number; source: "3d" | "footage" | "card"; why: string }
 export interface Scene3DFilm { video: string | null; blend: string | null; parts: FilmPart[]; seconds: number; signature: string; notes: string[]; updated_at: string }
 export interface Scene3DInfo {
@@ -268,6 +268,7 @@ export const api = {
   model3dBrief: (pid: string, cid: string) => req<View>("POST", `${P(pid)}/context/${cid}/model3d/brief`),
   model3dOpen: (pid: string, cid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/context/${cid}/model3d/open`),
   scene3dFilm: (pid: string) => req<{ film: Scene3DFilm | null; stale: string }>("GET", `${P(pid)}/scene3d/film`),
+  scene3dChangeFilm: (pid: string, request: string) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/film/change`, { request }),
   scene3dMakeFilm: (pid: string) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/film`, { prepare: true }),
   scene3dOpenFilm: (pid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/scene3d/film/open`),
   scene3dAll: (pid: string, body: { fix?: boolean; renderer?: string } = {}) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/all`, body),
@@ -284,6 +285,7 @@ export const api = {
   settings: () => req<any>("GET", "/api/settings"),
   patchSettings: (patch: any) => req<any>("PATCH", "/api/settings", patch),
   setKey: (name: string, value: string) => req<any>("POST", "/api/settings/keys", { name, value }),
+  subscriptionModels: () => req<Record<"claude_code" | "codex", { models: { id: string; name: string; note: string }[]; problem: string }>>("GET", "/api/settings/subscription-models"),
   brainTest: (kind = "default") => req<{ plugin: string; model: string; ok: boolean; seconds: number; answer: string; error: string }>("POST", "/api/settings/brain-test", { kind }),
   testPlugin: (plugin: string) => req<{ ok: boolean; message: string }>("POST", "/api/settings/test", { plugin }),
   patchCatalog: (id: string, patch: any) => req<any>("PATCH", `/api/catalog/${id}`, patch),

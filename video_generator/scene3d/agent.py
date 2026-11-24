@@ -30,10 +30,10 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from ..models import now_iso
+from ..models import NodeKind, now_iso
 from ..plugins.base import AgentResult, AgentTask, PluginError
 from ..project import ProjectStore
-from ..tree import find
+from ..tree import find, leaves, numbering
 from . import service as s3
 from .render import sketch_frame
 from .spec import ScenePlan, check, legend, normalise
@@ -62,6 +62,8 @@ def pick_agents(svc, choice: str) -> tuple[Optional[str], Optional[str], list[st
     def ready(name: str) -> bool:
         return svc.reg.configured(name)
     notes: list[str] = []
+    if choice == "brain":                 # follow the AI brain: one switch (Settings → AI brain) changes both
+        choice = "codex" if svc.reg.llm_plugin_name("default") == "codex_brain" else "claude_code"
     if choice == "fake_agent":
         return "fake_agent", None, notes
     wanted_builder = "codex" if choice == "codex" else "claude_code"
@@ -163,7 +165,8 @@ def _kept(before: ScenePlan, after: ScenePlan, strict: bool = True) -> ScenePlan
 
 async def _call(svc, pid: str, name: str, task: AgentTask, what: str) -> AgentResult:
     if not task.model:                  # the model you chose for this agent's 3D work ("" = its usual model)
-        task.model = svc.load(pid).settings.scene3d.agent_models.get(name, "")
+        task.model = svc.load(pid).settings.scene3d.agent_models.get(name, "") or \
+            svc.config.llm.models.get(f"{name}_brain", "")      # else the model chosen for this tool as the AI brain
     plugin = svc.reg.plugin(name)
     result = await plugin.run(task)
     if result.cost_usd:
@@ -439,8 +442,8 @@ async def _change(svc, pid: str, nid: str, request: str, render: bool, agent: Op
             svc.save(p, snapshot=False)
             rep.by = "the AI brain"
             rep.summary = rep.summary or "The AI brain changed the plan."     # (or the reason the agent did not)
-        plan = _kept(before, new, strict=False)
-        rep.changed = plan.model_dump() != before.model_dump()
+        plan = s3.refresh_models(svc.load(pid), s3.keep_resizes(before, _kept(before, new, strict=False)))
+        rep.changed = normalise(plan).model_dump() != before.model_dump()
         if rep.changed:
             s3.set_plan(svc, pid, nid, plan)
         elif not rep.summary.lower().startswith("i did not"):
@@ -465,3 +468,63 @@ async def _change(svc, pid: str, nid: str, request: str, render: bool, agent: Op
         else:
             rep.status = n.scene3d.status
     return rep
+
+
+@dataclass
+class FilmChangeReport:
+    request: str
+    note: str = ""                                            # what the AI brain decided to change, in one sentence
+    clips: dict[str, ChangeReport] = field(default_factory=dict)   # clip number -> what happened there
+    models: dict[str, str] = field(default_factory=dict)      # model name -> what happened to it
+    problems: list[str] = field(default_factory=list)
+
+
+async def change_film(svc, pid: str, request: str, agent: Optional[str] = None) -> FilmChangeReport:
+    """One request for the whole 3D film ("the camera lower everywhere", "give the guru a white beard"): the AI brain
+    decides which clips and which 3D models it affects; each is changed, checked and rendered; then the film is joined
+    again. One Undo takes it all back."""
+    from . import models3d
+    from .film import make_film
+    request = (request or "").strip()
+    if not request:
+        raise s3.Scene3DError("Say what you want to change in the whole 3D film, for example: \"the camera lower everywhere\".")
+    rep = FilmChangeReport(request=request)
+    p = svc.load(pid)
+    clips = [n for n in leaves(p) if n.kind == NodeKind.clip and s3.enabled_for(p, n)]
+    if not clips:
+        raise s3.Scene3DError("No clip has the 3D camera reference on, so there is no 3D film to change.")
+    mark = ProjectStore.history_mark(p)
+    try:
+        plan = await svc.brain.film_change(p, clips, request)
+        p = svc.load(pid)
+        svc._ledger_llm(p, "3D film change")
+        svc.save(p, snapshot=False)
+        rep.note = plan.note
+        by_title = {c.title.strip().lower(): c for c in p.context if c.model3d}
+        for m in plan.models:
+            item = by_title.get(m.name.strip().lower())
+            if not item:
+                rep.problems.append(f"No 3D model is called \"{m.name}\".")
+                continue
+            try:
+                await models3d.build_model(svc, pid, item.id, m.request, agent=agent)
+                rep.models[item.title] = m.request
+            except (PluginError, s3.Scene3DError) as exc:
+                rep.problems.append(f"{item.title}: {exc}")
+        ids = {v: k for k, v in numbering(svc.load(pid)).items()}
+        for c in plan.clips:
+            nid = ids.get(c.number.strip())
+            if not nid:
+                rep.problems.append(f"There is no clip {c.number}.")
+                continue
+            try:
+                rep.clips[c.number] = await change_clip(svc, pid, nid, c.request, render=True, agent=agent)
+            except (PluginError, s3.Scene3DError) as exc:
+                rep.problems.append(f"Clip {c.number}: {exc}")
+        if not rep.clips and not rep.models:
+            raise s3.Scene3DError("Nothing was changed. " + (" ".join(rep.problems) or plan.note or
+                                  "The AI brain found no clip or model that this request affects; try naming the clip or character."))
+        await make_film(svc, pid, prepare=True)
+        return rep
+    finally:
+        ProjectStore.collapse_history(pid, mark)

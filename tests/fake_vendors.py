@@ -57,6 +57,9 @@ class Vendors:
         self.refuse: set[str] = set()          # voice ids the vendor refuses ("voice not found")
         self.video_seconds: float = 4.0         # how long the pretend video model's clips are (real models make fixed lengths)
         reg = svc.reg
+        # the pretend OpenAI brain answers like the offline brain (its prices still count in estimates); nothing goes
+        # to the network, and a real failure would be reported, not quietly replaced
+        reg.plugin("openai").generate_json = reg.plugin("fake_llm").generate_json
         eleven = reg.plugin("elevenlabs")
         vendors = self
 

@@ -450,7 +450,8 @@ class Scene3DFilm(BaseModel):
 class Scene3DSettings(BaseModel):
     """The optional "3D camera reference" add-on. Off = the tool works exactly as it did without it."""
     enabled: bool = False
-    agent: Literal["claude_code", "codex", "pair"] = "claude_code"   # who builds and fixes scenes the fixed builder cannot
+    # who builds and fixes scenes: "brain" = the same tool as the AI brain (Claude Code, or Codex when the brain is Codex)
+    agent: Literal["brain", "claude_code", "codex", "pair"] = "brain"
     agent_models: dict[str, str] = Field(default_factory=dict)       # the model each agent uses for 3D work: {"claude_code": "opus", "codex": "…"}; "" = its usual
     auto_approve: bool = False          # True = a rendered 3D preview whose checks pass is approved by itself
     max_fix_rounds: int = 3             # automatic check-and-fix rounds before the preview is shown to you

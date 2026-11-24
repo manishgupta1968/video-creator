@@ -788,6 +788,18 @@ async def scene3d_make_film(pid: str, body: dict = Body(default={})):
     return {"ok": True}
 
 
+@app.post("/api/projects/{pid}/scene3d/film/change")
+async def scene3d_change_film(pid: str, body: dict = Body(...)):
+    """One request for the whole 3D film: the AI brain decides which clips and 3D models it affects; each is changed,
+    checked and rendered, and the film is joined again, in the background."""
+    from ..scene3d import agent as ag
+    request = str(body.get("request") or "").strip()
+    if not request:
+        raise HTTPException(400, "Say what you want to change in the whole 3D film.")
+    bg(_scene3d_call(ag.change_film, svc, pid, request)(), pid, "Whole 3D film")
+    return {"ok": True}
+
+
 @app.post("/api/projects/{pid}/scene3d/film/open")
 async def scene3d_open_film(pid: str):
     from ..scene3d import viewer
@@ -944,6 +956,17 @@ async def set_key(body: dict = Body(...)):
     save_key(name, body.get("value", "").strip())
     svc.reload()
     return settings_view()
+
+
+@app.get("/api/settings/subscription-models")
+async def subscription_models(fresh: bool = False):
+    """The models Claude Code and Codex on this computer can use, read from the programs themselves."""
+    from ..plugins.llm.cli_models import list_models
+    out = {}
+    for which in ("claude_code", "codex"):
+        models, why = await list_models(which, fresh)
+        out[which] = {"models": models, "problem": why}
+    return out
 
 
 @app.post("/api/settings/brain-test")

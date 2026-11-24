@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from ..agent.cli_agents import _run
 from ..base import LLM, PluginError, Usage
+from .cli_models import codex_slug
 from .common import MAX_IMAGES, extract_json, repair_prompt, schema_instruction
 
 SIGN_IN_HINTS = ("not logged in", "please log in", "login", "log in", "authenticate", "unauthorized", "/login", "sign in")
@@ -60,6 +61,24 @@ def _question(user: str, schema: Type[BaseModel], pictures: list[Path]) -> str:
     return q + schema_instruction(schema)
 
 
+def _said(out: str) -> str:
+    """The error messages in the program's json lines (not the echo of our own question)."""
+    msgs = []
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        err = ev.get("error") if isinstance(ev.get("error"), dict) else None
+        m = (err or {}).get("message") or (ev.get("message") if ev.get("type") == "error" else "") or \
+            (ev.get("result") if ev.get("is_error") else "")
+        if m and str(m) not in msgs:
+            msgs.append(str(m))
+    return " ".join(msgs)[:500]
+
+
 class _CLIBrain(LLM):
     program = ""
     env_override = ""
@@ -84,7 +103,11 @@ class _CLIBrain(LLM):
         if any(h in low for h in SIGN_IN_HINTS):
             self.blocked = f"{self.who} is not signed in: run `{self.program}` once in a terminal and sign in"
             return PluginError(self.blocked)
-        return PluginError(f"{self.who} stopped with exit {code}: {' '.join(out.split())[-300:]}")
+        said = _said(out)
+        if self.name == "codex_brain" and "not supported" in said.lower() and "model" in said.lower():
+            return PluginError(f"Codex cannot use this model with your sign-in: {said} Choose another in Settings → AI brain "
+                               "(the list there comes from Codex itself).")
+        return PluginError(f"{self.who} stopped with exit {code}: {said or ' '.join(out.split())[-300:]}")
 
     async def ask_once(self, question: str, system: str, schema: Type[BaseModel], model: str, folder: Path,
                        pictures: list[Path]) -> tuple[str, Usage]:
@@ -151,7 +174,8 @@ class ClaudeCodeBrain(_CLIBrain):
             raise self._fail(code, out if not data else str(data.get("result") or out))
         u = data.get("usage") or {}
         usage = Usage(input_tokens=int(u.get("input_tokens") or 0), output_tokens=int(u.get("output_tokens") or 0),
-                      raw={"subscription": "claude", "reported_usd": data.get("total_cost_usd")})
+                      raw={"subscription": "claude", "reported_usd": data.get("total_cost_usd"),
+                           "model_used": ", ".join((data.get("modelUsage") or {}).keys())})
         answer = data.get("structured_output")
         return (answer if isinstance(answer, dict) else str(data.get("result") or "")), usage
 
@@ -169,7 +193,7 @@ class CodexBrain(_CLIBrain):
         for p in pictures:
             cmd += ["-i", str(p)]
         if model:
-            cmd += ["-m", model]
+            cmd += ["-m", codex_slug(model)]
         return cmd + [question]
 
     async def ask_once(self, question, system, schema, model, folder, pictures):

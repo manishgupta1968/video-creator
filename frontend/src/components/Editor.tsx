@@ -225,6 +225,11 @@ function AskAI({ node, placeholder }: { node: Node; placeholder: string }) {
         placeholder={`Ask AI to change this — ${placeholder}`} aria-label="Ask AI"
         className="h-8 flex-1 bg-transparent text-[13px] placeholder:text-muted/70 focus:outline-none" />
       <Button size="sm" variant="primary" onClick={send} loading={busy} disabled={!text.trim()}><ArrowRight className="h-3.5 w-3.5" /></Button>
+      {node.kind !== "clip" && P.view!.project.settings.scene3d?.enabled && (
+        <span className="hidden text-[10px] text-muted lg:inline" title="This box changes the plan's words (title, goal, length). The 3D scenes have their own box.">
+          3D film: use "Change the whole 3D film" below
+        </span>
+      )}
     </div>
   );
 }

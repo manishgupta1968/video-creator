@@ -111,6 +111,9 @@ def build_model(th, ref):
     bpy.context.collection.objects.link(root)
     model_root.parent = root
     model_root.location = (0, 0, 0)
+    k = float(th.get("scale") or 1.0)
+    if abs(k - 1.0) > 1e-6:              # shown bigger or smaller than its real size, as you asked
+        model_root.scale = (k, k, k)
     arm = model_root if model_root.type == "ARMATURE" else None
     return root, arm, ns.get("POSES") or {}
 
@@ -125,7 +128,7 @@ def animate_poses(arm, model_root, poses, keys, fps):
             continue
         pose = poses[name] or {}
         f = frame_of(k["t"], fps)
-        model_root.location.z = float(pose.get("__lift__", 0) or 0)
+        model_root.location.z = float(pose.get("__lift__", 0) or 0) * model_root.scale[2]
         model_root.keyframe_insert("location", frame=f)
         if arm is None:
             continue

@@ -214,6 +214,7 @@ def stand_in(tmp_path, name, body):
 
 def test_claude_code_is_run_in_the_locked_folder_with_a_cap_and_its_cost_is_logged(svc, monkeypatch, tmp_path):
     monkeypatch.setenv("VG_CLAUDE", str(stand_in(tmp_path, "claude", STAND_IN_CLAUDE)))
+    svc.config.llm.default = "fake_llm"        # the stand-in is a 3D agent only; the offline brain does the planning
     p, ids = broken_clip(svc)
     rep = asyncio.run(ag.fix_clip(svc, p.id, ids[0], agent="claude_code"))
     assert rep.builder == "claude_code" and rep.fixed and rep.cost_usd == pytest.approx(0.05)
@@ -228,6 +229,7 @@ def test_claude_code_is_run_in_the_locked_folder_with_a_cap_and_its_cost_is_logg
 
 def test_codex_is_run_in_a_write_sandbox_on_the_folder(svc, monkeypatch, tmp_path):
     monkeypatch.setenv("VG_CODEX", str(stand_in(tmp_path, "codex", STAND_IN_CODEX)))
+    svc.config.llm.default = "fake_llm"        # the stand-in is a 3D agent only; the offline brain does the planning
     p, ids = broken_clip(svc)
     rep = asyncio.run(ag.fix_clip(svc, p.id, ids[0], agent="codex"))
     assert rep.builder == "codex" and rep.fixed and rep.cost_usd == 0 and "Camera pulled back." in rep.log[-1]

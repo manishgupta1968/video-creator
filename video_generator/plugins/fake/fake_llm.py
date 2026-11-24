@@ -311,6 +311,11 @@ class FakeLLM(LLM):
                 "lights": [{"kind": "sun", "at": [-6, -6, 10], "look_at": [0, 0, 0], "strength": 3}],
                 "seconds": secs, "fps": 24, "aspect": m.get("aspect") or "16:9"}
 
+    def _film_change(self, m: dict) -> dict:
+        req = m.get("request", "")
+        return {"clips": [{"number": n, "request": req} for n in m.get("clips", [])], "models": [],
+                "note": "The same change in every clip with a 3D scene."}
+
     def _brain_test(self, m: dict) -> dict:
         return {"answer": "ready (offline brain: simple rules, no AI)"}
 

@@ -161,18 +161,36 @@ def attach_models(plan: ScenePlan, models: dict) -> ScenePlan:
         ref = models.get(th.actor_id) or models.get(th.model)
         if not ref:
             th.model = ""
+            th.scale = 1.0
             for k in th.keys:
                 k.pose = None
             continue
         cid = th.actor_id if th.actor_id in models else th.model
         th.model = cid
         used[cid] = ref
-        th.size = [max(ref.depth, 0.2), max(ref.width, 0.2), max(ref.height, 0.2)] if th.kind == "figure" else \
-            [max(ref.width, 0.1), max(ref.depth, 0.1), max(ref.height, 0.1)]
+        k = min(max(th.scale or 1.0, 0.05), 20.0)
+        th.scale = k
+        th.size = [round(v * k, 3) for v in ([max(ref.depth, 0.2), max(ref.width, 0.2), max(ref.height, 0.2)] if th.kind == "figure" else
+                                             [max(ref.width, 0.1), max(ref.depth, 0.1), max(ref.height, 0.1)])]
         for k in th.keys:
             if k.pose and k.pose not in ref.poses:
                 k.pose = None
     p.models = used
+    return p
+
+
+def keep_resizes(before: ScenePlan, after: ScenePlan) -> ScenePlan:
+    """A change that made a modelled character or object bigger or smaller becomes its scale (the model itself keeps
+    its real size, so the size alone would be put back)."""
+    old = {t.id: t for t in before.things}
+    p = after.model_copy(deep=True)
+    for th in p.things:
+        o = old.get(th.id)
+        if not o or not o.model or th.model != o.model or th.scale != o.scale:
+            continue
+        ratios = [n / b for n, b in zip(th.size, o.size) if b > 0 and abs(n - b) > 1e-6]
+        if ratios:
+            th.scale = round(o.scale * max(ratios, key=lambda r: abs(r - 1)), 3)
     return p
 
 
