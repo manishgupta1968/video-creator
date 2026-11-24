@@ -146,6 +146,7 @@ def test_the_review_measures_the_camera_and_flags_a_clip_that_did_not_follow(svc
     p, ids = two_shot_project(svc)
     p.settings.scene3d.enabled = True
     p.settings.review_enabled = True
+    find(p, ids[1]).scene3d_enabled = False         # only the first clip has a reference (a run would ask about the second)
     svc.save(p)
     panning_reference(svc, p.id, ids[0])
     run_all(svc, p.id)                              # the pretend reference model makes a STILL clip from its first picture
@@ -167,6 +168,7 @@ def test_a_clip_that_copies_the_reference_camera_passes_the_camera_check(svc, mo
     p, ids = two_shot_project(svc)
     p.settings.scene3d.enabled = True
     p.settings.review_enabled = True
+    find(p, ids[1]).scene3d_enabled = False         # only the first clip has a reference (a run would ask about the second)
     svc.save(p)
     panning_reference(svc, p.id, ids[0])
     fal = svc.reg.plugin("fal")
