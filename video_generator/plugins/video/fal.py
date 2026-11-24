@@ -5,7 +5,7 @@ The catalogue row's `model` is the fal endpoint id; its `params` say how that mo
   end_image_field         name of the end-picture field (omit when the model has none)
   reference_images_field  name of the LIST of reference pictures (reference-to-video models, e.g. image_urls)
   reference_video_field   name of the LIST of reference videos (e.g. video_urls)
-  tag_format              how the prompt names a reference, e.g. "[{kind}{n}]" -> [Image1], [Video1]; "@{kind}{n}" -> @Image1
+  tag_format              how the prompt names a reference: "@{kind}{n}" -> @Image1, @Video1 (the default)
   durations               lengths the model accepts, in seconds (a 4 s clip is asked for as the next one up)
   resolution              a fixed resolution to ask for, e.g. 720p
   fields                  the only fields to send (a safe list); leave out to send the usual set
@@ -16,7 +16,7 @@ from ..base import Usage, VideoGenerator, VideoRequest
 from .. import fal_common as fal
 
 USUAL = ["prompt", "image_field", "end_image_field", "negative_prompt", "duration", "aspect_ratio", "resolution", "generate_audio"]
-DEFAULT_TAG = "[{kind}{n}]"
+DEFAULT_TAG = "@{kind}{n}"       # fal's reference-to-video models name inputs @Image1, @Video1 in the prompt
 
 
 def snap_duration(seconds: float, allowed) -> str:

@@ -228,3 +228,25 @@ def test_the_screen_can_switch_build_approve_and_edit_the_reference(svc, monkeyp
         assert "plan changed" in client.get(f"{base}/nodes/{ids[0]}/scene3d").json()["stale"]
         assert client.put(f"{base}/nodes/{ids[0]}/scene3d/plan", json={"things": "no"}).status_code == 400
         assert client.post(f"{base}/nodes/{ids[0]}/scene3d/approve").status_code == 400
+
+
+def test_the_screen_shows_what_this_computer_can_use(svc, monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from video_generator.web import app as appmod
+    monkeypatch.setattr(appmod, "svc", svc)
+    blender = tmp_path / "blender"
+    blender.write_text("#!/bin/sh\necho 'Blender 9.9.9'\n")
+    blender.chmod(0o755)
+    claude = tmp_path / "claude"
+    claude.write_text("#!/bin/sh\nexit 0\n")
+    claude.chmod(0o755)
+    monkeypatch.setenv("VG_BLENDER", str(blender))
+    monkeypatch.setenv("VG_CLAUDE", str(claude))
+    monkeypatch.setenv("VG_CODEX", "/no/such/codex")
+    monkeypatch.setenv("PATH", "/nonexistent")
+    R._likely_engine.cache_clear()
+    with TestClient(appmod.app) as client:
+        d = client.get("/api/scene3d/status").json()
+    R._likely_engine.cache_clear()
+    assert d["blender"] == {**d["blender"], "found": True, "version": "Blender 9.9.9", "path": str(blender)}
+    assert d["claude_code"]["found"] is True and d["codex"] == {"found": False, "path": ""}
