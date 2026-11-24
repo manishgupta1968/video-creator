@@ -168,7 +168,7 @@ def test_the_whole_film_opens_in_blender_one_clip_after_another(svc, monkeypatch
             break
         asyncio.run(asyncio.sleep(0.1))
     args = json.loads(log.read_text())
-    assert args[0] == str(blend) and 'view_type = "PREVIEW"' in args[2]
+    assert args[0] == str(blend) and 'view_type = "SEQUENCER_PREVIEW"' in args[2] and "sequencer_scene" in args[2]
     compile(viewer.SHOW_FILM, "film", "exec")
 
 
