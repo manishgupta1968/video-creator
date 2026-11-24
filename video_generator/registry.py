@@ -24,6 +24,8 @@ BUILTINS = {
     "fake_music": "video_generator.plugins.fake.fake_media:FakeMusic",
     "fake_transcribe": "video_generator.plugins.fake.fake_media:FakeTranscriber",
     "fake_agent": "video_generator.plugins.fake.fake_agent:FakeAgent",
+    "claude_code_brain": "video_generator.plugins.llm.cli_brain:ClaudeCodeBrain",
+    "codex_brain": "video_generator.plugins.llm.cli_brain:CodexBrain",
     "claude_code": "video_generator.plugins.agent.cli_agents:ClaudeCodeAgent",
     "codex": "video_generator.plugins.agent.cli_agents:CodexAgent",
     "anthropic": "video_generator.plugins.llm.anthropic_llm:AnthropicLLM",
@@ -84,6 +86,10 @@ def plugin_classes() -> dict[str, type]:
                                                               "is_configured": lambda self: (False, f"failed to load: {exc}")})
     return classes
 
+
+# "Automatic" brain: your subscriptions first (Claude Code, then Codex, run on this computer), then pay-per-use API keys.
+# When one fails (not signed in, a usage limit reached), the next connected one answers.
+BRAIN_ORDER = ("claude_code_brain", "codex_brain", "anthropic", "openai", "gemini")
 
 SIMPLE_TASKS = ("photo_query", "pick_photo", "explain", "command", "suggest_dependencies", "optimize")      # brain tasks a cheaper AI can do
 
@@ -261,7 +267,7 @@ class Registry:
             name = llm.per_task.get(task) or llm.default
         if name and name != "auto" and self.configured(name):
             return name
-        for candidate in ("anthropic", "openai", "gemini"):
+        for candidate in BRAIN_ORDER:
             if self.configured(candidate):
                 return candidate
         return "fake_llm"
@@ -287,5 +293,5 @@ class Registry:
 
     def llm_fallback_order(self, task: str) -> list[str]:
         first = self.llm_plugin_name(task)
-        rest = [n for n in ("anthropic", "openai", "gemini") if n != first and self.configured(n)]
+        rest = [n for n in BRAIN_ORDER if n != first and self.configured(n)]
         return [first] + rest + (["fake_llm"] if first != "fake_llm" else [])

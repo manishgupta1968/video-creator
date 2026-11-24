@@ -2,7 +2,7 @@ import { ArrowLeft, Command, Download, GitBranch, HelpCircle, Library, Loader2, 
 import { useCallback, useEffect, useState } from "react";
 import { api, fileUrl } from "../api";
 import { useTheme } from "../App";
-import { commandBus, findNode, finalPlayer, fmtSec, fmtUsd, ProjectProvider, useHotkey, useP } from "../lib";
+import { brainName, commandBus, findNode, finalPlayer, fmtSec, fmtUsd, ProjectProvider, useHotkey, useP } from "../lib";
 import { Badge, Button, Editable, HelpTip, Tip } from "../ui";
 import ActivityBar, { TopLine, useTabStatus } from "./ActivityBar";
 import { FinalVideoDialog, PreviewBanner } from "./Banners";
@@ -88,7 +88,7 @@ function Shell({ onHome }: { onHome: () => void }) {
         <HelpTip id="project-name"><span><Editable value={p.name} onSave={(name) => P.act("Rename", () => api.patch(P.pid, { name }))}
           className="max-w-[28ch] truncate text-sm font-semibold" ariaLabel="Project name" /></span></HelpTip>
         <Tip content="The AI that plans, writes and reviews. Change it in Settings.">
-          <HelpTip id="ai-badge"><span><Badge tone={s.brain === "fake_llm" ? "warn" : "brand"}>AI: {s.brain === "fake_llm" ? "offline" : s.brain}</Badge></span></HelpTip>
+          <HelpTip id="ai-badge"><span><Badge tone={s.brain === "fake_llm" ? "warn" : "brand"}>AI: {s.brain === "fake_llm" ? "offline" : brainName(s.brain)}</Badge></span></HelpTip>
         </Tip>
         <div className="flex-1" />
         <Button help="ask-ai" variant="outline" size="sm" onClick={() => setCmd(true)} className="hidden sm:inline-flex text-muted">

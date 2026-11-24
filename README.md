@@ -70,6 +70,31 @@ This is useful for trying the whole flow: goal → plan → clips → final vide
 
 Open **Settings → Vendors & keys** in the app. Each vendor has a *Sign up / billing* link and a *Prices* link. Paste the key and press **Save**. Keys are stored only on your computer, in `~/.video-generator/.env`.
 
+**Use your Claude or ChatGPT subscription for the AI brain (no API key needed).** If Claude Code (the `claude` command)
+or Codex (the `codex` command) is installed and signed in on this computer, the tool uses it for planning, scripts, 3D
+plans and the Review Agent, with **no per-call cost**: it comes out of your subscription. Claude Code is used first,
+then Codex, then any API key. When one cannot answer (not signed in, a usage limit reached), the next one does.
+Pictures, video clips and voices still need their own services (for example fal.ai and ElevenLabs).
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+```bash
+claude
+```
+(run once to sign in with your Claude account)
+
+```bash
+npm install -g @openai/codex
+```
+```bash
+codex login
+```
+(choose "Sign in with ChatGPT")
+
+You can choose which one plans, which one reviews and which one does simple jobs in **Settings → AI brain**. Each
+call starts the program, so it is a few seconds slower than an API key, and it counts against your plan's usage limits.
+
 **Recommended starter set (3–4 accounts):**
 
 | Vendor | What it does here | Sign up |

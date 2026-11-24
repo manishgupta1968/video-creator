@@ -22,7 +22,7 @@ ABILITY_WORDS = {
 }
 MOTION_WORDS = {"face": "moves only the face", "body": "moves the body", "scene": "moves the whole scene"}
 UNIT_WORDS = {"second": "per second", "image": "per image", "1k_chars": "per 1,000 characters", "minute": "per minute",
-              "request": "per request", "1m_tokens": "per 1M tokens"}
+              "request": "per request", "1m_tokens": "per 1M tokens", "subscription": "with your subscription"}
 
 
 def _n(x: float) -> str:
@@ -36,6 +36,8 @@ def _n(x: float) -> str:
 def price_text(e: CatalogEntry) -> str:
     if e.is_free:
         return "free"
+    if e.price.unit == "subscription":
+        return "your subscription (no per-call cost)"
     if e.price.unit == "1m_tokens":
         return f"${_n(e.price.usd_in)} in / ${_n(e.price.usd_out)} out per 1M tokens"
     return f"${_n(e.unit_price)} {UNIT_WORDS.get(e.price.unit, 'per ' + e.price.unit)}"

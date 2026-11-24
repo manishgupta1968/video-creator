@@ -438,6 +438,55 @@ music:
     last_checked: "2026-11-04"
 
 llm:
+  # Your subscriptions, through the command-line tools on this computer: no per-call price (your plan's usage limits apply).
+  - id: claude_code_subscription
+    plugin: claude_code_brain
+    model: ""
+    vendor: claude_code
+    capabilities: {vision: true, video: false}
+    quality: 5
+    price: {unit: subscription, usd_in: 0, usd_out: 0}
+    time: {queue_s: 5, per_output_s: 25}
+    note: Claude Code on this computer, with your Claude subscription (its usual model). No per-call cost.
+    licence: your Claude plan's terms
+    pricing_url: https://claude.com/pricing
+    last_checked: "2026-11-24"
+  - id: claude_code_subscription_opus
+    plugin: claude_code_brain
+    model: opus
+    vendor: claude_code
+    capabilities: {vision: true, video: false}
+    quality: 5
+    price: {unit: subscription, usd_in: 0, usd_out: 0}
+    time: {queue_s: 5, per_output_s: 30}
+    note: Claude Code on this computer, with your Claude subscription, using Opus. No per-call cost.
+    licence: your Claude plan's terms
+    pricing_url: https://claude.com/pricing
+    last_checked: "2026-11-24"
+  - id: claude_code_subscription_sonnet
+    plugin: claude_code_brain
+    model: sonnet
+    vendor: claude_code
+    capabilities: {vision: true, video: false}
+    quality: 4
+    price: {unit: subscription, usd_in: 0, usd_out: 0}
+    time: {queue_s: 5, per_output_s: 18}
+    note: Claude Code on this computer, with your Claude subscription, using Sonnet (faster, uses less of your limit).
+    licence: your Claude plan's terms
+    pricing_url: https://claude.com/pricing
+    last_checked: "2026-11-24"
+  - id: codex_subscription
+    plugin: codex_brain
+    model: ""
+    vendor: codex
+    capabilities: {vision: true, video: false}
+    quality: 5
+    price: {unit: subscription, usd_in: 0, usd_out: 0}
+    time: {queue_s: 8, per_output_s: 30}
+    note: Codex on this computer, with your ChatGPT subscription (its usual model). No per-call cost.
+    licence: your ChatGPT plan's terms
+    pricing_url: https://openai.com/chatgpt/pricing
+    last_checked: "2026-11-24"
   - id: claude_opus
     plugin: anthropic
     model: claude-opus-5-5

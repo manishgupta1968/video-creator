@@ -70,7 +70,11 @@ export function BrainPicker({ value, onPick, onFound, onUnusable, found = [], au
   const rows: ModelRow[] = ((useSettings().data?.catalog || []) as ModelRow[]).filter((r) => r.job === "llm");
   const key = (r: ModelRow) => `${r.plugin}:${r.model}`;
   const draft = (r: ModelRow) => (!r.draft_cost_usd ? "" : r.draft_cost_usd < 0.01 ? " · under 1 cent a draft" : ` · ≈ $${r.draft_cost_usd.toFixed(2)} a draft`);
-  const label = (r: ModelRow) => (r.is_free ? "Offline brain · free · simple rules, no AI" : `${r.model} · ${r.vendor} · ${r.price_text}${draft(r)}${r.usable ? "" : ` — ${r.why_not}`}`);
+  const SUB: Record<string, string> = { claude_code: "Claude Code on this computer", codex: "Codex on this computer" };
+  const label = (r: ModelRow) => (r.is_free ? "Offline brain · free · simple rules, no AI"
+    : r.price?.unit === "subscription"
+      ? `${SUB[r.vendor] || r.vendor} · ${r.model || "its usual model"} · ${r.price_text}${r.usable ? "" : ` — ${r.why_not}`}`
+      : `${r.model} · ${r.vendor} · ${r.price_text}${draft(r)}${r.usable ? "" : ` — ${r.why_not}`}`);
   const options: SelectOption[] = [
     ...(autoLabel ? [{ value: "auto", label: autoLabel }] : []),
     ...(sameLabel ? [{ value: "same", label: sameLabel }] : []),
