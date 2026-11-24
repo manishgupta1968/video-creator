@@ -728,6 +728,15 @@ def doctor():
     con.print("\n[red]Fix the ✗ lines before you generate.[/]" if bad else "\n[green]No problems found with your keys.[/] A real clip is the final test.")
 
 
+@app.command("brain-test")
+def brain_test(kind: str = typer.Option("default", help="default (planning and scripts) | review | simple")):
+    """Ask the AI brain one tiny question (no fall-back): who answered, how long it took, and any exact problem."""
+    svc = _svc()
+    r = asyncio.run(svc.brain.test(kind))
+    con.print(f"Brain: [bold]{r['plugin']}[/] · model: {r['model']} · {r['seconds']:g} s")
+    con.print(f"[green]It works.[/] It answered: {r['answer']}" if r["ok"] else f"[red]It does not work:[/] {r['error']}")
+
+
 @app.command("smoke-test")
 def smoke_test(max_usd: float = typer.Option(1.0, "--max-usd", help="never spend more than this many dollars"),
                yes: bool = typer.Option(False, "--yes", help="do not ask before spending"),

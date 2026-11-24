@@ -324,6 +324,10 @@ def system_prompt() -> str:
     return SYSTEM
 
 
+class BrainTest(BaseModel):
+    answer: str = ""
+
+
 class PoseNeed(BaseModel):
     name: str
     description: str = ""
@@ -346,11 +350,62 @@ class Brain:
     def __init__(self, reg: Registry):
         self.reg = reg
         self.last_usage = Usage()
+        self.last_fallback = ""             # when another brain had to answer: who, and why the first one could not
+
+    def _stuck_brains(self) -> list[str]:
+        """Subscription brains that are installed but cannot answer now (for example not signed in)."""
+        from .registry import BRAIN_ORDER
+        out = []
+        for name in BRAIN_ORDER:
+            try:
+                why = getattr(self.reg.plugin(name), "blocked", "")
+            except Exception:
+                continue
+            if why:
+                out.append(f"{name}: {why}")
+        return out
+
+    async def test(self, task: str = "default") -> dict:
+        """One tiny question through the brain chosen for this kind of work, with NO fall-back: which brain and model
+        answered, how long it took, and the exact problem when it failed (Settings → AI brain → Test the AI brain)."""
+        import time
+        name = self.reg.llm_plugin_name(task)
+        model = self.reg.llm_model(task, name)
+        plugin = self.reg.plugin(name)
+        t0 = time.monotonic()
+        if name == "fake_llm":
+            for other in self._stuck_brains():        # try the stuck one again: you may have signed in since
+                who = other.split(":")[0]
+                getattr(self.reg.plugin(who), "__dict__", {})["blocked"] = ""
+                name, plugin, model = who, self.reg.plugin(who), self.reg.llm_model(task, who)
+                break
+        try:
+            r, usage = await plugin.generate_json(system="You are a test. Answer exactly as asked.",
+                                                  user='Put the word "ready" in the field answer.', schema=BrainTest,
+                                                  model=model, meta={"task": "brain_test"})
+            ok = (r.answer or "").strip().lower().startswith("ready") or name == "fake_llm"
+            return {"plugin": name, "model": model or "(its usual model)", "ok": ok, "seconds": round(time.monotonic() - t0, 1),
+                    "answer": r.answer, "error": "" if ok else f"it answered {r.answer!r} instead of 'ready'"}
+        except Exception as exc:          # every problem is reported, in its own words
+            return {"plugin": name, "model": model or "(its usual model)", "ok": False, "seconds": round(time.monotonic() - t0, 1),
+                    "answer": "", "error": f"{type(exc).__name__}: {exc}"}
 
     async def ask(self, task: str, prompt: str, schema: Type[BaseModel], meta: dict,
                   images: Optional[list[Path]] = None, video: Optional[Path] = None) -> BaseModel:
         errors = []
-        for name in self.reg.llm_fallback_order(task):
+        order = self.reg.llm_fallback_order(task)
+        real = order and order[0] != "fake_llm"
+        self.last_fallback = ""
+        if not real:
+            stuck = self._stuck_brains()
+            if stuck:      # e.g. Claude Code is installed but signed out: say so rather than answer with the offline rules
+                raise PluginError("The AI brain could not answer, so nothing was changed. " + " | ".join(stuck))
+        for name in order:
+            if real and name == "fake_llm":
+                # a real AI brain is set up but none could answer: never pretend with the offline rules (nothing would
+                # really change and nobody would know why); say what went wrong instead
+                raise PluginError("The AI brain could not answer, so nothing was changed. " + " | ".join(errors)
+                                  + " — Settings → AI brain → \"Test the AI brain\" shows the exact problem.")
             plugin = self.reg.plugin(name)
             model = self.reg.llm_model(task, name)
             try:
@@ -358,6 +413,8 @@ class Brain:
                                                            model=model, images=images, video=video, meta={"task": task, **meta})
                 usage.cost_usd = self._cost(task, name, usage)
                 usage.raw["plugin"] = name
+                if errors:
+                    self.last_fallback = f"{name} answered because " + " | ".join(errors)
                 usage.raw["model"] = model
                 self.last_usage = usage
                 return result

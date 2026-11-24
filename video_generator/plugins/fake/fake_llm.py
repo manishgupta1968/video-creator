@@ -311,6 +311,9 @@ class FakeLLM(LLM):
                 "lights": [{"kind": "sun", "at": [-6, -6, 10], "look_at": [0, 0, 0], "strength": 3}],
                 "seconds": secs, "fps": 24, "aspect": m.get("aspect") or "16:9"}
 
+    def _brain_test(self, m: dict) -> dict:
+        return {"answer": "ready (offline brain: simple rules, no AI)"}
+
     def _model_brief(self, m: dict) -> dict:
         """Offline brief: size from the kind, colours from colour words, and the poses the action words ask for."""
         words = " ".join([m.get("description") or "", m.get("clothing") or "", " ".join(m.get("actions") or [])]).lower()

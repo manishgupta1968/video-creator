@@ -120,6 +120,7 @@ function BrainTab({ d, patch, goKeys }: { d: any; patch: (p: any) => Promise<voi
   return (
     <div className="grid max-w-3xl gap-5 text-xs">
       <p className="text-muted">Every model is listed with its price. A model that is not connected is shown with what is missing. Prices are per 1 million tokens (a token is a small piece of a word).</p>
+      <BrainTest />
       {kinds.map((k) => (
         <Row key={k.kind} label={k.label} hint={k.hint}>
           <BrainPicker title={k.label} value={k.value} found={found} autoLabel={k.auto} sameLabel={k.same}
@@ -166,6 +167,32 @@ function BrainTab({ d, patch, goKeys }: { d: any; patch: (p: any) => Promise<voi
           ))}
         </div>
       </details>
+    </div>
+  );
+}
+
+/** Asks the planning brain one tiny question with no fall-back, and shows who answered, how fast, and the exact problem. */
+function BrainTest() {
+  const [busy, setBusy] = useState(false);
+  const [r, setR] = useState<{ plugin: string; model: string; ok: boolean; seconds: number; answer: string; error: string } | null>(null);
+  const run = async () => {
+    setBusy(true); setR(null);
+    try { setR(await api.brainTest("default")); } catch (e: any) { setR({ plugin: "?", model: "", ok: false, seconds: 0, answer: "", error: e.message }); }
+    setBusy(false);
+  };
+  return (
+    <div className="rounded-xl border border-line p-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button size="sm" variant="outline" loading={busy} onClick={run}>Test the AI brain</Button>
+        <span className="text-muted">Sends one tiny question to the AI for planning & scripts. With a subscription it costs nothing extra; it can take up to a minute.</span>
+      </div>
+      {r && (
+        <div className={`mt-2 rounded-lg p-2 ${r.ok ? "bg-ok/10" : "bg-bad/10"}`}>
+          <div className="font-medium">{r.ok ? "It works." : "It does not work."} {brainName(r.plugin)} · model: {r.model} · {r.seconds} s</div>
+          {r.ok ? <div className="text-muted">It answered: {r.answer}</div> : <div className="whitespace-pre-wrap break-words">{r.error}</div>}
+          {r.plugin === "fake_llm" && <div className="mt-1 text-muted">This is the offline brain (simple rules, no AI). Changes you ask for will be small and rule-based. Sign in to Claude Code or Codex, or add an API key, for a real AI brain.</div>}
+        </div>
+      )}
     </div>
   );
 }
