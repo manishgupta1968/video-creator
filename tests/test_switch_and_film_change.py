@@ -143,3 +143,17 @@ def test_a_film_change_with_no_3d_clips_says_why(svc, monkeypatch):
     svc.save(p)
     with pytest.raises(s3.Scene3DError, match="No clip has the 3D camera reference on"):
         asyncio.run(ag.change_film(svc, p.id, "the camera lower everywhere"))
+
+
+@requires_ffmpeg
+def test_making_the_film_again_says_what_it_really_did(svc, monkeypatch):
+    """"Make it again" with nothing changed only joins the film again (a second); it now says so. Planning every scene
+    again makes new plans and renders, as one Undo step."""
+    from video_generator.scene3d.film import make_film
+    p, ids = project(svc, monkeypatch)
+    first = asyncio.run(make_film(svc, p.id, prepare=True))
+    assert any(n.startswith("Rendered now") for n in first.notes)
+    again = asyncio.run(make_film(svc, p.id, prepare=True))
+    assert any("Nothing had changed" in n for n in again.notes) and not any(n.startswith("Rendered now") for n in again.notes)
+    fresh = asyncio.run(make_film(svc, p.id, prepare=True, replan=True))
+    assert any(n.startswith("Planned afresh") for n in fresh.notes) and any(n.startswith("Rendered now") for n in fresh.notes)

@@ -83,9 +83,19 @@ function WholeFilm() {
         {has && <Badge tone={working ? "info" : stale ? "warn" : "ok"}>{working ? "Working on it" : stale ? `Out of date: ${stale}` : `${f!.seconds.toFixed(0)} s, up to date`}</Badge>}
         <div className="flex-1" />
         <Button size="sm" variant={has && !stale ? "outline" : "primary"} disabled={working}
-          onClick={() => P.act("Whole 3D film", () => api.scene3dMakeFilm(P.pid), "Making every 3D preview and joining them, in the background")}>
-          {working ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Film className="h-3.5 w-3.5" />}{has ? "Make it again" : "Make the whole 3D film"}
+          title={has && !stale ? "Every clip's preview is up to date, so this only joins them again (a second). Use the box below to change the film." : "Makes the missing or out-of-date previews, then joins them all"}
+          onClick={() => P.act("Whole 3D film", () => api.scene3dMakeFilm(P.pid), has && !stale ? "Joining the 3D film again" : "Making the missing 3D previews and joining them, in the background")}>
+          {working ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Film className="h-3.5 w-3.5" />}{!has ? "Make the whole 3D film" : stale ? "Update the film" : "Join again"}
         </Button>
+        {has && (
+          <Button size="sm" variant="outline" disabled={working} title="Plans every clip's 3D scene afresh from its script, then renders and joins them (takes minutes)"
+            onClick={() => {
+              if (!window.confirm("Plan every 3D scene again from the scripts?\n\nEach clip gets a new layout and camera, then is rendered again. It takes a few minutes and uses your AI brain. Changes you asked for in single clips are replaced. One Undo (Ctrl/⌘ Z) brings the old scenes back.")) return;
+              P.act("Whole 3D film", () => api.scene3dMakeFilm(P.pid, true), "Planning every 3D scene again, then rendering and joining them, in the background");
+            }}>
+            <Sparkles className="h-3.5 w-3.5" />Plan every scene again
+          </Button>
+        )}
         {has && (
           <Button size="sm" variant="outline" disabled={!f!.blend} title={f!.blend ? "Watch it in your own Blender's video editor" : "Made without Blender: no Blender file"}
             onClick={async () => { const r = await P.act("Open in Blender", () => api.scene3dOpenFilm(P.pid)); if (r) toast({ text: (r as any).note, tone: "info" }); }}>

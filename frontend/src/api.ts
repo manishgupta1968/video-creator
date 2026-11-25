@@ -269,7 +269,7 @@ export const api = {
   model3dOpen: (pid: string, cid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/context/${cid}/model3d/open`),
   scene3dFilm: (pid: string) => req<{ film: Scene3DFilm | null; stale: string }>("GET", `${P(pid)}/scene3d/film`),
   scene3dChangeFilm: (pid: string, request: string) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/film/change`, { request }),
-  scene3dMakeFilm: (pid: string) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/film`, { prepare: true }),
+  scene3dMakeFilm: (pid: string, replan = false) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/film`, { prepare: true, replan }),
   scene3dOpenFilm: (pid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/scene3d/film/open`),
   scene3dAll: (pid: string, body: { fix?: boolean; renderer?: string } = {}) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/all`, body),
   fixContinuity: (pid: string, body: { action: string; node?: string; join?: string }) => req<View>("POST", `${P(pid)}/continuity/fix`, body),

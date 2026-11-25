@@ -66,11 +66,39 @@ def _why_none(p: Project, leaf) -> str:
     return s3.stale_reason(leaf)
 
 
-async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str] = None) -> Scene3DFilm:
-    """Make (and, with prepare, first plan, fix and render) every clip's 3D preview, then join them into the film."""
+def _what_was_done(reports, nums: dict, replan: bool) -> list[str]:
+    """What making the film really did, in plain words (so a quick run is not mistaken for nothing happening)."""
+    planned = [nums.get(r.nid, "") for r in reports if r.planned]
+    rendered = [nums.get(r.nid, "") for r in reports if r.rendered]
+    kept = [nums.get(r.nid, "") for r in reports if not r.rendered and not r.error]
+    lines = []
+    if planned:
+        lines.append(f"Planned {'afresh' if replan else 'now'}: clip {', '.join(planned)}.")
+    if rendered:
+        lines.append(f"Rendered now: clip {', '.join(rendered)}.")
+    if kept and not rendered and not planned:
+        lines.append("Nothing had changed since the last time, so every clip's 3D preview was kept and the film was only joined again "
+                     "(that takes a second). To change it, use \"Change the whole 3D film\", or \"Plan every scene again\" for new scenes.")
+    elif kept:
+        lines.append(f"Kept (already up to date): clip {', '.join(kept)}.")
+    lines += [f"Clip {nums.get(r.nid, '')} could not be made: {r.error}" for r in reports if r.error]
+    return lines
+
+
+async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str] = None, replan: bool = False,
+                    done: Optional[list[str]] = None) -> Scene3DFilm:
+    """Make (and, with prepare, first plan, fix and render) every clip's 3D preview, then join them into the film.
+    replan: plan every scene afresh first. The film's notes say what was really done."""
+    done = list(done or [])
     if prepare:
         from .agent import prepare_all
-        await prepare_all(svc, pid, fix=True, renderer=renderer)
+        mark = ProjectStore.history_mark(svc.load(pid)) if replan else None    # new plans for every scene: ONE undo step
+        try:
+            reports = await prepare_all(svc, pid, fix=True, renderer=renderer, replan=replan)
+        finally:
+            if mark is not None:
+                ProjectStore.collapse_history(pid, mark)
+        done += _what_was_done(reports, numbering(svc.load(pid)), replan)
     p = svc.load(pid)
     base = ProjectStore.path_for(pid)
     out = base / "film3d"
@@ -111,7 +139,7 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
         await asyncio.to_thread(build)
     except media.MediaError as exc:
         raise FilmError(f"The film could not be joined: {exc}") from exc
-    notes: list[str] = []
+    notes: list[str] = done
     blend: Optional[Path] = None
     exe = find_blender(svc.config.blender_path)
     if exe:

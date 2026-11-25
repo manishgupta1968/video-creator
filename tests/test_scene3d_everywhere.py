@@ -132,7 +132,7 @@ def test_the_whole_film_joins_every_clip_and_says_why_a_clip_has_no_preview(svc,
     assert [(pt.source, pt.why) for pt in f.parts] == [("3d", ""), ("card", "3D camera reference off for this clip")]
     total = sum(find(q, i).duration.likely_s for i in ids)
     assert media.probe_duration(ProjectStore.path_for(p.id) / f.video) == pytest.approx(total, abs=0.2)
-    assert f.blend is None and "can be watched here but not opened in Blender" in f.notes[0]
+    assert f.blend is None and any("can be watched here but not opened in Blender" in n for n in f.notes)
     assert film_mod.stale_reason(svc.load(p.id)) == ""
     plan = find(svc.load(p.id), ids[0]).scene3d.plan
     plan.camera.lens_mm = 60
