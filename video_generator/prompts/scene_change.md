@@ -8,6 +8,8 @@ CAMERA IN THE SCRIPT: {{camera}}
 THE CURRENT PLAN:
 {{plan}}
 
+WHAT HAPPENED SO FAR IN THIS SESSION (keep everything the user asked for before; never undo it):
+{{history}}
 THE USER ASKS:
 {{request}}
 

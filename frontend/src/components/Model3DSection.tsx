@@ -1,7 +1,6 @@
 import { Box, ExternalLink, RefreshCw, Send } from "lucide-react";
-import { useState } from "react";
 import { api, Ctx, fileUrl } from "../api";
-import { fmtUsd, useP, useToast } from "../lib";
+import { fmtUsd, useDraft, useP, useToast } from "../lib";
 import { Badge, Button } from "../ui";
 
 /** A character's or object's low-poly 3D model: built once in Blender by Claude Code / Codex from what the story says,
@@ -9,7 +8,7 @@ import { Badge, Button } from "../ui";
 export default function Model3DSection({ item }: { item: Ctx }) {
   const P = useP();
   const toast = useToast();
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`model:${P.pid}:${item.id}`);
   const m = item.model3d;
   const label = `3D model ${item.title}`;
   const working = P.busy.includes(label) || m?.status === "building";

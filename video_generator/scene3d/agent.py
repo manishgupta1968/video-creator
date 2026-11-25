@@ -97,6 +97,8 @@ Files:
 - plan.json: the plan. This is the ONLY file you may change.
 - clip.json: what the shot must show (goal, camera words, action, length, frame shape, which colour is which character).
 - problems.txt: what is wrong now.
+- history.md: what the user asked for so far in this session, and the checker's feedback. Read it first: keep
+  everything the user asked for before, and never undo it.
 - preview/start.png, middle.png, end.png: what the camera sees now (plain coloured shapes).
 
 The plan, in short: metres and seconds, Z is up, the floor is Z = 0, the set is centred on X = 0, Y = 0.
@@ -131,6 +133,185 @@ Write verdict.json as {{"ok": true, "problems": []}} or {{"ok": false, "problems
 Write at most 4 problems, each saying what to change (for example "At the end the camera should be close to Dan;
 it is still far away."). Then reply with one sentence.
 """
+
+
+REVIEW_TASK = """You are the CHECKER of the rough 3D preview of ONE shot of a video, rendered in Blender. Another agent (the
+builder) changes the plan; you only judge it. Do not change any file except criteria.json and verdict.json.
+
+Files:
+- clip.json: what the shot must show (goal, camera words, action, length, frame shape, which colour is which character).
+- history.md: what the user asked for so far in this session. The user's requests count as much as the script.
+- render/start.png, render/middle.png, render/end.png: frames of the RENDERED preview (what the camera really sees).
+- plan.json: the plan it was rendered from (metres and seconds, Z up).
+- criteria.json: the success criteria, if they were written before.
+
+Step 1. If criteria.json does not exist, write it as {{"criteria": ["...", "..."]}}: 3 to 6 short criteria that can be
+seen in the frames: where the camera is and how it moves, the framing at the start, middle and end, where each character
+is and what it does (its pose), and everything the user asked for in history.md. The figures are low-poly stand-ins:
+never judge looks, colours, textures or light.
+Step 2. Look at the three frames and judge every criterion. Write verdict.json as
+{{"ok": true or false, "results": [{{"criterion": "...", "met": true or false, "why": "one plain sentence"}}],
+ "feedback": ["one instruction per problem for the builder"]}}
+Each feedback line says what to change and by how much, for example "At the end the camera must be at the guru's eye
+level, about 1.2 m high; it is at 3 m." ok is true only when every criterion is met. At most 5 feedback lines.
+Then reply with one sentence.
+"""
+
+
+def session_history(project, node=None) -> str:
+    """What you asked for so far in this session (and what came of it), for the agents and the AI brain to read."""
+    from ..tree import numbering as _numbering
+    lines = [f"THE VIDEO: {project.root.goal or project.name}", ""]
+    asks = project.ask_history[-25:]
+    lines.append("WHAT THE USER ASKED FOR SO FAR (oldest first):" if asks else "WHAT THE USER ASKED FOR SO FAR: nothing yet.")
+    lines += [f"- {a.at[:16].replace('T', ' ')} · {a.where}: {a.request}" + (f"  → {a.result}" if a.result else "") for a in asks]
+    if node is not None and node.scene3d:
+        s = node.scene3d
+        num = _numbering(project).get(node.id, "")
+        if s.wishes:
+            lines += ["", f"CLIP {num} WAS FIRST DESCRIBED AS: {s.wishes}"]
+        if s.changes:
+            lines += ["", f"CHANGES MADE TO CLIP {num}'S 3D SCENE (oldest first):"] + [f"- {c}" for c in s.changes[-15:]]
+        if s.review and s.review.rounds:
+            last = s.review.rounds[-1]
+            lines += ["", "THE CHECKER'S SUCCESS CRITERIA:"] + [f"- {c}" for c in s.review.criteria]
+            if last.feedback:
+                lines += ["", "THE CHECKER'S LAST FEEDBACK:"] + [f"- {f}" for f in last.feedback]
+    return "\n".join(lines) + "\n"
+
+
+def _write_history(folder: Path, project, node=None) -> None:
+    (folder / "history.md").write_text(session_history(project, node))
+
+
+def _review_folder(pid: str, nid: str, round_no: int) -> Path:
+    d = ProjectStore.path_for(pid) / "clips" / nid / "scene3d" / "agent" / f"check_{round_no}"
+    shutil.rmtree(d, ignore_errors=True)
+    (d / "preview").mkdir(parents=True)
+    (d / "render").mkdir()
+    return d
+
+
+def _save_review(svc, pid: str, nid: str, review, log: list[str]) -> None:
+    p = svc.load(pid)
+    n = find(p, nid)
+    n.scene3d.review = review
+    if log:
+        n.scene3d.agent_log = (n.scene3d.agent_log + [f"{now_iso()[:16]} {x}" for x in log])[-40:]
+    svc.save(p, snapshot=False)
+
+
+async def review_clip(svc, pid: str, nid: str, rounds: Optional[int] = None, agent: Optional[str] = None,
+                      fresh_criteria: bool = False):
+    """The AI checker on the RENDERED preview: it writes success criteria (once), looks at the rendered frames, and gives
+    feedback; the builder fixes the plan from it; the clip is rendered again and checked again, up to `rounds` times.
+    Both are Claude Code or Codex (your subscription): the same tool, or the other one in pair mode."""
+    from ..models import ReviewRound, Scene3DReview
+    p = svc.load(pid)
+    n = find(p, nid)
+    if not n.scene3d or not n.scene3d.plan:
+        raise s3.Scene3DError(f"Clip '{n.title}' has no 3D scene yet.")
+    st = p.settings.scene3d
+    builder, checker, notes = pick_agents(svc, agent or st.agent)
+    checker = checker or builder                         # one tool: it checks in its own run, then builds in another
+    old = n.scene3d.review
+    review = Scene3DReview(criteria=[] if fresh_criteria or not old else list(old.criteria))
+    log = list(notes)
+    if not checker:
+        review.note = "No Claude Code or Codex is installed, so the AI checker cannot look at the preview."
+        _save_review(svc, pid, nid, review, [review.note])
+        return review
+    limit = max(1, int(rounds or st.check_rounds or 1))
+    budget = max(st.agent_max_usd - (n.scene3d.agent_cost_usd or 0), 0.0)
+    spent = 0.0
+    for r in range(1, limit + 1):
+        p = svc.load(pid)
+        n = find(p, nid)
+        if s3.stale_reason(n) or n.scene3d.status in ("planned", "failed"):
+            await s3.build_clip(svc, pid, nid)
+            p = svc.load(pid)
+            n = find(p, nid)
+        s = n.scene3d
+        if s.status == "failed" or not s.checks:
+            review.note = "The preview could not be rendered, so it could not be checked."
+            break
+        if budget - spent <= 0:
+            review.note = f"The money cap for this clip (${st.agent_max_usd:.2f}) is reached, so the checking stops here."
+            break
+        folder = _review_folder(pid, nid, r)
+        plan = normalise(s.plan)
+        base = ProjectStore.path_for(pid)
+        (folder / "plan.json").write_text(plan.model_dump_json(indent=1))
+        (folder / "clip.json").write_text(json.dumps(_clip_brief(p, n), indent=1))
+        _write_history(folder, p, n)
+        for k, rel in s.checks.items():
+            if (base / rel).exists():
+                shutil.copy(base / rel, folder / "render" / f"{k}.png")
+        _previews(plan, folder)
+        if review.criteria:
+            (folder / "criteria.json").write_text(json.dumps({"criteria": review.criteria}, indent=1))
+        try:
+            res = await _call(svc, pid, checker, AgentTask(folder=folder, instructions=REVIEW_TASK, role="reviewer",
+                                                           max_usd=min(budget - spent, 0.5)), f"3D check {nid} round {r}")
+        except PluginError as exc:
+            review.note = f"{checker} could not check the preview: {exc}"
+            break
+        spent += res.cost_usd
+        try:
+            crit = json.loads((folder / "criteria.json").read_text()).get("criteria") or []
+            review.criteria = [str(c) for c in crit][:8] or review.criteria
+            verdict = json.loads((folder / "verdict.json").read_text())
+        except (OSError, ValueError, AttributeError):
+            review.note = f"{checker} wrote no usable verdict.json, so the check stops here."
+            break
+        results = [{"criterion": str(x.get("criterion", "")), "met": bool(x.get("met")), "why": str(x.get("why", ""))}
+                   for x in (verdict.get("results") or []) if isinstance(x, dict)]
+        feedback = [str(x) for x in (verdict.get("feedback") or [])][:5]
+        ok = bool(verdict.get("ok")) and all(x["met"] for x in results)
+        rnd = ReviewRound(round=r, ok=ok, results=results, feedback=feedback, checked_by=checker)
+        review.rounds.append(rnd)
+        review.plan_hash = s.plan_hash
+        log.append(f"Check round {r} by {checker}: " + ("every success criterion is met." if ok else "; ".join(feedback) or "not passed."))
+        _save_review(svc, pid, nid, review, [])
+        if ok:
+            review.passed = True
+            review.note = f"Passed in round {r}: every success criterion is met."
+            break
+        if r == limit:
+            review.note = f"Not passed after {limit} round(s). Read the feedback, then ask for a change or check again."
+            break
+        if not builder:
+            review.note = "Nobody can act on the feedback (no builder is installed)."
+            break
+        todo = feedback or [f"Criterion not met: {x['criterion']} ({x['why']})" for x in results if not x["met"]]
+        (folder / "problems.txt").write_text("\n".join(todo) + "\n")
+        task = AgentTask(folder=folder, instructions=BUILDER_TASK.format(check=check_command(), problems="\n".join(todo)),
+                         role="builder", allowed_command=check_command(), max_usd=max(budget - spent, 0.01))
+        try:
+            fix = await _call(svc, pid, builder, task, f"3D fix {nid} after check {r}")
+            new = ScenePlan.model_validate(json.loads((folder / "plan.json").read_text()))
+        except PluginError as exc:
+            review.note = f"{builder} could not act on the feedback: {exc}"
+            break
+        except (OSError, ValueError, ValidationError) as exc:
+            review.note = f"{builder} left plan.json broken ({str(exc)[:120]}), so the check stops here."
+            break
+        spent += fix.cost_usd
+        rnd.fixed_by, rnd.fix_summary = builder, (fix.summary or "")[:400]
+        log.append(f"Fix after check {r} by {builder}: {fix.summary or 'no reply'}")
+        newplan = s3.refresh_models(svc.load(pid), _kept(plan, new))
+        if normalise(newplan).model_dump() == plan.model_dump():
+            review.note = f"{builder} made no change to the plan after round {r}, so the check stops here."
+            break
+        s3.set_plan(svc, pid, nid, newplan)                # the next round renders it and looks again
+    p = svc.load(pid)
+    n = find(p, nid)
+    n.scene3d.agent_cost_usd = round(n.scene3d.agent_cost_usd + spent, 4)
+    if not review.passed and n.scene3d.approved_by == "auto":
+        n.scene3d.status, n.scene3d.approved_by = "rendered", ""      # the checker did not pass it: you decide
+    svc.save(p, snapshot=False)
+    _save_review(svc, pid, nid, review, log + ([review.note] if review.note else []))
+    return review
 
 
 def _folder(pid: str, nid: str, round_no: int) -> Path:
@@ -196,6 +377,7 @@ async def fix_clip(svc, pid: str, nid: str, rounds: Optional[int] = None, agent:
         folder = _folder(pid, nid, n.scene3d.agent_rounds + r)
         (folder / "plan.json").write_text(plan.model_dump_json(indent=1))
         (folder / "clip.json").write_text(json.dumps(brief, indent=1))
+        _write_history(folder, p, n)
         _previews(plan, folder)
         looked: list[str] = []
         if not major and checker and budget > 0:
@@ -281,6 +463,7 @@ class PrepareReport:
     status: str = ""
     error: str = ""
     rendered: bool = False            # the preview was rendered now (False = an up-to-date preview was kept)
+    review: Optional[object] = None   # the AI checker's result, when it is on
 
 
 def _needs_fix(project, node) -> bool:
@@ -323,6 +506,9 @@ async def prepare_clip(svc, pid: str, nid: str, fix: bool = True, renderer: Opti
     if s3.stale_reason(n) or n.scene3d.status in ("planned", "failed"):
         s = await s3.build_clip(svc, pid, nid, renderer)
         rep.status, rep.rendered = s.status, True
+        if p.settings.scene3d.ai_check and s.status != "failed":
+            rep.review = await review_clip(svc, pid, nid, fresh_criteria=rep.planned)
+            rep.status = find(svc.load(pid), nid).scene3d.status
     else:
         rep.status = n.scene3d.status
     return rep
@@ -352,6 +538,8 @@ CHANGE_TASK = """You change the rough 3D plan of ONE shot of a video, exactly as
 Files:
 - plan.json: the plan. This is the ONLY file you may change.
 - clip.json: what the shot is about (goal, camera words, action, length, frame shape, which colour is which character).
+- history.md: what the user asked for so far in this session, and the checker's feedback. Read it first: keep
+  everything the user asked for before, and never undo it.
 - preview/start.png, middle.png, end.png: what the camera sees now (plain coloured shapes).
 
 The plan, in short: metres and seconds, Z is up, the floor is Z = 0, the set is centred on X = 0, Y = 0.
@@ -384,6 +572,7 @@ class ChangeReport:
     planned: bool = False             # there was no scene yet: it was planned from your words
     fix: Optional[FixReport] = None   # the automatic check-and-fix after the change, if a check found a problem
     status: str = ""                  # the 3D preview's status at the end (rendered / approved / planned / failed)
+    review: Optional[object] = None   # the AI checker's result, when it is on
 
 
 async def change_clip(svc, pid: str, nid: str, request: str, render: bool = True, agent: Optional[str] = None) -> ChangeReport:
@@ -423,6 +612,7 @@ async def _change(svc, pid: str, nid: str, request: str, render: bool, agent: Op
             folder = _folder(pid, nid, n.scene3d.agent_rounds + 1)
             (folder / "plan.json").write_text(before.model_dump_json(indent=1))
             (folder / "clip.json").write_text(json.dumps(_clip_brief(p, n), indent=1))
+            _write_history(folder, p, n)
             _previews(before, folder)
             task = AgentTask(folder=folder, instructions=CHANGE_TASK.format(request=request, check=check_command()),
                              role="change", request=request, allowed_command=check_command(), max_usd=budget)
@@ -467,6 +657,10 @@ async def _change(svc, pid: str, nid: str, request: str, render: bool, agent: Op
         n = find(p, nid)
         if s3.stale_reason(n) or n.scene3d.status in ("planned", "failed"):
             rep.status = (await s3.build_clip(svc, pid, nid)).status
+            if p.settings.scene3d.ai_check and rep.status != "failed":
+                # your request changes what success means: the checker writes its criteria again, with your request in them
+                rep.review = await review_clip(svc, pid, nid, fresh_criteria=True)
+                rep.status = find(svc.load(pid), nid).scene3d.status
         else:
             rep.status = n.scene3d.status
     return rep
@@ -481,7 +675,7 @@ class FilmChangeReport:
     problems: list[str] = field(default_factory=list)
 
 
-async def change_film(svc, pid: str, request: str, agent: Optional[str] = None) -> FilmChangeReport:
+async def change_film(svc, pid: str, request: str, agent: Optional[str] = None, under: Optional[str] = None) -> FilmChangeReport:
     """One request for the whole 3D film ("the camera lower everywhere", "give the guru a white beard"): the AI brain
     decides which clips and which 3D models it affects; each is changed, checked and rendered; then the film is joined
     again. One Undo takes it all back."""
@@ -492,7 +686,11 @@ async def change_film(svc, pid: str, request: str, agent: Optional[str] = None) 
         raise s3.Scene3DError("Say what you want to change in the whole 3D film, for example: \"the camera lower everywhere\".")
     rep = FilmChangeReport(request=request)
     p = svc.load(pid)
-    clips = [n for n in leaves(p) if n.kind == NodeKind.clip and s3.enabled_for(p, n)]
+    inside = None
+    if under and under != p.root.id:                      # a part: only its own clips
+        from ..tree import walk
+        inside = {d.id for d, _ in walk(find(p, under))}
+    clips = [n for n in leaves(p) if n.kind == NodeKind.clip and s3.enabled_for(p, n) and (inside is None or n.id in inside)]
     if not clips:
         raise s3.Scene3DError("No clip has the 3D camera reference on, so there is no 3D film to change.")
     mark = ProjectStore.history_mark(p)
@@ -530,3 +728,65 @@ async def change_film(svc, pid: str, request: str, agent: Optional[str] = None) 
         return rep
     finally:
         ProjectStore.collapse_history(pid, mark)
+
+
+def _where(project, node) -> str:
+    from ..tree import numbering as _numbering
+    if node.id == project.root.id:
+        return "the whole video"
+    return f"{'clip' if node.kind == NodeKind.clip else 'part'} {_numbering(project).get(node.id, '')}"
+
+
+def uses_3d(project, node) -> bool:
+    """Does a request on this node reach any 3D scene (the clip itself, or a clip under this part)?"""
+    if not project.settings.scene3d.enabled and node.scene3d_enabled is not True:
+        if not any(s3.enabled_for(project, c) for c in leaves(project) if c.kind == NodeKind.clip):
+            return False
+    if node.kind == NodeKind.clip:
+        return s3.enabled_for(project, node)
+    from ..tree import walk
+    ids = {d.id for d, _ in walk(node)} if node.id != project.root.id else None
+    return any(s3.enabled_for(project, c) for c in leaves(project) if c.kind == NodeKind.clip and (ids is None or c.id in ids))
+
+
+def remember_ask(svc, pid: str, where: str, request: str, result: str = "") -> int:
+    """Add one request to the session history; returns its place (to fill in the result later)."""
+    from ..models import AskEntry
+    p = svc.load(pid)
+    p.ask_history = (p.ask_history + [AskEntry(where=where, request=request, result=result)])[-60:]
+    svc.save(p, snapshot=False)
+    return len(p.ask_history) - 1
+
+
+def _result(svc, pid: str, index: int, text: str) -> None:
+    p = svc.load(pid)
+    if 0 <= index < len(p.ask_history):
+        e = p.ask_history[index]
+        e.result = (e.result + " " if e.result else "") + text
+        svc.save(p, snapshot=False)
+
+
+async def apply_scene_change(svc, pid: str, nid: str, request: str, index: int = -1):
+    """The 3D part of an "Ask AI" request: one clip's scene, or every scene under a part / the whole video.
+    The outcome is written into the session history, so the next request (and every agent) knows it."""
+    p = svc.load(pid)
+    n = find(p, nid)
+    try:
+        if n.kind == NodeKind.clip:
+            rep = await change_clip(svc, pid, nid, request)
+            done = (rep.summary or ("Changed." if rep.changed else "Nothing changed."))
+            if rep.review is not None:
+                done += " AI check: " + (rep.review.note or ("passed" if rep.review.passed else "not passed"))
+        else:
+            frep = await change_film(svc, pid, request, under=nid)
+            done = (frep.note or "") + (f" Changed clips: {', '.join(sorted(frep.clips))}." if frep.clips else "")
+            checks = [f"{k}: {'passed' if r.review.passed else 'not passed'}" for k, r in frep.clips.items() if r.review is not None]
+            if checks:
+                done += " AI check: " + "; ".join(checks) + "."
+            if frep.problems:
+                done += " Problems: " + " ".join(frep.problems)
+        _result(svc, pid, index, "3D: " + done.strip()[:600])
+        return done
+    except Exception as exc:
+        _result(svc, pid, index, f"3D: failed: {exc}"[:600])
+        raise

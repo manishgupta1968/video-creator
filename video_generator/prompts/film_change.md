@@ -8,6 +8,8 @@ THE CLIPS, in story order:
 THE 3D MODELS of characters and objects:
 {{models}}
 
+WHAT HAPPENED SO FAR IN THIS SESSION (keep everything the user asked for before; never undo it):
+{{history}}
 THE USER ASKS:
 {{request}}
 

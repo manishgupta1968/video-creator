@@ -62,6 +62,22 @@ class FakeAgent(SceneAgent):
             problems = self.checker_problems.pop(0) if self.checker_problems else []
             (task.folder / "verdict.json").write_text(json.dumps({"ok": not problems, "problems": problems}))
             return AgentResult(ok=True, summary="looked at the pictures: " + ("; ".join(problems) or "the camera matches"))
+        if task.role == "reviewer":              # the AI checker: criteria once, then a verdict on the rendered frames
+            crit_file = task.folder / "criteria.json"
+            if not crit_file.exists():
+                clip = json.loads((task.folder / "clip.json").read_text())
+                crit = [f"The camera does what the script says: {clip.get('camera') or 'a clear view of the action'}",
+                        "Every character is in the frame at the start, middle and end"]
+                history = (task.folder / "history.md").read_text() if (task.folder / "history.md").exists() else ""
+                asked = [ln.split(": ", 1)[1].split("  →")[0] for ln in history.splitlines() if ln.startswith("- ") and ": " in ln]
+                crit += [f"As the user asked: {a}" for a in asked[-2:]]
+                crit_file.write_text(json.dumps({"criteria": crit}))
+            crit = json.loads(crit_file.read_text())["criteria"]
+            problems = self.checker_problems.pop(0) if self.checker_problems else []
+            results = [{"criterion": c, "met": not (problems and i == 0), "why": problems[0] if problems and i == 0 else "seen in the frames"}
+                       for i, c in enumerate(crit)]
+            (task.folder / "verdict.json").write_text(json.dumps({"ok": not problems, "results": results, "feedback": problems}))
+            return AgentResult(ok=True, summary="checked the rendered frames: " + ("; ".join(problems) or "every criterion is met"))
         if task.role == "model":                  # the offline stand-in figure, sized and coloured from the brief
             brief = json.loads((task.folder / "brief.json").read_text())
             if task.request:
@@ -78,6 +94,16 @@ class FakeAgent(SceneAgent):
             data, done = simple_change(json.loads((task.folder / "plan.json").read_text()), task.request)
             (task.folder / "plan.json").write_text(json.dumps(data, indent=1))
             return AgentResult(ok=True, summary=(done[:1].upper() + done[1:] + ".") if done else "I did not understand that change.")
+        problems_file = task.folder / "problems.txt"
+        if problems_file.exists():                # feedback in plain words ("bring the camera closer") is acted on first
+            data, done_all = json.loads((task.folder / "plan.json").read_text()), []
+            for line in problems_file.read_text().splitlines():
+                data, done = simple_change(data, line)
+                if done:
+                    done_all.append(done)
+            if done_all:
+                (task.folder / "plan.json").write_text(json.dumps(data, indent=1))
+                return AgentResult(ok=True, summary="; ".join(done_all))
         plan = normalise(ScenePlan.model_validate(json.loads((task.folder / "plan.json").read_text())))
         figures = [t for t in plan.things if t.kind == "figure"] or plan.things
         keys = []

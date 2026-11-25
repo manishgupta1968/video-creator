@@ -311,6 +311,16 @@ class FakeLLM(LLM):
                 "lights": [{"kind": "sun", "at": [-6, -6, 10], "look_at": [0, 0, 0], "strength": 3}],
                 "seconds": secs, "fps": 24, "aspect": m.get("aspect") or "16:9"}
 
+    def _ask_route(self, m: dict) -> dict:
+        """Offline: camera, size, place and pose words go to the 3D scenes; anything else to the story."""
+        req = m.get("request", "")
+        words = req.lower()
+        scene = any(w in words for w in ("camera", "closer", "further", "bigger", "smaller", "size", "move", "left", "right",
+                                         "lower", "higher", "eye level", "angle", "lens", "zoom", "pose", "kneel", "stand",
+                                         "walk", "slower", "faster", "position", "frame", "3d", "shot", "behind", "front"))
+        return {"story": "" if scene else req, "scene": req if scene else "",
+                "note": "The 3D scenes are changed." if scene else "The story is changed."}
+
     def _film_change(self, m: dict) -> dict:
         req = m.get("request", "")
         return {"clips": [{"number": n, "request": req} for n in m.get("clips", [])], "models": [],

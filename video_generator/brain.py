@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import languages
 from .context import effective_context, summarize_for_llm
-from .models import (ActorInShot, ClipScript, Continuity, ContextItem, ContextType, DialogueLine, Node, Project, ShotType)
+from .models import (ActorInShot, ClipScript, Continuity, ContextItem, ContextType, DialogueLine, Node, NodeKind, Project, ShotType)
 from .plugins.base import PluginError, Usage
 from .registry import Registry
 from . import routes as routes_mod
@@ -341,6 +341,13 @@ class FilmChange(BaseModel):
     note: str = ""
 
 
+class AskRoute(BaseModel):
+    """Where one "Ask AI" request belongs (prompts/ask_route.md)."""
+    story: str = ""      # the change for the words of the plan (title, goal, script), "" = none
+    scene: str = ""      # the change for the 3D scenes, "" = none
+    note: str = ""
+
+
 class BrainTest(BaseModel):
     answer: str = ""
 
@@ -660,6 +667,16 @@ class Brain:
                                "description": (a.description if a else item.text) or "", "clothing": a.clothing if a else "",
                                "actions": actions})
 
+    async def ask_route(self, project: Project, node: Node, request: str) -> AskRoute:
+        """Split one request from the "Ask AI" box into a change for the story (words) and one for the 3D scenes."""
+        from .scene3d.agent import session_history
+        nums = numbering(project)
+        where = "the whole video" if node.id == project.root.id else f"{'clip' if node.kind == NodeKind.clip else 'part'} {nums.get(node.id, '')}"
+        prompt = render("ask_route", where=where, title=node.title, goal=node.goal,
+                        script=(node.script.visual if node.script else "") or "(none)", request=request.strip(),
+                        history=session_history(project))
+        return await self.ask("ask_route", prompt, AskRoute, {"request": request})
+
     async def film_change(self, project: Project, clips: list, request: str) -> FilmChange:
         """Which clips and which 3D models one request for the whole film affects, and the change for each."""
         nums = numbering(project)
@@ -671,7 +688,9 @@ class Brain:
                          + (f" | camera: {camera}" if camera else "") + ("" if n.scene3d and n.scene3d.plan else " | (no 3D scene yet)"))
         models = [f"{c.title}: {(c.model3d.brief or {}).get('description') or c.type.value}"
                   for c in project.context if c.model3d]
-        prompt = render("film_change", clips="\n".join(lines) or "(none)", models="\n".join(models) or "(none)", request=request.strip())
+        from .scene3d.agent import session_history
+        prompt = render("film_change", clips="\n".join(lines) or "(none)", models="\n".join(models) or "(none)",
+                        request=request.strip(), history=session_history(project))
         return await self.ask("film_change", prompt, FilmChange,
                               {"request": request, "clips": [nums.get(n.id, "") for n in clips if n.scene3d and n.scene3d.plan]})
 
@@ -679,9 +698,10 @@ class Brain:
         """The 3D plan with one change you asked for in plain words ("make the lizard twice as big"), everything else kept."""
         from .scene3d.spec import ScenePlan
         nums = numbering(project)
+        from .scene3d.agent import session_history
         prompt = render("scene_change", number=nums.get(node.id, ""), title=node.title, goal=node.goal,
                         camera=(node.script.camera if node.script else "") or "(not written)",
-                        plan=plan.model_dump_json(indent=1), request=request.strip())
+                        plan=plan.model_dump_json(indent=1), request=request.strip(), history=session_history(project, node))
         return await self.ask("scene_change", prompt, ScenePlan, {"plan": plan.model_dump(), "request": request})
 
     async def write_clip_script(self, project: Project, node: Node, feedback: str = "") -> ClipScriptDraft:

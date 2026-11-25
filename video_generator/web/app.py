@@ -26,6 +26,8 @@ from ..registry import plugin_classes
 from ..runner import Engine
 from ..services import Service
 from ..tree import find, numbering
+from ..models import NodeKind
+from ..plugins.base import PluginError
 
 
 class Hub:
@@ -271,6 +273,51 @@ async def write_script(pid: str, nid: str, body: dict = Body(default={})):
 async def revise(pid: str, nid: str, body: dict = Body(...)):
     await guard(svc.revise)(pid, nid, body["instruction"])
     return view(pid)
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/ask")
+async def ask_ai(pid: str, nid: str, body: dict = Body(...)):
+    """The one "Ask AI to change this" box. Without 3D it changes the story, as before. With 3D on, the AI brain decides
+    whether the request is for the story, the 3D scenes, or both: the story is changed now, the 3D scenes in the
+    background (each changed, rendered and, when the AI checker is on, checked). Every request and its outcome go into
+    the session history, which the agents read."""
+    from ..scene3d import agent as ag
+    request = str(body.get("request") or "").strip()
+    if not request:
+        raise HTTPException(400, "Say what you want to change.")
+    p = svc.load(pid)
+    n = find(p, nid)
+    where = ag._where(p, n)
+    if not ag.uses_3d(p, n):
+        idx = ag.remember_ask(svc, pid, where, request)
+        await guard(svc.revise)(pid, nid, request)
+        ag._result(svc, pid, idx, "Story changed.")
+        return {"view": view(pid), "story": request, "scene": "", "note": "The story was changed."}
+    try:
+        route = await svc.brain.ask_route(p, n, request)
+    except PluginError as exc:
+        raise HTTPException(400, str(exc))
+    q = svc.load(pid)
+    svc._ledger_llm(q, "ask: where does it belong")
+    svc.save(q, snapshot=False)
+    idx = ag.remember_ask(svc, pid, where, request, (route.note or "").strip())
+    if route.story.strip():
+        await guard(svc.revise)(pid, nid, route.story.strip())
+        ag._result(svc, pid, idx, "Story changed.")
+    if route.scene.strip():
+        label = f"3D change {numbering(svc.load(pid)).get(nid, '')}" if n.kind == NodeKind.clip else "Whole 3D film"
+        bg(_scene3d_call(ag.apply_scene_change, svc, pid, nid, route.scene.strip(), idx)(), pid, label)
+    return {"view": view(pid), "story": route.story.strip(), "scene": route.scene.strip(), "note": route.note}
+
+
+@app.post("/api/projects/{pid}/nodes/{nid}/scene3d/check")
+async def scene3d_check(pid: str, nid: str, body: dict = Body(default={})):
+    """Run the AI checker on the clip's rendered preview now (success criteria, feedback, fix, render), in the background."""
+    from ..scene3d import agent as ag
+    rounds = body.get("rounds")
+    bg(_scene3d_call(ag.review_clip, svc, pid, nid, int(rounds) if rounds else None, None, bool(body.get("fresh")))(), pid,
+       f"3D check {numbering(svc.load(pid)).get(nid, '')}")
+    return {"ok": True}
 
 
 @app.post("/api/projects/{pid}/scripts")
