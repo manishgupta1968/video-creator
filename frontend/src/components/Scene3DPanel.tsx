@@ -1,8 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Box, CheckCircle2, ExternalLink, Film, RefreshCw, Send, Sparkles, Wand2 } from "lucide-react";
 import { useState } from "react";
 import { api, fileUrl, Node } from "../api";
-import { fmtUsd, useP, useToast } from "../lib";
+import { fmtUsd, useDraft, useP, useToast } from "../lib";
 import { Badge, Button, cn, Select, Switch } from "../ui";
 import { SubscriptionModelSelect } from "./SubscriptionModel";
 
@@ -71,7 +71,7 @@ function ComputerStatus() {
 function WholeFilm() {
   const P = useP();
   const toast = useToast();
-  const q = useQuery({ queryKey: ["scene3d-film", P.pid, P.view?.project.updated_at], queryFn: () => api.scene3dFilm(P.pid), staleTime: 0 });
+  const q = useQuery({ queryKey: ["scene3d-film", P.pid, P.view?.project.updated_at], queryFn: () => api.scene3dFilm(P.pid), staleTime: 0, placeholderData: keepPreviousData });
   const working = P.busy.includes("Whole 3D film");
   const f = q.data?.film;
   const stale = q.data?.stale || "";
@@ -129,7 +129,7 @@ function WholeFilm() {
  *  checked and rendered, and the film is joined again. One Undo takes it all back. */
 function FilmPrompt({ working }: { working: boolean }) {
   const P = useP();
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`film:${P.pid}`);
   const send = async () => {
     const request = text.trim();
     if (!request) return;
@@ -221,7 +221,7 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
  *  applied, checked (and fixed when needed) and rendered by itself; the new preview appears when it is ready. */
 function ScenePrompt({ node, working }: { node: Node; working: boolean }) {
   const P = useP();
-  const [text, setText] = useState("");
+  const [text, setText] = useDraft(`clip:${P.pid}:${node.id}`);
   const s = node.scene3d;
   const hasPlan = !!s?.plan;
   const label = `3D change ${P.numbers[node.id] || ""}`;
@@ -262,7 +262,7 @@ function ScenePrompt({ node, working }: { node: Node; working: boolean }) {
 /** For one clip: is it on, the plan's colour legend, the checks, the preview pictures and video, and the actions. */
 export function Scene3DClipPanel({ node }: { node: Node }) {
   const P = useP();
-  const info = useQuery({ queryKey: ["scene3d", P.pid, node.id, P.view?.project.updated_at], queryFn: () => api.scene3d(P.pid, node.id), staleTime: 0 });
+  const info = useQuery({ queryKey: ["scene3d", P.pid, node.id, P.view?.project.updated_at], queryFn: () => api.scene3d(P.pid, node.id), staleTime: 0, placeholderData: keepPreviousData });
   const d = info.data;
   const s = node.scene3d;
   const label = `3D reference ${P.numbers[node.id] || ""}`;

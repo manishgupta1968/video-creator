@@ -209,3 +209,12 @@ export function brainName(id: string): string {
   return ({ fake_llm: "offline (free)", claude_code_brain: "Claude Code (your subscription)", codex_brain: "Codex (your subscription)",
     anthropic: "Claude (API key)", openai: "OpenAI (API key)", gemini: "Gemini (API key)" } as Record<string, string>)[id] || id;
 }
+
+
+/** What you are typing in a prompt box, kept outside the box: a refresh of the panel (the project is saved often,
+ *  for example when a background step finishes) must never wipe it. */
+const DRAFTS = new Map<string, string>();
+export function useDraft(key: string): [string, (v: string) => void] {
+  const [text, setText] = useState(() => DRAFTS.get(key) || "");
+  return [text, (v: string) => { if (v) DRAFTS.set(key, v); else DRAFTS.delete(key); setText(v); }];
+}
