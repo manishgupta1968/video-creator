@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowRight, Check, CheckCircle2, Clapperboard, Film, Link2, Lock, LockOpen, Mic, Play, Plus, RefreshCw, Sparkles, Trash2, User, Wand2, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, fileUrl, Line, Node, Review, Script, Take } from "../api";
-import { fmtRange, fmtSec, fmtTime, fmtUsd, leaves, SHOT_TYPES, STATUS, useP, useSettings } from "../lib";
+import { fmtRange, fmtSec, fmtTime, fmtUsd, leaves, SHOT_TYPES, STATUS, useDraft, useP, useSettings, useToast } from "../lib";
 import { Badge, Button, Card, cn, Dialog, Editable, Empty, HelpTip, Select, Switch, Textarea, Tip } from "../ui";
 import { useRun } from "./ConfirmRun";
 import { useLanguages } from "./LanguageControls";
@@ -81,7 +81,7 @@ function GoalEditor({ node, isRoot }: { node: Node; isRoot: boolean }) {
         </Card>
       )}
       <NodeReview node={node} />
-      <AskAI node={node} placeholder={isRoot ? "e.g. make the whole video more emotional" : "e.g. make this part shorter and punchier"} />
+      <AskAI node={node} placeholder={isRoot ? "e.g. make the whole video more emotional · keep the camera low in every clip" : "e.g. make this part shorter · the camera closer in every clip"} />
       <div className="flex flex-wrap gap-2">
         <Button help="break-down" variant="primary" loading={breaking} onClick={() => P.act("Breaking down", () => api.decompose(P.pid, node.id), "Broken down into clips")}>
           <Sparkles className="h-3.5 w-3.5" />Break down with AI
@@ -211,12 +211,19 @@ function LengthEditor({ node, onSave, isRoot }: { node: Node; onSave: (v: number
 
 function AskAI({ node, placeholder }: { node: Node; placeholder: string }) {
   const P = useP();
-  const [text, setText] = useState("");
+  const toast = useToast();
+  const [text, setText] = useDraft(`ask:${P.pid}:${node.id}`);
   const busy = P.busy.includes("Revising");
   const send = async () => {
     if (!text.trim()) return;
-    const r = await P.act("Revising", () => api.revise(P.pid, node.id, text.trim()), "Revised — Ctrl+Z to undo");
-    if (r) setText("");
+    // the one box: the AI decides whether this is for the story, the 3D scenes, or both (with 3D on)
+    const r = await P.act("Revising", async () => { const x = await api.ask(P.pid, node.id, text.trim()); P.set(x.view); return x; });
+    if (r) {
+      setText("");
+      const parts = [r.note || (r.story ? "The story was changed." : "")];
+      if (r.scene) parts.push("The 3D scene is being changed in the background — the new preview" + (P.view!.project.settings.scene3d.ai_check ? " and the AI check" : "") + " appear in the 3D box.");
+      toast({ text: parts.filter(Boolean).join(" ") || "Done", tone: "ok", action: { label: "Undo", run: async () => P.set(await api.undo(P.pid)) } });
+    }
   };
   return (
     <div data-help="ask-ai-box" className="flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-1.5 focus-within:border-brand">
@@ -225,9 +232,9 @@ function AskAI({ node, placeholder }: { node: Node; placeholder: string }) {
         placeholder={`Ask AI to change this — ${placeholder}`} aria-label="Ask AI"
         className="h-8 flex-1 bg-transparent text-[13px] placeholder:text-muted/70 focus:outline-none" />
       <Button size="sm" variant="primary" onClick={send} loading={busy} disabled={!text.trim()}><ArrowRight className="h-3.5 w-3.5" /></Button>
-      {node.kind !== "clip" && P.view!.project.settings.scene3d?.enabled && (
-        <span className="hidden text-[10px] text-muted lg:inline" title="This box changes the plan's words (title, goal, length). The 3D scenes have their own box.">
-          3D film: use "Change the whole 3D film" below
+      {P.view!.project.settings.scene3d?.enabled && (
+        <span className="hidden text-[10px] text-muted lg:inline" title="The AI decides whether your request is for the story (words, script) or the 3D scenes (camera, positions, poses), or both.">
+          story and 3D scenes
         </span>
       )}
     </div>
@@ -338,7 +345,7 @@ function ClipEditor({ node }: { node: Node }) {
 
       {shownTakes.length > 0 && node.kind === "clip" && <Takes node={node} takes={shownTakes} />}
 
-      <AskAI node={node} placeholder="make Rahul look more frustrated" />
+      <AskAI node={node} placeholder="make Rahul look more frustrated · bring the camera closer" />
 
       {/* goal */}
       <Card className="p-4">

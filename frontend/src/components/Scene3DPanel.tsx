@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Box, CheckCircle2, ExternalLink, Film, RefreshCw, Send, Sparkles, Wand2 } from "lucide-react";
 import { useState } from "react";
 import { api, fileUrl, Node } from "../api";
-import { fmtUsd, useDraft, useP, useToast } from "../lib";
+import { fmtUsd, useP, useToast } from "../lib";
 import { Badge, Button, cn, Select, Switch } from "../ui";
 import { SubscriptionModelSelect } from "./SubscriptionModel";
 
@@ -103,7 +103,7 @@ function WholeFilm() {
           </Button>
         )}
       </div>
-      {has && <FilmPrompt working={working} />}
+      <AskHistory />
       <p className="text-[11px] text-muted">
         Every clip's 3D preview, one after another, before anything is paid for. Missing previews are made first (free); a clip without one shows a
         card of the same length saying why.
@@ -125,31 +125,28 @@ function WholeFilm() {
   );
 }
 
-/** One request for the whole 3D film. The AI brain decides which clips and which 3D models it affects; each is changed,
- *  checked and rendered, and the film is joined again. One Undo takes it all back. */
-function FilmPrompt({ working }: { working: boolean }) {
+/** Your "Ask AI" requests this session and what came of them. The agents read the same list (history.md), so a new
+ *  request never undoes an earlier one. */
+function AskHistory() {
   const P = useP();
-  const [text, setText] = useDraft(`film:${P.pid}`);
-  const send = async () => {
-    const request = text.trim();
-    if (!request) return;
-    const r = await P.act("Whole 3D film", () => api.scene3dChangeFilm(P.pid, request),
-      "Changing the 3D film: each affected clip is changed, checked and rendered, then the film is joined again");
-    if (r) setText("");
-  };
+  const asks = P.view!.project.ask_history || [];
   return (
     <div className="space-y-1">
-      <div className="text-[11px] font-medium">Change the whole 3D film</div>
-      <div className="flex items-end gap-2">
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} disabled={working} aria-label="Change the whole 3D film"
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder="e.g. keep the camera low, at the guru's eye level, in every clip · give the guru a long white beard · in clip 1.2 the disciple walks slower"
-          className="min-h-[2.5rem] flex-1 resize-y rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs" />
-        <Button size="sm" variant="primary" disabled={working || !text.trim()} onClick={send}>
-          {working ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}Change
-        </Button>
+      <div className="text-[11px]">
+        <span className="font-medium">To change the film, type in “Ask AI to change this…” at the top.</span>{" "}
+        <span className="text-muted">The AI decides whether it is for the story or the 3D scenes, and which clips it affects.</span>
       </div>
-      <p className="text-[10px] text-muted">The AI decides which clips and characters this affects and changes only those. To change one clip, use the box in that clip.</p>
+      {asks.length > 0 && (
+        <details className="text-[11px]" open={asks.length <= 3}>
+          <summary className="cursor-pointer text-muted">Your requests this session ({asks.length}) — Claude Code / Codex read these each time</summary>
+          <ol className="mt-1 space-y-0.5 pl-4">
+            {asks.slice(-12).map((a, i) => (
+              <li key={a.at + i} className="list-decimal"><span className="text-muted">{a.where}:</span> {a.request}
+                {a.result && <span className="text-muted"> → {a.result}</span>}</li>
+            ))}
+          </ol>
+        </details>
+      )}
     </div>
   );
 }
@@ -194,6 +191,19 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
                 <SubscriptionModelSelect which="codex" value={st.agent_models?.codex || ""} title="The model Codex uses to build characters, fix and change 3D scenes"
                   onChange={(v) => saveSettings({ agent_models: { ...(st.agent_models || {}), codex: v } })} />
               </div>
+              <div className="space-y-1 rounded-lg border border-line p-2">
+                <Switch checked={!!st.ai_check} onChange={(ai_check) => saveSettings({ ai_check }, ai_check ? "The AI checker is on" : "The AI checker is off")}
+                  label="AI checker: after each render, Claude Code or Codex writes success criteria, looks at the rendered preview and gives the builder feedback to fix" />
+                {st.ai_check && (
+                  <div className="flex flex-wrap items-center gap-2 pl-1 text-xs">
+                    <span className="text-muted">Rounds of check and fix per clip:</span>
+                    <input type="number" min={1} max={10} step={1} defaultValue={st.check_rounds || 3} aria-label="Rounds of check and fix"
+                      onBlur={(e) => { const v = Math.max(1, Math.min(10, parseInt(e.target.value) || 1)); if (v !== st.check_rounds) saveSettings({ check_rounds: v }); }}
+                      className="w-14 rounded-md border border-line bg-panel px-1.5 py-1 text-xs" />
+                    <span className="text-muted">· checker: {st.agent === "pair" ? "the other tool (pair mode)" : "the same tool as the builder, in its own run"} · uses your subscription</span>
+                  </div>
+                )}
+              </div>
               <div><Switch checked={st.models !== false} onChange={(models) => saveSettings({ models })}
                 label="Build a low-poly 3D model of each character and object (else plain shapes)" /></div>
               <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -217,44 +227,61 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
   );
 }
 
-/** The prompt box, as in the video: describe the scene (before there is one) or say what to change. Each request is
- *  applied, checked (and fixed when needed) and rendered by itself; the new preview appears when it is ready. */
-function ScenePrompt({ node, working }: { node: Node; working: boolean }) {
+/** The AI checker on this clip: its success criteria (met or not), each round's feedback to the builder, and why it
+ *  stopped. Changes are asked for in the "Ask AI to change this…" box at the top of the clip. */
+function ClipCheck({ node, working }: { node: Node; working: boolean }) {
   const P = useP();
-  const [text, setText] = useDraft(`clip:${P.pid}:${node.id}`);
   const s = node.scene3d;
-  const hasPlan = !!s?.plan;
-  const label = `3D change ${P.numbers[node.id] || ""}`;
-  const send = async () => {
-    const request = text.trim();
-    if (!request) return;
-    const r = await P.act(label, () => api.scene3dChange(P.pid, node.id, request),
-      hasPlan ? "Changing the 3D scene. The new preview appears when it is ready." : "Making the 3D scene from the script and your words.");
-    if (r) setText("");
-  };
+  const st = P.view!.project.settings.scene3d;
+  const rv = s?.review;
+  const last = rv?.rounds?.[rv.rounds.length - 1];
+  const checking = P.busy.some((b) => b.startsWith(`3D check ${P.numbers[node.id] || ""}`));
   return (
-    <div className="space-y-1.5">
-      <div className="text-[11px] font-medium">{hasPlan ? "Change the 3D scene" : "Describe the 3D scene (optional)"}</div>
-      <div className="flex items-end gap-2">
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} disabled={working} aria-label={hasPlan ? "Change the 3D scene" : "Describe the 3D scene"}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder={hasPlan ? "e.g. make the lizard twice as big · end the camera closer to the chef · move the rock to the left"
-            : "e.g. a big empty kitchen, the chef at the far end, the camera starts high and comes down"}
-          className="min-h-[2.5rem] flex-1 resize-y rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs" />
-        <Button size="sm" variant="primary" disabled={working || !text.trim()} onClick={send}>
-          {working ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}{hasPlan ? "Change" : "Make it"}
-        </Button>
-      </div>
-      <p className="text-[10px] text-muted">
-        {hasPlan ? "Only what you ask for changes. It is checked and rendered by itself; Undo (Ctrl/⌘ Z) takes it back."
-          : "Leave it empty to make the scene from the script alone (\"Plan, check and render\" below)."}
-      </p>
+    <div className="space-y-1.5 text-[11px]">
+      <div className="text-muted">To describe or change this 3D scene, type in “Ask AI to change this…” at the top of the clip.</div>
       {!!s?.changes?.length && (
-        <details className="text-[11px]">
-          <summary className="cursor-pointer text-muted">Your changes so far ({s.changes.length})</summary>
+        <details>
+          <summary className="cursor-pointer text-muted">Changes to this scene so far ({s.changes.length})</summary>
           <ol className="mt-1 list-decimal space-y-0.5 pl-4">{s.changes.map((c, i) => <li key={i}>{c}</li>)}</ol>
         </details>
       )}
+      <div className="rounded-lg border border-line p-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium">AI check of the rendered preview</span>
+          {rv && rv.rounds.length > 0 && <Badge tone={rv.passed ? "ok" : "warn"}>{rv.passed ? `Passed in round ${last!.round}` : `Not passed (${rv.rounds.length} round${rv.rounds.length > 1 ? "s" : ""})`}</Badge>}
+          {checking && <Badge tone="info">Checking…</Badge>}
+          <div className="flex-1" />
+          <Button size="sm" variant="outline" disabled={working || checking || !s?.plan}
+            title={`Claude Code or Codex writes success criteria, looks at the rendered frames, and the builder fixes what fails — up to ${st.check_rounds} round(s)`}
+            onClick={() => P.act(`3D check ${P.numbers[node.id] || ""}`, () => api.scene3dCheck(P.pid, node.id, !rv?.criteria?.length), "The AI checker is looking at the preview, in the background")}>
+            <CheckCircle2 className="h-3.5 w-3.5" />Check with AI now
+          </Button>
+        </div>
+        {!rv && <p className="mt-1 text-muted">{st.ai_check ? "It runs by itself after each render." : "Switch on the AI checker in the Whole video box to run it after each render, or click “Check with AI now”."}</p>}
+        {rv && rv.criteria.length > 0 && (
+          <ul className="mt-1 space-y-0.5">
+            {rv.criteria.map((c) => {
+              const r = last?.results.find((x) => x.criterion === c);
+              return <li key={c} className={r ? (r.met ? "text-ok" : "text-bad") : "text-muted"}>{r ? (r.met ? "✓ " : "✗ ") : "• "}{c}{r && !r.met && r.why ? <span className="text-muted"> — {r.why}</span> : null}</li>;
+            })}
+          </ul>
+        )}
+        {rv && rv.rounds.length > 0 && (
+          <details className="mt-1">
+            <summary className="cursor-pointer text-muted">Each round: the checker's feedback and the builder's fix</summary>
+            <ol className="mt-1 space-y-1 pl-4">
+              {rv.rounds.map((r) => (
+                <li key={r.round} className="list-decimal">
+                  <span className={r.ok ? "text-ok" : "text-warn"}>{r.ok ? "Passed" : "Not passed"}</span> <span className="text-muted">({r.checked_by})</span>
+                  {r.feedback.map((f) => <div key={f}>→ {f}</div>)}
+                  {r.fixed_by && <div className="text-muted">Fixed by {r.fixed_by}: {r.fix_summary}</div>}
+                </li>
+              ))}
+            </ol>
+          </details>
+        )}
+        {rv?.note && <p className="mt-1 text-muted">{rv.note}</p>}
+      </div>
     </div>
   );
 }
@@ -305,7 +332,7 @@ export function Scene3DClipPanel({ node }: { node: Node }) {
             <div className="text-[11px]"><span className="font-medium">Used when this clip is made: </span>
               <span className="text-muted">{d.uses.join(" · ")}</span></div>
           )}
-          <ScenePrompt node={node} working={working} />
+          <ClipCheck node={node} working={working} />
           {s?.video && !d.stale && (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
               <video key={s.video} src={fileUrl(P.pid, s.video)} controls loop muted className="w-full rounded bg-black sm:col-span-1" />

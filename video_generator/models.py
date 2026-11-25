@@ -318,6 +318,41 @@ class Continuity(BaseModel):
 
 
 # --------------------------------------------------------------------------- tree
+class CriterionResult(BaseModel):
+    criterion: str
+    met: bool = False
+    why: str = ""
+
+
+class ReviewRound(BaseModel):
+    """One round of the AI checker on a clip's rendered 3D preview."""
+    round: int
+    ok: bool = False
+    results: list[CriterionResult] = Field(default_factory=list)
+    feedback: list[str] = Field(default_factory=list)   # what the builder must change, in plain sentences
+    checked_by: str = ""                # claude_code | codex
+    fixed_by: str = ""                  # who acted on the feedback ("" = no fix was made after this round)
+    fix_summary: str = ""
+    at: str = Field(default_factory=now_iso)
+
+
+class Scene3DReview(BaseModel):
+    """The AI checker's work on one clip: its success criteria and every round of checking."""
+    criteria: list[str] = Field(default_factory=list)
+    rounds: list[ReviewRound] = Field(default_factory=list)
+    passed: bool = False
+    note: str = ""                      # why it stopped (passed, out of rounds, money cap, no agent …)
+    plan_hash: str = ""                 # the rendered plan the last round looked at
+
+
+class AskEntry(BaseModel):
+    """One request you made in "Ask AI to change this…", and what came of it (the session history the agents read)."""
+    at: str = Field(default_factory=now_iso)
+    where: str = ""                     # "the whole video", "part 1", "clip 1.2"
+    request: str = ""
+    result: str = ""
+
+
 class Scene3DClip(BaseModel):
     """One clip's rough 3D scene (the "3D camera reference" add-on): the plan, what was rendered, and its checks."""
     plan: Optional[ScenePlan] = None
@@ -338,6 +373,7 @@ class Scene3DClip(BaseModel):
     agent_log: list[str] = Field(default_factory=list)       # what happened in each round, in plain words
     wishes: str = ""                    # what you asked for when the scene was first planned ("" = made from the script only)
     changes: list[str] = Field(default_factory=list)         # the changes you asked for since, in order
+    review: Optional[Scene3DReview] = None                    # the AI checker's criteria and rounds
     updated_at: str = Field(default_factory=now_iso)
 
 
@@ -457,6 +493,10 @@ class Scene3DSettings(BaseModel):
     max_fix_rounds: int = 3             # automatic check-and-fix rounds before the preview is shown to you
     models: bool = True                 # build a low-poly 3D model of each character and object (needs Blender and an agent)
     agent_max_usd: float = 2.0          # the most the agent may spend on one clip (all rounds together)
+    # the AI checker: after each render, Claude Code / Codex writes success criteria for the clip, looks at the RENDERED
+    # pictures, and sends its feedback to the builder, who fixes the scene; then it is rendered and checked again
+    ai_check: bool = False
+    check_rounds: int = 3               # how many check-and-fix rounds the AI checker may run on one clip
     renderer: Literal["auto", "blender", "sketch"] = "auto"   # auto = Blender when installed, else the free sketch
 
 
@@ -493,6 +533,7 @@ class Project(BaseModel):
     music_advice: str = ""        # the planner's suggestion: none | subtle | full, mood, genre
     final_output: Optional[str] = None
     scene3d_film: Optional["Scene3DFilm"] = None   # the whole 3D film: every clip's 3D preview joined in story order
+    ask_history: list[AskEntry] = Field(default_factory=list)   # every "Ask AI" request this session, sent to the agents
     final_hash: str = ""
     final_notes: list[str] = Field(default_factory=list)   # what could not be added to the final video, and why (shown to the user)
     final_review_id: Optional[str] = None

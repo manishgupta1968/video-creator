@@ -29,8 +29,12 @@ export interface Scene3DClip {
   video: string | null; first: string | null; last: string | null; checks: Record<string, string>; blend: string | null;
   issues: string[]; notes: string[]; approved_by: "" | "you" | "auto"; plan_hash: string;
   agent_rounds: number; agent_cost_usd: number; agent_log: string[]; updated_at: string; wishes?: string; changes?: string[];
+  review?: Scene3DReview | null;
 }
-export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; enabled: boolean; agent: "brain" | "claude_code" | "codex" | "pair"; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
+export interface ReviewRound { round: number; ok: boolean; results: { criterion: string; met: boolean; why: string }[]; feedback: string[]; checked_by: string; fixed_by: string; fix_summary: string; at: string }
+export interface Scene3DReview { criteria: string[]; rounds: ReviewRound[]; passed: boolean; note: string; plan_hash: string }
+export interface AskEntry { at: string; where: string; request: string; result: string }
+export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; enabled: boolean; agent: "brain" | "claude_code" | "codex" | "pair"; ai_check: boolean; check_rounds: number; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
 export interface FilmPart { nid: string; number: string; title: string; seconds: number; source: "3d" | "footage" | "card"; why: string }
 export interface Scene3DFilm { video: string | null; blend: string | null; parts: FilmPart[]; seconds: number; signature: string; notes: string[]; updated_at: string }
 export interface Scene3DInfo {
@@ -76,6 +80,7 @@ export interface Project {
   root: Node; context: Ctx[]; dependencies: Dep[]; reviews: Review[];
   run: { mode: string; status: string; targets: string[]; message: string; started_at: string; spent_usd: number };
   music_advice: string; final_output: string | null; final_review_id: string | null; updated_at: string;
+  ask_history?: AskEntry[];
 }
 export interface GuideAction { kind: string; label: string; id?: string; ids?: string[]; node?: string; mode?: string; title?: string; targets?: string[]; help?: string }
 export interface GuideStep { id: string; title: string; state: "done" | "current" | "attention" | "todo"; detail: string; action: GuideAction | null; also: { text: string; action: GuideAction }[] }
@@ -199,6 +204,8 @@ export const api = {
   moveNode: (pid: string, nid: string, parent_id: string, index: number) => req<View>("POST", `${P(pid)}/nodes/${nid}/move`, { parent_id, index }),
   decompose: (pid: string, nid: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/decompose`),
   writeScript: (pid: string, nid: string, feedback = "") => req<View>("POST", `${P(pid)}/nodes/${nid}/script`, { feedback }),
+  ask: (pid: string, nid: string, request: string) => req<{ view: View; story: string; scene: string; note: string }>("POST", `${P(pid)}/nodes/${nid}/ask`, { request }),
+  scene3dCheck: (pid: string, nid: string, fresh = false) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/check`, { fresh }),
   revise: (pid: string, nid: string, instruction: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/revise`, { instruction }),
   writeScripts: (pid: string, under?: string, overwrite = false) => req<View>("POST", `${P(pid)}/scripts`, { under, overwrite }),
   nodeContext: (pid: string, nid: string) => req<{ item: Ctx; origin: string; overridden_from: string | null }[]>("GET", `${P(pid)}/nodes/${nid}/context`),
