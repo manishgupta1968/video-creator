@@ -34,7 +34,7 @@ export interface Scene3DClip {
 export interface ReviewRound { round: number; ok: boolean; results: { criterion: string; met: boolean; why: string }[]; feedback: string[]; checked_by: string; fixed_by: string; fix_summary: string; at: string }
 export interface Scene3DReview { criteria: string[]; rounds: ReviewRound[]; passed: boolean; note: string; plan_hash: string }
 export interface AskEntry { at: string; where: string; request: string; result: string }
-export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; enabled: boolean; agent: "brain" | "claude_code" | "codex" | "pair"; ai_check: boolean; check_rounds: number; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
+export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; agent_efforts?: Record<string, string>; enabled: boolean; agent: "brain" | "claude_code" | "codex" | "pair"; ai_check: boolean; check_rounds: number; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
 export interface FilmPart { nid: string; number: string; title: string; seconds: number; source: "3d" | "footage" | "card"; why: string }
 export interface Scene3DFilm { video: string | null; blend: string | null; parts: FilmPart[]; seconds: number; signature: string; notes: string[]; updated_at: string }
 export interface Scene3DInfo {
@@ -292,7 +292,7 @@ export const api = {
   settings: () => req<any>("GET", "/api/settings"),
   patchSettings: (patch: any) => req<any>("PATCH", "/api/settings", patch),
   setKey: (name: string, value: string) => req<any>("POST", "/api/settings/keys", { name, value }),
-  subscriptionModels: () => req<Record<"claude_code" | "codex", { models: { id: string; name: string; note: string }[]; problem: string }>>("GET", "/api/settings/subscription-models"),
+  subscriptionModels: () => req<Record<"claude_code" | "codex", { models: { id: string; name: string; note: string; efforts?: { id: string; note: string }[]; default_effort?: string }[]; problem: string }>>("GET", "/api/settings/subscription-models"),
   brainTest: (kind = "default") => req<{ plugin: string; model: string; ok: boolean; seconds: number; answer: string; error: string }>("POST", "/api/settings/brain-test", { kind }),
   testPlugin: (plugin: string) => req<{ ok: boolean; message: string }>("POST", "/api/settings/test", { plugin }),
   patchCatalog: (id: string, patch: any) => req<any>("PATCH", `/api/catalog/${id}`, patch),

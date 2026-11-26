@@ -17,3 +17,22 @@ export function SubscriptionModelSelect({ which, value, onChange, title }: { whi
     </span>
   );
 }
+
+/** How hard Claude Code or Codex thinks (its reasoning effort). The levels come from the program: Claude Code's help
+ *  (--effort), Codex's model catalogue (each model's own levels and its default). */
+export function EffortSelect({ which, model, value, onChange, usualLabel }: { which: "claude_code" | "codex"; model: string; value: string; onChange: (v: string) => void; usualLabel?: string }) {
+  const q = useQuery({ queryKey: ["subscription-models"], queryFn: () => api.subscriptionModels(), staleTime: 300_000 });
+  const models = q.data?.[which]?.models || [];
+  const chosen = models.find((m) => m.id === model);
+  let levels = chosen?.efforts || [];
+  if (!chosen) {                     // its usual model: every level any of its models offers
+    const seen = new Map<string, string>();
+    models.forEach((m) => (m.efforts || []).forEach((e) => { if (!seen.has(e.id)) seen.set(e.id, e.note); }));
+    levels = [...seen].map(([id, note]) => ({ id, note }));
+  }
+  const usual = usualLabel || (chosen?.default_effort ? `its usual effort (${chosen.default_effort})` : "its usual effort");
+  const options = [{ value: "", label: usual }, ...levels.map((e) => ({ value: e.id, label: e.note ? `${e.id} — ${e.note}` : e.id }))];
+  if (value && !options.some((o) => o.value === value)) options.push({ value, label: `${value} (this model may not offer it)` });
+  if (!levels.length && !value) return null;
+  return <Select value={value || ""} onChange={onChange} options={options} title="How hard it thinks: higher = more careful, slower, and uses more of your plan's limit" />;
+}

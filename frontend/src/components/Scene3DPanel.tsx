@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api, fileUrl, Node } from "../api";
 import { fmtUsd, useP, useToast } from "../lib";
 import { Badge, Button, cn, Select, Switch } from "../ui";
-import { SubscriptionModelSelect } from "./SubscriptionModel";
+import { EffortSelect, SubscriptionModelSelect } from "./SubscriptionModel";
 
 /* The optional "3D camera reference": a rough 3D version of a clip made of plain coloured shapes, whose camera path the
    video model follows. Off unless switched on, so nothing else changes. */
@@ -183,13 +183,17 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
                 <span className="text-muted">$ per clip</span>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-muted">Model for 3D work (“its usual model” = the one chosen in Settings → AI brain):</span>
+                <span className="text-muted">Model and reasoning for 3D work (“its usual” = as chosen in Settings → AI brain):</span>
                 <span>Claude Code</span>
                 <SubscriptionModelSelect which="claude_code" value={st.agent_models?.claude_code || ""} title="The model Claude Code uses to build characters, fix and change 3D scenes"
                   onChange={(v) => saveSettings({ agent_models: { ...(st.agent_models || {}), claude_code: v } })} />
+                <EffortSelect which="claude_code" model={st.agent_models?.claude_code || ""} value={st.agent_efforts?.claude_code || ""} usualLabel="effort as for the AI brain"
+                  onChange={(v) => saveSettings({ agent_efforts: { ...(st.agent_efforts || {}), claude_code: v } })} />
                 <span>Codex</span>
                 <SubscriptionModelSelect which="codex" value={st.agent_models?.codex || ""} title="The model Codex uses to build characters, fix and change 3D scenes"
                   onChange={(v) => saveSettings({ agent_models: { ...(st.agent_models || {}), codex: v } })} />
+                <EffortSelect which="codex" model={st.agent_models?.codex || ""} value={st.agent_efforts?.codex || ""} usualLabel="effort as for the AI brain"
+                  onChange={(v) => saveSettings({ agent_efforts: { ...(st.agent_efforts || {}), codex: v } })} />
               </div>
               <div className="space-y-1 rounded-lg border border-line p-2">
                 <Switch checked={!!st.ai_check} onChange={(ai_check) => saveSettings({ ai_check }, ai_check ? "The AI checker is on" : "The AI checker is off")}

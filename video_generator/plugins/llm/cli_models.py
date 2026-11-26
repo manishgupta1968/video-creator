@@ -3,7 +3,9 @@
   Codex        `codex debug models` prints its model catalogue for your sign-in as JSON: each model's code name (slug),
                display name, description and whether it is listed. Only listed models are offered.
   Claude Code  has no list command. Its `--help` names the short model names it accepts (e.g. 'fable', 'opus',
-               'sonnet'); those are offered. Each answer also says which full model answered (`modelUsage`).
+               'sonnet') and the effort levels of --effort; those are offered. Each answer also says which full model
+               answered (`modelUsage`).
+  Codex's catalogue also gives each model's reasoning levels (supported_reasoning_levels) and its default level.
 
 The lists are kept for ten minutes, so the Settings page does not start the programs on every visit.
 """
@@ -47,7 +49,10 @@ def parse_codex(text: str) -> list[dict]:
     for m in sorted((r for r in rows if isinstance(r, dict) and r.get("slug")), key=lambda r: r.get("priority") or 999):
         if m.get("visibility", "list") != "list":
             continue
-        out.append({"id": m["slug"], "name": m.get("display_name") or m["slug"], "note": m.get("description") or ""})
+        efforts = [{"id": str(e.get("effort")), "note": str(e.get("description") or "")}
+                   for e in (m.get("supported_reasoning_levels") or []) if isinstance(e, dict) and e.get("effort")]
+        out.append({"id": m["slug"], "name": m.get("display_name") or m["slug"], "note": m.get("description") or "",
+                    "efforts": efforts, "default_effort": str(m.get("default_reasoning_level") or "")})
     return out
 
 
@@ -55,12 +60,19 @@ def parse_claude_help(text: str) -> list[dict]:
     """The aliases Claude Code's own help names for --model, e.g. (e.g. 'fable', 'opus', or 'sonnet')."""
     block = re.search(r"--model <model>(.*?)(?:\n\s*-{1,2}[a-z])", text, re.S)
     names = re.findall(r"'([a-z][a-z0-9.\-]*)'", block.group(1) if block else "")
+    eff = re.search(r"--effort <level>.*?\(([^)]*)\)", text, re.S)
+    efforts = [{"id": e.strip(), "note": ""} for e in (eff.group(1).split(",") if eff else []) if e.strip()]
     seen, out = set(), []
     for n in names + ["haiku"]:          # haiku is accepted too, though the help names only a few examples
         if n not in seen:
             seen.add(n)
-            out.append({"id": n, "name": n.title(), "note": "the latest model of this name"})
+            out.append({"id": n, "name": n.title(), "note": "the latest model of this name", "efforts": efforts, "default_effort": ""})
     return out
+
+
+def claude_efforts(text: str) -> list[dict]:
+    """The effort levels Claude Code's own help names for --effort (e.g. low, medium, high, xhigh, max)."""
+    return parse_claude_help(text)[0]["efforts"] if parse_claude_help(text) else []
 
 
 async def list_models(which: str, fresh: bool = False) -> tuple[list[dict], str]:
