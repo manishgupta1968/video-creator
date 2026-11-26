@@ -5,7 +5,7 @@ import { api, FoundModel, ModelRow } from "../api";
 import { brainName, fmtUsd, useSettings, useSettingsMutation, useToast } from "../lib";
 import { Badge, Button, Dialog, HelpTip, Input, Select, Switch, TabList, TabPanel, Tabs } from "../ui";
 import { BrainPicker } from "./ModelPicker";
-import { SubscriptionModelSelect } from "./SubscriptionModel";
+import { EffortSelect, SubscriptionModelSelect } from "./SubscriptionModel";
 
 export default function SettingsDialog({ open, onOpenChange, tab: initialTab }: { open: boolean; onOpenChange: (v: boolean) => void; tab?: string }) {
   const [tab, setTab] = useState(initialTab || "keys");
@@ -165,7 +165,11 @@ function BrainTab({ d, patch, goKeys }: { d: any; patch: (p: any) => Promise<voi
           {["claude_code_brain", "codex_brain", "anthropic", "openai", "gemini"].map((k) => (
             <Row key={k} label={`${brainName(k)} model`} hint={k.endsWith("_brain") ? "The list comes from the program on this computer" : "Exact model id from the vendor"}>
               {k.endsWith("_brain")
-                ? <SubscriptionModelSelect which={k === "codex_brain" ? "codex" : "claude_code"} value={models[k] || ""} onChange={(v) => patch({ llm: { models: { ...models, [k]: v } } })} />
+                ? <span className="inline-flex flex-wrap items-center gap-1.5">
+                    <SubscriptionModelSelect which={k === "codex_brain" ? "codex" : "claude_code"} value={models[k] || ""} onChange={(v) => patch({ llm: { models: { ...models, [k]: v } } })} />
+                    <EffortSelect which={k === "codex_brain" ? "codex" : "claude_code"} model={models[k] || ""} value={(llm.efforts || {})[k] || ""}
+                      onChange={(v) => patch({ llm: { efforts: { ...(llm.efforts || {}), [k]: v } } })} />
+                  </span>
                 : <Input defaultValue={models[k]} onBlur={(e) => e.target.value !== models[k] && patch({ llm: { models: { ...models, [k]: e.target.value } } })} className="w-56" />}
             </Row>
           ))}
@@ -201,6 +205,9 @@ function ToolSwitch({ llm, pt, models, patch }: { llm: any; pt: Record<string, s
             <span className="text-muted">model:</span>
             <SubscriptionModelSelect which={current === "codex_brain" ? "codex" : "claude_code"} value={models[current] || ""}
               onChange={(v) => patch({ llm: { models: { ...models, [current]: v } } })} />
+            <span className="text-muted">reasoning:</span>
+            <EffortSelect which={current === "codex_brain" ? "codex" : "claude_code"} model={models[current] || ""} value={(llm.efforts || {})[current] || ""}
+              onChange={(v) => patch({ llm: { efforts: { ...(llm.efforts || {}), [current]: v } } })} />
           </>
         )}
       </div>

@@ -98,6 +98,11 @@ class _CLIBrain(LLM):
             return True, "ok"
         return False, f"install the `{self.program}` command and sign in (or set {self.env_override} to its path)"
 
+    def effort(self) -> str:
+        """How hard to think, as chosen in Settings → AI brain ("" = the program's usual)."""
+        llm = getattr(self.config, "llm", None)
+        return str((getattr(llm, "efforts", None) or {}).get(self.name, "") or "")
+
     def _fail(self, code: int, out: str) -> PluginError:
         low = out.lower()
         if any(h in low for h in SIGN_IN_HINTS):
@@ -153,6 +158,8 @@ class ClaudeCodeBrain(_CLIBrain):
                     "WebSearch", "--no-session-persistence", "--strict-mcp-config"]
         if model:
             cmd += ["--model", model]
+        if self.effort() and not minimal:
+            cmd += ["--effort", self.effort()]
         return cmd
 
     async def ask_once(self, question, system, schema, model, folder, pictures):
@@ -194,6 +201,8 @@ class CodexBrain(_CLIBrain):
             cmd += ["-i", str(p)]
         if model:
             cmd += ["-m", codex_slug(model)]
+        if self.effort():
+            cmd += ["-c", f'model_reasoning_effort="{self.effort()}"']
         return cmd + [question]
 
     async def ask_once(self, question, system, schema, model, folder, pictures):

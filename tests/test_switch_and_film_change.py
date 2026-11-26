@@ -70,7 +70,7 @@ def test_codex_is_given_the_code_name_not_the_display_name(tmp_path, monkeypatch
         asyncio.run(CodexBrain().generate_json(system="s", user="u", schema=Answer, model="gpt-6.2-astra"))
     assert "Codex cannot use this model with your sign-in" in str(err.value) and "grade" not in str(err.value)
     models, why = asyncio.run(cli_models.list_models("codex"))
-    assert why == "" and models[0] == {"id": "gpt-6.2-sol", "name": "GPT-6.2-Sol", "note": "Fast."}
+    assert why == "" and {k: models[0][k] for k in ("id", "name", "note")} == {"id": "gpt-6.2-sol", "name": "GPT-6.2-Sol", "note": "Fast."}
 
 
 def test_the_screen_lists_both_tools_models(tmp_path, monkeypatch, log, svc):
@@ -157,3 +157,58 @@ def test_making_the_film_again_says_what_it_really_did(svc, monkeypatch):
     assert any("Nothing had changed" in n for n in again.notes) and not any(n.startswith("Rendered now") for n in again.notes)
     fresh = asyncio.run(make_film(svc, p.id, prepare=True, replan=True))
     assert any(n.startswith("Planned afresh") for n in fresh.notes) and any(n.startswith("Rendered now") for n in fresh.notes)
+
+
+EFFORT_HELP = HELP.replace("  -n, --name <name>", """  --effort <level>                      Effort level for the current session
+                                        (low, medium, high, xhigh, max)
+  -n, --name <name>""")
+CATALOGUE_LEVELS = {"models": [{"slug": "gpt-6.2-sol", "display_name": "GPT-6.2-Sol", "visibility": "list", "priority": 1,
+                                "default_reasoning_level": "low",
+                                "supported_reasoning_levels": [{"effort": "low", "description": "Fast"}, {"effort": "high", "description": "Deep"}]}]}
+
+
+def test_reasoning_levels_come_from_the_programs():
+    assert [e["id"] for e in parse_claude_help(EFFORT_HELP)[0]["efforts"]] == ["low", "medium", "high", "xhigh", "max"]
+    m = parse_codex(json.dumps(CATALOGUE_LEVELS))[0]
+    assert m["default_effort"] == "low" and [e["id"] for e in m["efforts"]] == ["low", "high"]
+
+
+def test_the_chosen_reasoning_is_given_to_both_programs(svc, tmp_path):
+    from video_generator.plugins.agent.cli_agents import ClaudeCodeAgent, CodexAgent
+    from video_generator.plugins.llm.cli_brain import ClaudeCodeBrain
+    svc.config.llm.efforts = {"claude_code_brain": "high", "codex_brain": "xhigh"}
+    claude, codex = ClaudeCodeBrain(svc.config), CodexBrain(svc.config)
+    cmd = claude.command(Answer, "opus", "s")
+    assert cmd[cmd.index("--effort") + 1] == "high"
+    assert "--effort" not in claude.command(Answer, "opus", "s", minimal=True)   # an older Claude Code: asked plainly
+    cmd = codex.command(tmp_path, "gpt-6.2-sol", [], "q")
+    assert cmd[cmd.index("-c") + 1] == 'model_reasoning_effort="xhigh"'
+    svc.config.llm.efforts = {}
+    assert "--effort" not in ClaudeCodeBrain(svc.config).command(Answer, "", "s")   # "" = its usual effort
+    task = AgentTask(folder=tmp_path, instructions="x", effort="max")
+    assert ClaudeCodeAgent().command(task)[-2:] == ["--effort", "max"]
+    c = CodexAgent().command(task)
+    assert c[c.index("-c") + 1] == 'model_reasoning_effort="max"' and c[-1] == "x"
+
+
+def test_3d_work_thinks_as_hard_as_chosen_else_as_the_ai_brain(svc, monkeypatch, tmp_path):
+    p, _ = project(svc, monkeypatch)
+    seen = []
+
+    class Spy:
+        async def run(self, task):
+            seen.append(task.effort)
+            from video_generator.plugins.base import AgentResult
+            return AgentResult(ok=True)
+    real = svc.reg.plugin
+    svc.config.llm.efforts = {"codex_brain": "medium"}
+    svc.reg.plugin = lambda name: Spy()
+    asyncio.run(ag._call(svc, p.id, "codex", AgentTask(folder=tmp_path, instructions="x"), "t"))
+    svc.reg.plugin = real
+    q = svc.load(p.id)
+    q.settings.scene3d.agent_efforts = {"codex": "high"}          # chosen for 3D work: wins over the brain's
+    svc.save(q)
+    svc.reg.plugin = lambda name: Spy()
+    asyncio.run(ag._call(svc, p.id, "codex", AgentTask(folder=tmp_path, instructions="x"), "t"))
+    svc.reg.plugin = real
+    assert seen == ["medium", "high"]

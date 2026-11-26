@@ -67,7 +67,7 @@ class ClaudeCodeAgent(_CLIAgent):
         return [self.exe() or self.program, "-p", "--output-format", "json", "--permission-mode", "acceptEdits",
                 "--allowedTools", *tools, "--disallowedTools", "WebFetch", "WebSearch",
                 "--max-budget-usd", f"{max(task.max_usd, 0.01):.2f}", "--no-session-persistence", "--strict-mcp-config"] + \
-            (["--model", task.model] if task.model else [])
+            (["--model", task.model] if task.model else []) + (["--effort", task.effort] if task.effort else [])
 
     async def run(self, task: AgentTask) -> AgentResult:
         code, out = await _run(self.command(task), task.folder, task.instructions, task.timeout_s)
@@ -95,7 +95,8 @@ class CodexAgent(_CLIAgent):
 
     def command(self, task: AgentTask) -> list[str]:
         return [self.exe() or self.program, "exec", "--skip-git-repo-check", "--sandbox", "workspace-write",
-                "--cd", str(task.folder), "--json"] + (["-m", codex_slug(task.model)] if task.model else []) + [task.instructions]
+                "--cd", str(task.folder), "--json"] + (["-m", codex_slug(task.model)] if task.model else []) + \
+            (["-c", f'model_reasoning_effort="{task.effort}"'] if task.effort else []) + [task.instructions]
 
     async def run(self, task: AgentTask) -> AgentResult:
         code, out = await _run(self.command(task), task.folder, None, task.timeout_s)

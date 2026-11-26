@@ -348,6 +348,9 @@ async def _call(svc, pid: str, name: str, task: AgentTask, what: str) -> AgentRe
     if not task.model:                  # the model you chose for this agent's 3D work ("" = its usual model)
         task.model = svc.load(pid).settings.scene3d.agent_models.get(name, "") or \
             svc.config.llm.models.get(f"{name}_brain", "")      # else the model chosen for this tool as the AI brain
+    if not task.effort:                 # how hard it thinks: chosen for 3D work, else as for the AI brain
+        task.effort = svc.load(pid).settings.scene3d.agent_efforts.get(name, "") or \
+            (svc.config.llm.efforts or {}).get(f"{name}_brain", "")
     plugin = svc.reg.plugin(name)
     result = await plugin.run(task)
     if result.cost_usd:

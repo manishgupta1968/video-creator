@@ -489,6 +489,7 @@ class Scene3DSettings(BaseModel):
     # who builds and fixes scenes: "brain" = the same tool as the AI brain (Claude Code, or Codex when the brain is Codex)
     agent: Literal["brain", "claude_code", "codex", "pair"] = "brain"
     agent_models: dict[str, str] = Field(default_factory=dict)       # the model each agent uses for 3D work: {"claude_code": "opus", "codex": "…"}; "" = its usual
+    agent_efforts: dict[str, str] = Field(default_factory=dict)      # how hard each agent thinks for 3D work: {"claude_code": "high"}; "" = as for the AI brain
     auto_approve: bool = False          # True = a rendered 3D preview whose checks pass is approved by itself
     max_fix_rounds: int = 3             # automatic check-and-fix rounds before the preview is shown to you
     models: bool = True                 # build a low-poly 3D model of each character and object (needs Blender and an agent)

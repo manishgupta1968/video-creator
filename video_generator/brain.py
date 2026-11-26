@@ -409,7 +409,9 @@ class Brain:
                                                   model=model, meta={"task": "brain_test"})
             ok = (r.answer or "").strip().lower().startswith("ready") or name == "fake_llm"
             used = (usage.raw or {}).get("model_used") or ""
-            return {"plugin": name, "model": (model or "(its usual model)") + (f" → answered by {used}" if used else ""), "ok": ok, "seconds": round(time.monotonic() - t0, 1),
+            eff = plugin.effort() if hasattr(plugin, "effort") else ""
+            return {"plugin": name, "model": (model or "(its usual model)") + (f" · effort {eff}" if eff else "")
+                    + (f" → answered by {used}" if used else ""), "ok": ok, "seconds": round(time.monotonic() - t0, 1),
                     "answer": r.answer, "error": "" if ok else f"it answered {r.answer!r} instead of 'ready'"}
         except Exception as exc:          # every problem is reported, in its own words
             return {"plugin": name, "model": model or "(its usual model)", "ok": False, "seconds": round(time.monotonic() - t0, 1),

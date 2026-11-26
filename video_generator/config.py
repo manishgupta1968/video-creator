@@ -42,6 +42,8 @@ class LLMConfig(BaseModel):
     per_task_model: dict[str, str] = Field(default_factory=dict)
     reviewer: str = "same"                # same | anthropic | openai | gemini | fake_llm
     anthropic_effort: str = "medium"
+    # how hard Claude Code / Codex think, for each ("" = its usual): {"claude_code_brain": "high", "codex_brain": "medium"}
+    efforts: dict[str, str] = Field(default_factory=dict)
     anthropic_fallbacks: bool = True
 
 
