@@ -92,8 +92,12 @@ def view(pid: str) -> dict:
         p = svc.load(pid)
     except FileNotFoundError:
         raise HTTPException(404, "project not found")
+    before = p.model_dump_json(exclude={"updated_at"})
     summary = svc.summary(p)
-    ProjectStore.save(p, snapshot=False)
+    if p.model_dump_json(exclude={"updated_at"}) != before:
+        # save only when working out the summary really changed something: saving on every read gave the project a new
+        # "last saved" time every few seconds, so every panel tied to that time reloaded (a regular flicker)
+        ProjectStore.save(p, snapshot=False)
     return {"project": p.model_dump(mode="json"), "summary": summary, "engine": engine.status(pid)}
 
 

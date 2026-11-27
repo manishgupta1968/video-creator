@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ArrowRight, History, Link2, Mic, Plus, Search, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, Node } from "../api";
@@ -37,7 +37,7 @@ function ContextTab({ node }: { node: Node }) {
   const P = useP();
   const p = P.view!.project;
   const isRoot = node.id === p.root.id;
-  const eff = useQuery({ queryKey: ["ctx", P.pid, node.id, p.updated_at], queryFn: () => api.nodeContext(P.pid, node.id), enabled: !isRoot });
+  const eff = useQuery({ queryKey: ["ctx", P.pid, node.id, p.updated_at], queryFn: () => api.nodeContext(P.pid, node.id), enabled: !isRoot, placeholderData: keepPreviousData });
   const shared = p.context.filter((c) => c.scope === "project");
   const own = isRoot ? [] : (eff.data || []).filter((e) => e.origin === "this");
   const inherited = isRoot ? [] : (eff.data || []).filter((e) => e.origin !== "this");
@@ -117,7 +117,7 @@ function CostTab({ node }: { node: Node }) {
   const isClip = node.kind === "clip";
   const language = p.settings.language;
   const also = p.settings.also_languages || [];
-  const ledger = useQuery({ queryKey: ["ledger", P.pid, p.updated_at], queryFn: () => api.ledger(P.pid) });
+  const ledger = useQuery({ queryKey: ["ledger", P.pid, p.updated_at], queryFn: () => api.ledger(P.pid), placeholderData: keepPreviousData });
   const rows = (ledger.data || []).filter((r) => node.id === p.root.id || (r.what || "").includes(node.id) || r.node === node.id);
   return (
     <div className="space-y-4 text-xs">
