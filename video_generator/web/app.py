@@ -315,7 +315,7 @@ async def scene3d_check(pid: str, nid: str, body: dict = Body(default={})):
     """Run the AI checker on the clip's rendered preview now (success criteria, feedback, fix, render), in the background."""
     from ..scene3d import agent as ag
     rounds = body.get("rounds")
-    bg(_scene3d_call(ag.review_clip, svc, pid, nid, int(rounds) if rounds else None, None, bool(body.get("fresh")))(), pid,
+    bg(_scene3d_call(ag.check_and_fix, svc, pid, nid, int(rounds) if rounds else None, None)(), pid,
        f"3D check {numbering(svc.load(pid)).get(nid, '')}")
     return {"ok": True}
 
@@ -775,8 +775,8 @@ async def scene3d_build(pid: str, nid: str, body: dict = Body(default={})):
 @app.post("/api/projects/{pid}/nodes/{nid}/scene3d/fix")
 async def scene3d_fix(pid: str, nid: str, body: dict = Body(default={})):
     from ..scene3d import agent as ag
-    bg(_scene3d_call(ag.fix_clip, svc, pid, nid, body.get("rounds"), body.get("agent") or None)(), pid,
-       f"3D fix {numbering(svc.load(pid)).get(nid, '')}")
+    bg(_scene3d_call(ag.check_and_fix, svc, pid, nid, body.get("rounds"), body.get("agent") or None)(), pid,
+       f"3D check {numbering(svc.load(pid)).get(nid, '')}")
     return {"ok": True}
 
 

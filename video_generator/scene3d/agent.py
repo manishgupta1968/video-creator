@@ -135,6 +135,8 @@ it is still far away."). Then reply with one sentence.
 """
 
 
+CRITERIA_RULES = 2         # raise when the rules for writing criteria change: older criteria are then written again
+
 REVIEW_TASK = """You are the CHECKER of the rough 3D preview of ONE shot of a video, rendered in Blender. Another agent (the
 builder) changes the plan; you only judge it. Do not change any file except criteria.json and verdict.json.
 
@@ -145,15 +147,21 @@ Files:
 - plan.json: the plan it was rendered from (metres and seconds, Z up).
 - criteria.json: the success criteria, if they were written before.
 
-Step 1. If criteria.json does not exist, write it as {{"criteria": ["...", "..."]}}: 3 to 6 short criteria that can be
-seen in the frames: where the camera is and how it moves, the framing at the start, middle and end, where each character
-is and what it does (its pose), and everything the user asked for in history.md. The figures are low-poly stand-ins:
-never judge looks, colours, textures or light.
+Step 1. If criteria.json does not exist, write it as {{"criteria": ["...", "..."]}}: 3 to 6 short criteria, each one
+something you can SEE in these three still frames: where the camera is and how close, the framing at the start, middle
+and end, where each character is and its pose in each frame, whether a body passes through another body or object,
+and everything the user asked for in history.md. Fair criteria only:
+- Never about what happens BETWEEN the frames (how many steps, smoothness, weight transfer, heel strike, timing to the
+  tenth of a second): three stills cannot show it.
+- Never about looks, colours, textures or light: the figures are low-poly stand-ins.
+- A part of a body hidden behind another body part, or behind a person, is normal for the camera angle: not a fault.
+- Write each criterion so a clear picture can meet it; avoid "exactly", "every" and "throughout" unless the user asked.
 Step 2. Look at the three frames and judge every criterion. Write verdict.json as
 {{"ok": true or false, "results": [{{"criterion": "...", "met": true or false, "why": "one plain sentence"}}],
  "feedback": ["one instruction per problem for the builder"]}}
-Each feedback line says what to change and by how much, for example "At the end the camera must be at the guru's eye
-level, about 1.2 m high; it is at 3 m." ok is true only when every criterion is met. At most 5 feedback lines.
+Each feedback line says what to change in the plan and by how much, for example "At the end the camera must be at the
+guru's eye level, about 1.2 m high; it is at 3 m." A criterion is met when the frames clearly show it, even if small
+details could be better. ok is true only when every criterion is met. At most 5 feedback lines.
 Then reply with one sentence.
 """
 
@@ -215,7 +223,11 @@ async def review_clip(svc, pid: str, nid: str, rounds: Optional[int] = None, age
     builder, checker, notes = pick_agents(svc, agent or st.agent)
     checker = checker or builder                         # one tool: it checks in its own run, then builds in another
     old = n.scene3d.review
-    review = Scene3DReview(criteria=[] if fresh_criteria or not old else list(old.criteria))
+    if old and old.rules < CRITERIA_RULES:
+        fresh_criteria = True                          # written under older, stricter rules: written again, fairly
+    keep = bool(old) and not fresh_criteria
+    review = Scene3DReview(criteria=list(old.criteria) if keep else [], rounds=list(old.rounds) if keep else [],
+                           rules=CRITERIA_RULES)
     log = list(notes)
     if not checker:
         review.note = "No Claude Code or Codex is installed, so the AI checker cannot look at the preview."
@@ -268,14 +280,14 @@ async def review_clip(svc, pid: str, nid: str, rounds: Optional[int] = None, age
                    for x in (verdict.get("results") or []) if isinstance(x, dict)]
         feedback = [str(x) for x in (verdict.get("feedback") or [])][:5]
         ok = bool(verdict.get("ok")) and all(x["met"] for x in results)
-        rnd = ReviewRound(round=r, ok=ok, results=results, feedback=feedback, checked_by=checker)
+        rnd = ReviewRound(round=len(review.rounds) + 1, ok=ok, results=results, feedback=feedback, checked_by=checker)
         review.rounds.append(rnd)
         review.plan_hash = s.plan_hash
         log.append(f"Check round {r} by {checker}: " + ("every success criterion is met." if ok else "; ".join(feedback) or "not passed."))
         _save_review(svc, pid, nid, review, [])
         if ok:
             review.passed = True
-            review.note = f"Passed in round {r}: every success criterion is met."
+            review.note = f"Passed in round {rnd.round}: every success criterion is met."
             break
         if r == limit:
             review.note = f"Not passed after {limit} round(s). Read the feedback, then ask for a change or check again."
@@ -793,3 +805,71 @@ async def apply_scene_change(svc, pid: str, nid: str, request: str, index: int =
     except Exception as exc:
         _result(svc, pid, index, f"3D: failed: {exc}"[:600])
         raise
+
+
+async def check_and_fix(svc, pid: str, nid: str, rounds: Optional[int] = None, agent: Optional[str] = None):
+    """The clip's "Check and fix" button: first the measured problems are fixed (if any), then the AI checker always
+    looks at the RENDERED preview against its success criteria and the builder fixes what fails, round by round.
+    (The old button stopped at once when the measured checks passed, so no AI ran and nothing was said.)"""
+    p = svc.load(pid)
+    n = find(p, nid)
+    if not n.scene3d or not n.scene3d.plan:
+        raise s3.Scene3DError(f"Clip '{n.title}' has no 3D scene yet. Make it first.")
+    rv = n.scene3d.review
+    last = rv.rounds[-1] if rv and rv.rounds else None
+    pending = [] if not last or last.ok or last.fixed_by or rv.plan_hash != n.scene3d.plan_hash else \
+        (last.feedback or [f"Criterion not met: {x.criterion} ({x.why})" for x in last.results if not x.met])
+    if pending:
+        # the checker already said what is wrong with this very preview: fix that first, then render and check again
+        await _fix_from_feedback(svc, pid, nid, pending, agent)
+    elif any(i.severity == "major" for i in check(n.scene3d.plan)):
+        await fix_clip(svc, pid, nid, agent=agent)
+    else:
+        p = svc.load(pid)
+        n = find(p, nid)
+        n.scene3d.agent_log = (n.scene3d.agent_log + [f"{now_iso()[:16]} The measured checks found no problem, so the AI "
+                                                      "checker looks at the rendered preview."])[-40:]
+        svc.save(p, snapshot=False)
+    n = find(svc.load(pid), nid)
+    return await review_clip(svc, pid, nid, rounds=rounds, agent=agent,
+                             fresh_criteria=not (n.scene3d.review and n.scene3d.review.criteria))
+
+
+async def _fix_from_feedback(svc, pid: str, nid: str, feedback: list[str], agent: Optional[str] = None) -> None:
+    """The builder acts on the checker's last feedback (no new check first: it was already made on this preview)."""
+    p = svc.load(pid)
+    n = find(p, nid)
+    builder, _, notes = pick_agents(svc, agent or p.settings.scene3d.agent)
+    if not builder:
+        return
+    plan = normalise(n.scene3d.plan)
+    folder = _review_folder(pid, nid, 0)
+    (folder / "plan.json").write_text(plan.model_dump_json(indent=1))
+    (folder / "clip.json").write_text(json.dumps(_clip_brief(p, n), indent=1))
+    _write_history(folder, p, n)
+    _previews(plan, folder)
+    (folder / "problems.txt").write_text("\n".join(feedback) + "\n")
+    budget = max(p.settings.scene3d.agent_max_usd - (n.scene3d.agent_cost_usd or 0), 0.01)
+    task = AgentTask(folder=folder, instructions=BUILDER_TASK.format(check=check_command(), problems="\n".join(feedback)),
+                     role="builder", allowed_command=check_command(), max_usd=budget)
+    line = ""
+    try:
+        res = await _call(svc, pid, builder, task, f"3D fix {nid} from the checker's feedback")
+        new = ScenePlan.model_validate(json.loads((folder / "plan.json").read_text()))
+        newplan = s3.refresh_models(svc.load(pid), _kept(plan, new))
+        if normalise(newplan).model_dump() != plan.model_dump():
+            s3.set_plan(svc, pid, nid, newplan)
+        line = f"{builder} acted on the checker's feedback: {res.summary or 'no reply'}"
+        cost = res.cost_usd
+    except PluginError as exc:
+        line, cost = f"{builder} could not act on the checker's feedback: {exc}", 0.0
+    except (OSError, ValueError, ValidationError) as exc:
+        line, cost = f"{builder} left plan.json broken ({str(exc)[:120]}); the feedback was not used.", 0.0
+    p = svc.load(pid)
+    n = find(p, nid)
+    if n.scene3d.review and n.scene3d.review.rounds:
+        r = n.scene3d.review.rounds[-1]
+        r.fixed_by, r.fix_summary = builder, line[:400]
+    n.scene3d.agent_cost_usd = round(n.scene3d.agent_cost_usd + cost, 4)
+    n.scene3d.agent_log = (n.scene3d.agent_log + [f"{now_iso()[:16]} {x}" for x in notes + [line]])[-40:]
+    svc.save(p, snapshot=False)

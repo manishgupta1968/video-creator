@@ -231,9 +231,11 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
   );
 }
 
+const name = (tool?: string | null) => (tool === "codex" ? "Codex" : tool === "claude_code" ? "Claude Code" : tool === "fake_agent" ? "the test agent" : "AI");
+
 /** The AI checker on this clip: its success criteria (met or not), each round's feedback to the builder, and why it
  *  stopped. Changes are asked for in the "Ask AI to change this…" box at the top of the clip. */
-function ClipCheck({ node, working }: { node: Node; working: boolean }) {
+function ClipCheck({ node, working, tool, checker, notes }: { node: Node; working: boolean; tool?: string | null; checker?: string | null; notes?: string[] }) {
   const P = useP();
   const s = node.scene3d;
   const st = P.view!.project.settings.scene3d;
@@ -255,13 +257,13 @@ function ClipCheck({ node, working }: { node: Node; working: boolean }) {
           {rv && rv.rounds.length > 0 && <Badge tone={rv.passed ? "ok" : "warn"}>{rv.passed ? `Passed in round ${last!.round}` : `Not passed (${rv.rounds.length} round${rv.rounds.length > 1 ? "s" : ""})`}</Badge>}
           {checking && <Badge tone="info">Checking…</Badge>}
           <div className="flex-1" />
-          <Button size="sm" variant="outline" disabled={working || checking || !s?.plan}
-            title={`Claude Code or Codex writes success criteria, looks at the rendered frames, and the builder fixes what fails — up to ${st.check_rounds} round(s)`}
-            onClick={() => P.act(`3D check ${P.numbers[node.id] || ""}`, () => api.scene3dCheck(P.pid, node.id, !rv?.criteria?.length), "The AI checker is looking at the preview, in the background")}>
-            <CheckCircle2 className="h-3.5 w-3.5" />Check with AI now
+          <Button size="sm" variant="primary" disabled={working || checking || !s?.plan || !tool}
+            title={tool ? `${name(checker || tool)} writes success criteria and looks at the rendered frames; ${name(tool)} fixes what fails; it is rendered and checked again — up to ${st.check_rounds || 3} round(s)` : (notes || []).join(" ")}
+            onClick={() => P.act(`3D check ${P.numbers[node.id] || ""}`, () => api.scene3dFix(P.pid, node.id), `${name(tool)} is checking the rendered preview and fixing what fails, in the background (a few minutes)`)}>
+            <Wand2 className="h-3.5 w-3.5" />Check and fix with {name(tool)}{checker && checker !== tool ? ` + ${name(checker)} checks` : ""}
           </Button>
         </div>
-        {!rv && <p className="mt-1 text-muted">{st.ai_check ? "It runs by itself after each render." : "Switch on the AI checker in the Whole video box to run it after each render, or click “Check with AI now”."}</p>}
+        {!rv && <p className="mt-1 text-muted">{!tool ? "Install Claude Code or Codex to use the AI checker." : st.ai_check ? "It runs by itself after each render, or click the button." : "Click the button, or switch on the AI checker in the Whole video box to run it after each render."}</p>}
         {rv && rv.criteria.length > 0 && (
           <ul className="mt-1 space-y-0.5">
             {rv.criteria.map((c) => {
@@ -336,7 +338,7 @@ export function Scene3DClipPanel({ node }: { node: Node }) {
             <div className="text-[11px]"><span className="font-medium">Used when this clip is made: </span>
               <span className="text-muted">{d.uses.join(" · ")}</span></div>
           )}
-          <ClipCheck node={node} working={working} />
+          <ClipCheck node={node} working={working} tool={d.agents.builder} checker={d.agents.checker} notes={d.agents.notes} />
           {s?.video && !d.stale && (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
               <video key={s.video} src={fileUrl(P.pid, s.video)} controls loop muted className="w-full rounded bg-black sm:col-span-1" />
@@ -356,12 +358,6 @@ export function Scene3DClipPanel({ node }: { node: Node }) {
               <Button size="sm" variant="ghost" disabled={working}
                 onClick={() => P.act(label, () => api.scene3dBuild(P.pid, node.id, { replan: true }), "Planning the 3D scene again in the background")}>
                 Plan again
-              </Button>
-            )}
-            {s?.plan && (
-              <Button size="sm" variant="ghost" disabled={working || !d.agents.builder} title={d.agents.notes.join(" ") || undefined}
-                onClick={() => P.act(`3D fix ${P.numbers[node.id] || ""}`, () => api.scene3dFix(P.pid, node.id), `${d.agents.builder} is fixing the 3D plan`)}>
-                <Wand2 className="h-3.5 w-3.5" />Fix with {d.agents.builder === "codex" ? "Codex" : "Claude Code"}{d.agents.checker ? " + Codex check" : ""}
               </Button>
             )}
             {s?.plan && (
