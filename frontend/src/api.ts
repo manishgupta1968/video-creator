@@ -64,6 +64,7 @@ export interface Model3D {
 }
 export interface Ctx {
   id: string; type: CtxType; title: string; text: string; files: string[]; role: CtxRole; scope: string; actor: Actor | null; model3d?: Model3D | null;
+  picture?: { file: string; by: string; prompt: string; changes: string[]; at: string } | null;
   consent: { confirmed: boolean; statement: string; confirmed_by: string; confirmed_at: string; files: string[] }; analysis: Record<string, any>;
 }
 export interface Dep { id: string; from_id: string; to_id: string; type: string; source: string; note: string; payload: Record<string, any> }
@@ -271,6 +272,8 @@ export const api = {
   scene3dSetPlan: (pid: string, nid: string, plan: ScenePlan) => req<View>("PUT", `${P(pid)}/nodes/${nid}/scene3d/plan`, plan),
   scene3dChange: (pid: string, nid: string, request: string) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/change`, { request }),
   scene3dOpen: (pid: string, nid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/nodes/${nid}/scene3d/open`),
+  pictureMaker: () => req<{ id: string; name: string; subscription: boolean; price: number; why: string }>("GET", "/api/pictures/maker"),
+  makePicture: (pid: string, cid: string, change = "") => req<{ ok: boolean; by: string }>("POST", `${P(pid)}/context/${cid}/picture`, { change }),
   model3dBuild: (pid: string, cid: string, change = "") => req<{ ok: boolean }>("POST", `${P(pid)}/context/${cid}/model3d/build`, { change }),
   model3dBrief: (pid: string, cid: string) => req<View>("POST", `${P(pid)}/context/${cid}/model3d/brief`),
   model3dOpen: (pid: string, cid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/context/${cid}/model3d/open`),

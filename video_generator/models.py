@@ -147,6 +147,16 @@ class Model3D(BaseModel):
     updated_at: str = Field(default_factory=now_iso)
 
 
+class MadePicture(BaseModel):
+    """A picture of a character or object made for you (by Codex with your ChatGPT subscription, or a picture
+    service). For a character it is also its approved look (the reference sheet used in every clip)."""
+    file: str = ""                      # project-relative
+    by: str = ""                        # the catalogue row that made it, e.g. codex_image_subscription
+    prompt: str = ""
+    changes: list[str] = Field(default_factory=list)   # what you asked to change, in order
+    at: str = Field(default_factory=now_iso)
+
+
 class ContextItem(BaseModel):
     id: str = Field(default_factory=lambda: new_id("ctx_"))
     type: ContextType = ContextType.text
@@ -157,6 +167,7 @@ class ContextItem(BaseModel):
     scope: str = "project"                            # project | node:<id> | clip:<id>
     actor: Optional[ActorDetails] = None
     model3d: Optional[Model3D] = None   # its 3D model for the 3D camera reference (characters and objects)
+    picture: Optional[MadePicture] = None   # a picture made for this character or object ("Make a picture")
     consent: Consent = Field(default_factory=Consent)
     analysis: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=now_iso)

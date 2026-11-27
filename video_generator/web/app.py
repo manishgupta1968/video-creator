@@ -857,6 +857,28 @@ async def scene3d_open_film(pid: str):
     return await guard(_scene3d_call(viewer.open_film, svc, pid))()
 
 
+@app.get("/api/pictures/maker")
+async def picture_maker_info():
+    """Who makes pictures now: Codex (your ChatGPT subscription) when installed, else the picture service you connected."""
+    from .. import pictures
+    return pictures.maker_info(svc)
+
+
+@app.post("/api/projects/{pid}/context/{cid}/picture")
+async def make_picture(pid: str, cid: str, body: dict = Body(default={})):
+    """Make (or, with `change`, change) the picture of a character or object, in the background."""
+    from .. import pictures
+    p = svc.load(pid)
+    item = next((c for c in p.context if c.id == cid), None)
+    if item is None:
+        raise HTTPException(404, "not found")
+    e, why = pictures.picture_maker(svc)
+    if e is None:
+        raise HTTPException(400, why)
+    bg(pictures.make_item_picture(svc, pid, cid, str(body.get("change") or "")), pid, f"Picture {item.title}")
+    return {"ok": True, "by": pictures.maker_name(e)}
+
+
 @app.post("/api/projects/{pid}/context/{cid}/model3d/build")
 async def model3d_build(pid: str, cid: str, body: dict = Body(default={})):
     """Build (or, with `change`, change) one character's or object's 3D model, in the background."""
