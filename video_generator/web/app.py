@@ -857,6 +857,27 @@ async def scene3d_open_film(pid: str):
     return await guard(_scene3d_call(viewer.open_film, svc, pid))()
 
 
+@app.post("/api/projects/{pid}/context/missing")
+async def find_missing(pid: str):
+    """Read every clip and list the characters, places and objects that are needed but not defined yet."""
+    try:
+        r = await svc.brain.find_missing(svc.load(pid))
+    except PluginError as exc:
+        raise HTTPException(400, str(exc))
+    q = svc.load(pid)
+    svc._ledger_llm(q, "find what is missing")
+    svc.save(q, snapshot=False)
+    return r.model_dump()
+
+
+@app.post("/api/projects/{pid}/context/missing/add")
+async def add_missing(pid: str, body: dict = Body(...)):
+    """Add the chosen missing items to the right panel (one clip's item to that clip, others shared)."""
+    from .. import pictures
+    added = pictures.add_missing(svc, pid, list(body.get("items") or []))
+    return {**view(pid), "added": added}
+
+
 @app.get("/api/pictures/maker")
 async def picture_maker_info():
     """Who makes pictures now: Codex (your ChatGPT subscription) when installed, else the picture service you connected."""

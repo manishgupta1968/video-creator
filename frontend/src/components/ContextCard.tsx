@@ -239,7 +239,7 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
             )}
           </div>
         )}
-        {(item.type === "actor" || item.type === "object") && <PictureSection item={item} />}
+        {(item.type === "actor" || item.type === "object" || item.type === "location") && <PictureSection item={item} />}
         {(item.type === "actor" || item.type === "object") && <Model3DSection item={item} />}
       </div>
       <RecordVoiceDialog item={item} open={recording} onOpenChange={setRecording} />

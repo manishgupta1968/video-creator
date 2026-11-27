@@ -1200,7 +1200,9 @@ class Engine:
             for e in eff:
                 c = e.item
                 if c.role == role and c.type != ContextType.actor:
-                    out += [(self.abs(p.id, f), f"{c.title or c.type.value}: {words[role]}") for f in c.files if f.lower().endswith(IMG_EXT)]
+                    what = ("the place where the clip happens (copy its buildings, plants, ground and light)"
+                            if c.type == ContextType.location else words[role])
+                    out += [(self.abs(p.id, f), f"{c.title or c.type.value}: {what}") for f in c.files if f.lower().endswith(IMG_EXT)]
         seen, uniq = set(), []
         for x, label in out:
             if x and x.exists() and str(x) not in seen:

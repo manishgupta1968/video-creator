@@ -16,6 +16,11 @@ SCRIPT OF THIS CLIP:
 CHARACTERS AND THINGS (use these ids in actor_id):
 {{actors}}
 
+THE PLACE AND THE OBJECTS THE USER DEFINED (build the place's big features — trees, huts, walls, a river — as props
+placed around and behind the action, at real size, leaving the action room; put each object that must be seen as a
+prop where the script uses it; their looks come from their pictures later, so plain shapes are enough):
+{{places}}
+
 THE SET THIS CLIP SHARES WITH OTHER CLIPS (reuse its set_id and size when this clip happens in the same place):
 {{shared_set}}
 

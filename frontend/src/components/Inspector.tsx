@@ -1,4 +1,5 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import MissingFinder from "./MissingFinder";
 import { ArrowRight, History, Link2, Mic, Plus, Search, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, Node } from "../api";
@@ -100,6 +101,7 @@ function ContextTab({ node }: { node: Node }) {
           }}><Search className="h-3.5 w-3.5" />Find a photo</Button>
         </div>
       </section>
+      <MissingFinder />
       <RecordVoiceDialog item={p.context.find((c) => c.id === recordFor)} open={!!recordFor} onOpenChange={(o) => !o && setRecordFor(null)} />
       <StockSearch item={p.context.find((c) => c.id === findFor)} open={!!findFor} onOpenChange={(o) => !o && setFindFor(null)} />
     </div>
