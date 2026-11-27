@@ -108,3 +108,63 @@ def test_without_3d_the_ask_box_changes_the_story_as_before(svc, monkeypatch):
         r = client.post(f"/api/projects/{p.id}/nodes/{ids[0]}/ask", json={"request": "bring the camera closer"}).json()
     assert r["story"] == "bring the camera closer" and r["scene"] == ""
     assert svc.load(p.id).ask_history[-1].result == "Story changed."
+
+
+@requires_ffmpeg
+def test_check_and_fix_runs_the_ai_even_when_the_measured_checks_pass(svc, monkeypatch):
+    """The old "Fix with Codex" button stopped at once when the free measured checks found nothing: no AI ran and
+    nothing was said. "Check and fix" always lets the AI checker look at the rendered preview, and the builder act."""
+    from fastapi.testclient import TestClient
+    from video_generator.scene3d.spec import check
+    from video_generator.web import app as appmod
+    monkeypatch.setattr(appmod, "svc", svc)
+    monkeypatch.setattr(appmod.engine, "svc", svc)
+    p, ids = project(svc, monkeypatch)
+    asyncio.run(s3.plan_clip(svc, p.id, ids[0]))
+    asyncio.run(s3.build_clip(svc, p.id, ids[0]))
+    assert not any(i.severity == "major" for i in check(find(svc.load(p.id), ids[0]).scene3d.plan))   # nothing measured
+    fake = svc.reg.plugin("fake_agent")
+    fake.checker_problems = [["The disciple's head goes under the guru's feet; bring the camera closer to see it."], []]
+    with TestClient(appmod.app) as client:
+        assert client.post(f"/api/projects/{p.id}/nodes/{ids[0]}/scene3d/fix", json={}).json() == {"ok": True}
+        for _ in range(300):
+            rv = find(svc.load(p.id), ids[0]).scene3d.review
+            if rv and rv.note:
+                break
+            asyncio.run(asyncio.sleep(0.1))
+    s = find(svc.load(p.id), ids[0]).scene3d
+    assert s.review.passed and len(s.review.rounds) == 2 and s.review.rounds[0].fixed_by == "fake_agent"
+    assert [t.role for t in fake.runs].count("reviewer") == 2
+    assert any("measured checks found no problem, so the AI checker looks" in line for line in s.agent_log)
+
+
+@requires_ffmpeg
+def test_the_button_first_fixes_what_the_checker_already_found(svc, monkeypatch):
+    """The checker failed the preview and wrote feedback; pressing the button must act on THAT feedback straight away
+    (no new check first), then render and check again. Criteria written under the older, stricter rules are written
+    again under the fair ones."""
+    p, ids = project(svc, monkeypatch)
+    asyncio.run(s3.plan_clip(svc, p.id, ids[0]))
+    asyncio.run(s3.build_clip(svc, p.id, ids[0]))
+    fake = svc.reg.plugin("fake_agent")
+    fake.checker_problems = [["Bring the camera closer to Dan; he is too small at the end."]]
+    rv = asyncio.run(ag.review_clip(svc, p.id, ids[0], rounds=1))           # the check you already ran: not passed
+    assert not rv.passed and rv.rounds[-1].feedback and not rv.rounds[-1].fixed_by
+    far = camera_distance(svc, p.id, ids[0])
+    fake.runs.clear()
+    fake.checker_problems = [[]]                                            # after the fix, the next check passes
+    rv = asyncio.run(ag.check_and_fix(svc, p.id, ids[0], rounds=2))
+    roles = [t.role for t in fake.runs]
+    assert roles[0] == "builder" and roles.count("reviewer") == 1           # fixed first, then checked once
+    assert "Bring the camera closer to Dan" in fake.runs[0].instructions
+    assert camera_distance(svc, p.id, ids[0]) < far
+    assert rv.passed and [r.round for r in rv.rounds] == [1, 2]             # the earlier round is kept
+    assert rv.rounds[0].fixed_by == "fake_agent" and "acted on the checker's feedback" in rv.rounds[0].fix_summary
+    # criteria written under older rules are written again
+    q = svc.load(p.id)
+    find(q, ids[0]).scene3d.review.rules = 1
+    svc.save(q)
+    fake.checker_problems = [[]]
+    rv = asyncio.run(ag.review_clip(svc, p.id, ids[0], rounds=1))
+    assert rv.rules == ag.CRITERIA_RULES and [r.round for r in rv.rounds] == [1]
+    assert "Never about what happens BETWEEN the frames" in ag.REVIEW_TASK

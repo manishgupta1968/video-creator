@@ -343,6 +343,7 @@ class Scene3DReview(BaseModel):
     passed: bool = False
     note: str = ""                      # why it stopped (passed, out of rounds, money cap, no agent …)
     plan_hash: str = ""                 # the rendered plan the last round looked at
+    rules: int = 1                      # the version of the checker's rules its criteria were written under
 
 
 class AskEntry(BaseModel):

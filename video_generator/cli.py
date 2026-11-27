@@ -992,7 +992,8 @@ def scene3d_build(clip: str, project: Optional[str] = typer.Option(None, "-p"),
 def scene3d_fix(clip: str, project: Optional[str] = typer.Option(None, "-p"),
                 agent: str = typer.Option("", help="claude_code | codex | pair (default: the project's setting)"),
                 rounds: Optional[int] = typer.Option(None, help="the most check-and-fix rounds (default: the project's setting)")):
-    """Let Claude Code / Codex fix a clip's 3D plan until the checks pass. Build it again afterwards."""
+    """Check and fix: Claude Code / Codex fixes measured problems, then the AI checker judges the rendered preview against
+    its success criteria and the agent fixes what fails, round by round (rendered again each time)."""
     from .scene3d import agent as ag
     from .scene3d import service as s3
     if agent and agent not in ("claude_code", "codex", "pair"):
@@ -1000,13 +1001,19 @@ def scene3d_fix(clip: str, project: Optional[str] = typer.Option(None, "-p"),
     svc = _svc()
     pid = _pid(project)
     nid = _node(svc, pid, clip)
-    with con.status("The agent is fixing the 3D plan…"):
+    with con.status("The AI checker looks at the rendered preview, and the agent fixes what fails…"):
         try:
-            rep = asyncio.run(ag.fix_clip(svc, pid, nid, rounds=rounds, agent=agent or None))
+            rv = asyncio.run(ag.check_and_fix(svc, pid, nid, rounds=rounds, agent=agent or None))
         except s3.Scene3DError as exc:
             con.print(f"[red]{exc}[/]")
             raise typer.Exit(1)
-    _fix_lines(rep)
+    for c in rv.criteria:
+        res = next((x for x in (rv.rounds[-1].results if rv.rounds else []) if x.criterion == c), None)
+        con.print(("[green]✓[/] " if res and res.met else "[red]✗[/] " if res else "• ") + c)
+    for r in rv.rounds:
+        con.print(f"Round {r.round} ({r.checked_by}): " + ("passed" if r.ok else "; ".join(r.feedback) or "not passed")
+                  + (f" — fixed by {r.fixed_by}: {r.fix_summary}" if r.fixed_by else ""))
+    con.print(rv.note)
     _scene3d_show(svc, pid, nid)
 
 
