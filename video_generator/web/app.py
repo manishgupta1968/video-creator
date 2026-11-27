@@ -92,8 +92,12 @@ def view(pid: str) -> dict:
         p = svc.load(pid)
     except FileNotFoundError:
         raise HTTPException(404, "project not found")
+    before = p.model_dump_json(exclude={"updated_at"})
     summary = svc.summary(p)
-    ProjectStore.save(p, snapshot=False)
+    if p.model_dump_json(exclude={"updated_at"}) != before:
+        # save only when working out the summary really changed something: saving on every read gave the project a new
+        # "last saved" time every few seconds, so every panel tied to that time reloaded (a regular flicker)
+        ProjectStore.save(p, snapshot=False)
     return {"project": p.model_dump(mode="json"), "summary": summary, "engine": engine.status(pid)}
 
 
@@ -851,6 +855,28 @@ async def scene3d_change_film(pid: str, body: dict = Body(...)):
 async def scene3d_open_film(pid: str):
     from ..scene3d import viewer
     return await guard(_scene3d_call(viewer.open_film, svc, pid))()
+
+
+@app.get("/api/pictures/maker")
+async def picture_maker_info():
+    """Who makes pictures now: Codex (your ChatGPT subscription) when installed, else the picture service you connected."""
+    from .. import pictures
+    return pictures.maker_info(svc)
+
+
+@app.post("/api/projects/{pid}/context/{cid}/picture")
+async def make_picture(pid: str, cid: str, body: dict = Body(default={})):
+    """Make (or, with `change`, change) the picture of a character or object, in the background."""
+    from .. import pictures
+    p = svc.load(pid)
+    item = next((c for c in p.context if c.id == cid), None)
+    if item is None:
+        raise HTTPException(404, "not found")
+    e, why = pictures.picture_maker(svc)
+    if e is None:
+        raise HTTPException(400, why)
+    bg(pictures.make_item_picture(svc, pid, cid, str(body.get("change") or "")), pid, f"Picture {item.title}")
+    return {"ok": True, "by": pictures.maker_name(e)}
 
 
 @app.post("/api/projects/{pid}/context/{cid}/model3d/build")

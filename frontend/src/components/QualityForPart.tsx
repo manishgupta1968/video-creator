@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Gauge } from "lucide-react";
 import { api, Node } from "../api";
 import { fmtTime, fmtUsd, useP } from "../lib";
@@ -16,7 +16,7 @@ const WHY: Record<string, string> = {
  *  The prices are worked out on a copy, so nothing is saved or spent until you choose. Voices, the narrator and the music stay the same for the whole video. */
 export default function QualityForPart({ node, isRoot }: { node: Node; isRoot: boolean }) {
   const P = useP();
-  const q = useQuery({ queryKey: ["mode-costs", P.pid, node.id, P.view?.project.updated_at], queryFn: () => api.modeCosts(P.pid, node.id), staleTime: 0 });
+  const q = useQuery({ queryKey: ["mode-costs", P.pid, node.id, P.view?.project.updated_at], queryFn: () => api.modeCosts(P.pid, node.id), staleTime: 0, placeholderData: keepPreviousData });
   const d = q.data;
   const own = isRoot ? P.view!.project.settings.quality_mode : (node.quality_mode || "");
   const choose = (v: string) => (isRoot

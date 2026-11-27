@@ -168,3 +168,18 @@ def test_the_button_first_fixes_what_the_checker_already_found(svc, monkeypatch)
     rv = asyncio.run(ag.review_clip(svc, p.id, ids[0], rounds=1))
     assert rv.rules == ag.CRITERIA_RULES and [r.round for r in rv.rounds] == [1]
     assert "Never about what happens BETWEEN the frames" in ag.REVIEW_TASK
+
+
+def test_reading_a_project_does_not_change_it(svc, monkeypatch):
+    """The screen reads the project every few seconds. Reading used to save it with a new 'last saved' time, so every
+    panel tied to that time reloaded: the right panel flickered and open cards closed by themselves."""
+    import time
+    from fastapi.testclient import TestClient
+    from video_generator.web import app as appmod
+    monkeypatch.setattr(appmod, "svc", svc)
+    p, _ = project(svc, monkeypatch)
+    with TestClient(appmod.app) as client:
+        first = client.get(f"/api/projects/{p.id}").json()["project"]["updated_at"]
+        time.sleep(1.1)
+        second = client.get(f"/api/projects/{p.id}").json()["project"]["updated_at"]
+    assert first == second

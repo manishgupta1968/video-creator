@@ -211,10 +211,33 @@ function ToolSwitch({ llm, pt, models, patch }: { llm: any; pt: Record<string, s
           </>
         )}
       </div>
+      <CodexPictures />
       <p className="mt-1 text-[11px] text-muted">
         {current ? `${brainName(current)} plans, writes the scripts, makes the changes you ask for and does the 3D work. Switch at any time.`
           : "Not in use now (an API key or the automatic choice is in use). Click one to use your Claude or ChatGPT subscription."}
       </p>
+    </div>
+  );
+}
+
+/** Pictures through Codex (your ChatGPT subscription): the characters' and objects' pictures and each clip's first
+ *  picture from the 3D layout. Claude Code cannot make pictures, so this is Codex whichever tool is the AI brain. */
+function CodexPictures() {
+  const { data: d } = useSettings();
+  const save = useSettingsMutation();
+  const toast = useToast();
+  if (!d) return null;
+  const row = (d.catalog || []).find((e: any) => e.id === "codex_image_subscription");
+  const off: string[] = d.config.disabled_models || [];
+  const on = !off.includes("codex_image_subscription");
+  const ready = !!row && !String(row.why_not || "").includes("install");
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+      <Switch checked={on} onChange={async (v) => {
+        await save.mutateAsync({ disabled_models: v ? off.filter((x) => x !== "codex_image_subscription") : [...off, "codex_image_subscription"] });
+        toast({ text: v ? "Pictures are made by Codex when it is installed" : "Pictures are made by your picture service", tone: "ok" });
+      }} label="Make pictures with Codex (characters, objects, and each clip's first picture from the 3D layout)" />
+      <span className="text-[11px] text-muted">{ready ? "no per-picture cost" : "needs Codex installed and signed in"} · Claude Code cannot make pictures</span>
     </div>
   );
 }

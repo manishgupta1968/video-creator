@@ -42,6 +42,7 @@ BUILTINS = {
     "luma": "video_generator.plugins.video.luma:LumaVideo",
     "kling": "video_generator.plugins.video.kling:KlingVideo",
     "gpt_image": "video_generator.plugins.image.openai_image:OpenAIImage",
+    "codex_image": "video_generator.plugins.image.codex_image:CodexImage",
     "nano_banana": "video_generator.plugins.image.gemini_image:GeminiImage",
     "heygen": "video_generator.plugins.avatar.heygen:HeyGenAvatar",
     "elevenlabs": "video_generator.plugins.voice.elevenlabs:ElevenLabsVoice",

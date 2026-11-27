@@ -183,6 +183,20 @@ video:
     last_checked: "2026-11-04"
 
 image:
+  # Codex's built-in image generation tool, through your ChatGPT subscription (no per-picture cost; it counts against
+  # your plan's limits). Chosen first when Codex is installed; switch it off in Settings → AI brain.
+  - id: codex_image_subscription
+    plugin: codex_image
+    model: builtin-image-generation
+    vendor: codex
+    note: Codex on this computer makes the picture with your ChatGPT subscription. No per-picture cost.
+    capabilities: {reference_images: 6}
+    quality: 5
+    price: {unit: subscription, usd: 0}
+    time: {queue_s: 15, per_output_s: 60}
+    licence: your ChatGPT plan's terms
+    pricing_url: https://openai.com/chatgpt/pricing
+    last_checked: "2026-11-27"
   - id: nano_banana_pro
     plugin: nano_banana
     model: gemini-3-pro-image-preview

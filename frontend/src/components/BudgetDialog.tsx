@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Coins, Wallet } from "lucide-react";
 import { api, BudgetGroup } from "../api";
 import { fmtSec, fmtTime, fmtUsd, useP } from "../lib";
@@ -10,7 +10,7 @@ const money = (v: number) => (v === 0 ? "$0.00" : v < 0.01 ? `$${v.toFixed(4)}` 
 export default function BudgetDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const P = useP();
   const p = P.view?.project;
-  const q = useQuery({ queryKey: ["budget", P.pid, p?.updated_at, p?.run.spent_usd], queryFn: () => api.budget(P.pid), enabled: open });
+  const q = useQuery({ queryKey: ["budget", P.pid, p?.updated_at, p?.run.spent_usd], queryFn: () => api.budget(P.pid), enabled: open, placeholderData: keepPreviousData });
   const r = q.data;
   const used = r ? r.spent + r.remaining_estimate : 0;
   return (
