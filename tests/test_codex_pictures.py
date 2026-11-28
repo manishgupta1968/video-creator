@@ -192,18 +192,19 @@ def test_find_what_is_missing_and_add_the_ticked_ones(svc, monkeypatch):
     with TestClient(appmod.app) as client:
         r = client.post(f"/api/projects/{p.id}/context/missing").json()
         kinds = {(i["type"], i["title"]) for i in r["items"]}
-        assert ("location", "The place") in kinds and ("object", "Prayer mat") in kinds
+        place = next(i["title"] for i in r["items"] if i["type"] == "location")
+        assert ("object", "Prayer mat") in kinds
         mat = next(i for i in r["items"] if i["title"] == "Prayer mat")
         assert mat["clips"] == ["1.1"]
         v = client.post(f"/api/projects/{p.id}/context/missing/add", json={"items": r["items"]}).json()
-        assert sorted(v["added"]) == ["Prayer mat", "The place"]
+        assert sorted(v["added"]) == sorted(["Prayer mat", place])
         again = client.post(f"/api/projects/{p.id}/context/missing/add", json={"items": r["items"]}).json()
         assert again["added"] == []                                     # already defined: not added twice
     ctx = {c.title: c for c in svc.load(p.id).context}
     assert ctx["Prayer mat"].scope == f"node:{ids[0]}" and ctx["Prayer mat"].role.value == "must_appear"
-    assert ctx["The place"].scope == "project" and ctx["The place"].type == ContextType.location
+    assert ctx[place].scope == "project" and ctx[place].type == ContextType.location
     r2 = asyncio.run(svc.brain.find_missing(svc.load(p.id)))
-    assert all(i.title not in ("Prayer mat", "The place") for i in r2.items)
+    assert all(i.title not in ("Prayer mat", place) for i in r2.items)
 
 
 def test_the_chosen_ai_brain_describes_and_codex_draws(codex, svc, monkeypatch):
@@ -230,3 +231,42 @@ def test_the_chosen_ai_brain_describes_and_codex_draws(codex, svc, monkeypatch):
     monkeypatch.setattr(svc.brain, "picture_brief", fails)
     pic = asyncio.run(pictures.make_item_picture(svc, p.id, next(c for c in p.context if c.title == "Bruiser").id))
     assert pic.described_by == "" and "full-body character reference picture of Bruiser" in json.loads(codex.read_text())["args"][-1]
+
+
+def test_find_missing_reads_the_whole_plan_the_3d_sets_and_the_rendered_pictures(svc, monkeypatch):
+    from video_generator.project import ProjectStore
+    from video_generator.scene3d import service as s3
+    p, ids = two_shot_project(svc)
+    p.settings.scene3d.enabled = True
+    p.settings.scene3d.renderer = "sketch"
+    svc.save(p)
+    asyncio.run(s3.plan_clip(svc, p.id, ids[0]))
+    q = svc.load(p.id)
+    find(q, ids[0]).scene3d.plan.set.name = "village courtyard"
+    svc.save(q)
+    asyncio.run(s3.build_clip(svc, p.id, ids[0], renderer="sketch"))
+    seen = {}
+    real = svc.brain.ask
+
+    async def spy(task, prompt, schema, meta, images=None, video=None):
+        if task == "missing_context":
+            seen.update(prompt=prompt, images=images, meta=meta)
+        return await real(task, prompt, schema, meta, images=images, video=video)
+    monkeypatch.setattr(svc.brain, "ask", spy)
+    r = asyncio.run(svc.brain.find_missing(svc.load(p.id), ProjectStore.path_for(p.id)))
+    assert "its 3D set: village courtyard" in seen["prompt"] and "THE PLAN (the whole video and every part" in seen["prompt"]
+    assert seen["images"] and seen["images"][0].exists() and "its rendered 3D preview is picture 1" in seen["prompt"]
+    assert any(i.type == "location" and i.title == "Village Courtyard" for i in r.items)      # named after the 3D set
+
+
+def test_an_empty_card_counts_as_missing_and_gets_its_description(svc):
+    p, _ = two_shot_project(svc)
+    p.context.append(ContextItem(type=ContextType.location, title="Location", scope="project"))
+    svc.save(p)
+    r = asyncio.run(svc.brain.find_missing(svc.load(p.id)))
+    item = next(i for i in r.items if i.title == "Location")
+    added = pictures.add_missing(svc, p.id, [item.model_dump()])
+    loc = [c for c in svc.load(p.id).context if c.type == ContextType.location]
+    assert added == ["Location"] and len(loc) == 1 and loc[0].text           # filled in, not added twice
+    pictures.add_missing(svc, p.id, [{**item.model_dump(), "description": "something else"}])
+    assert [c for c in svc.load(p.id).context if c.type == ContextType.location][0].text == loc[0].text   # yours is kept

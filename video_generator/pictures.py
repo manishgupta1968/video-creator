@@ -142,14 +142,25 @@ def add_missing(svc, pid: str, items: list[dict]) -> list[str]:
     from .tree import numbering
     p = svc.load(pid)
     ids = {v: k for k, v in numbering(p).items()}
-    have = {(c.type.value, c.title.strip().lower()) for c in p.context}
+    have = {(c.type.value, c.title.strip().lower()): c for c in p.context}
     added = []
     for raw in items:
         t = str(raw.get("type") or "object")
         if t not in ("actor", "object", "location"):
             continue
         title = str(raw.get("title") or "").strip()
-        if not title or (t, title.lower()) in have:
+        if not title:
+            continue
+        old = have.get((t, title.lower()))
+        if old is not None:
+            # already defined: only fill in a description it does not have yet (never overwrite yours)
+            desc = str(raw.get("description") or "").strip()
+            if desc and old.actor is not None and not old.actor.description.strip():
+                old.actor.description = desc
+                added.append(title)
+            elif desc and old.actor is None and not old.text.strip():
+                old.text = desc
+                added.append(title)
             continue
         clips = [ids[c] for c in raw.get("clips") or [] if c in ids]
         data = {"type": t, "title": title, "scope": f"node:{clips[0]}" if len(clips) == 1 else "project",
@@ -160,8 +171,9 @@ def add_missing(svc, pid: str, items: list[dict]) -> list[str]:
             data["actor"] = {"kind": kind, "description": desc}
         else:
             data["text"] = desc
-        p.context.append(ContextItem.model_validate(data))
-        have.add((t, title.lower()))
+        item = ContextItem.model_validate(data)
+        p.context.append(item)
+        have[(t, title.lower())] = item
         added.append(title)
     if added:
         svc.save(p)

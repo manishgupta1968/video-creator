@@ -861,7 +861,7 @@ async def scene3d_open_film(pid: str):
 async def find_missing(pid: str):
     """Read every clip and list the characters, places and objects that are needed but not defined yet."""
     try:
-        r = await svc.brain.find_missing(svc.load(pid))
+        r = await svc.brain.find_missing(svc.load(pid), ProjectStore.path_for(pid))
     except PluginError as exc:
         raise HTTPException(400, str(exc))
     q = svc.load(pid)
