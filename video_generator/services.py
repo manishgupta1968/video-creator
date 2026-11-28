@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1096,6 +1097,47 @@ class Service:
                     item.text = (item.text + "\n" + "\n".join(pg.get_text() for pg in doc)[:8000]).strip()
         except Exception as exc:
             item.analysis["error"] = str(exc)[:300]
+
+    def set_narration_recording(self, pid: str, nid: str, data: bytes, filename: str) -> Project:
+        """Your own recording of a clip's narration, placed exactly as it is (no voice service). The clip's voice is made
+        again with it, and the clip's length follows it."""
+        p = self.load(pid)
+        n = find(p, nid)
+        if n.kind != NodeKind.clip or n.script is None:
+            raise ValueError("A recording can be placed on a clip with a script only.")
+        if not data:
+            raise ValueError("The recording is empty.")
+        d = ProjectStore.path_for(pid) / "clips" / nid
+        d.mkdir(parents=True, exist_ok=True)
+        src = d / ("narration_upload" + (Path(filename).suffix.lower() or ".webm"))
+        src.write_bytes(data)
+        out = d / f"narration_own_{int(time.time())}.wav"
+        try:
+            media.ff("-i", str(src), "-ar", "44100", "-ac", "1", str(out))
+        except media.MediaError as exc:
+            raise ValueError(f"The recording could not be read: {exc}") from exc
+        finally:
+            src.unlink(missing_ok=True)
+        secs = media.probe_duration(out)
+        if secs < 0.3:
+            out.unlink(missing_ok=True)
+            raise ValueError("The recording is too short.")
+        old = n.script.narration_audio
+        n.script.narration_audio = str(out.relative_to(ProjectStore.path_for(pid)))
+        n.script.narration_seconds = round(secs, 2)
+        n.voice_audio, n.voice_seconds = None, None          # the clip's voice is made again with your recording
+        if old and old != n.script.narration_audio:
+            (ProjectStore.path_for(pid) / old).unlink(missing_ok=True)
+        return self.save(p)
+
+    def clear_narration_recording(self, pid: str, nid: str) -> Project:
+        p = self.load(pid)
+        n = find(p, nid)
+        if n.script and n.script.narration_audio:
+            (ProjectStore.path_for(pid) / n.script.narration_audio).unlink(missing_ok=True)
+            n.script.narration_audio, n.script.narration_seconds = "", None
+            n.voice_audio, n.voice_seconds = None, None
+        return self.save(p)
 
     def add_context(self, pid: str, data: dict) -> tuple[Project, ContextItem]:
         p = self.load(pid)

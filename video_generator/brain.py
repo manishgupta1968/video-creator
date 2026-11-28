@@ -702,7 +702,8 @@ class Brain:
                                "description": (a.description if a else item.text) or "", "clothing": a.clothing if a else "",
                                "actions": actions})
 
-    async def picture_brief(self, project: Project, item: ContextItem, draft: str) -> PictureBrief:
+    async def picture_brief(self, project: Project, item: ContextItem, draft: str, facts: str = "",
+                            images: Optional[list[Path]] = None) -> PictureBrief:
         """The AI brain you chose (Claude Code or Codex) writes the picture's description, so it fits the story and the
         other characters, places and objects; the picture maker (Codex's image tool, or a service) then draws it."""
         others = [f"- {c.type.value}: {c.title} — {(c.actor.description if c.actor else c.text) or ''}".rstrip(" —")
@@ -713,15 +714,20 @@ class Brain:
                                             f"kind: {item.actor.kind}") if x)
         prompt = render("picture_brief", goal=project.root.goal or project.name, look=(project.style.look or "photoreal"),
                         kind=item.type.value, title=item.title, details=details or "(only its name)",
-                        others="\n".join(others) or "(none)", draft=draft)
-        return await self.ask("picture_brief", prompt, PictureBrief, {"draft": draft})
+                        others="\n".join(others) or "(none)", draft=draft, facts=facts or "(nothing more is known)",
+                        pictures=(f"{len(images)} picture(s) from the Blender video are attached (its 3D model, or its "
+                                  "rendered 3D set): look at them for shape, proportions, colours and arrangement.") if images else "(none)")
+        return await self.ask("picture_brief", prompt, PictureBrief, {"draft": draft}, images=images or None)
 
-    async def find_missing(self, project: Project) -> MissingItems:
-        """Read every clip (script, actors, 3D scene) and list the characters, places and objects that are needed but
-        not defined in the right panel yet."""
+    async def find_missing(self, project: Project, base: Optional[Path] = None) -> MissingItems:
+        """Read the whole plan — the video's and every part's prompt, each clip's script, its 3D scene (the set's name and
+        the shapes in it) and one rendered picture of each clip's Blender preview — and list the characters, places and
+        objects that are needed but not defined yet (or defined without a description)."""
         from .tree import leaves as _leaves
+        from .scene3d.agent import session_history
         nums = numbering(project)
-        clips = []
+        names = {c.id: c.title for c in project.context}
+        clips, pictures = [], []
         for n in _leaves(project):
             if n.kind != NodeKind.clip:
                 continue
@@ -730,21 +736,46 @@ class Brain:
             if sc and sc.action_beats:
                 line += " | action: " + "; ".join(sc.action_beats)
             if sc and sc.actors_in_shot:
-                names = {c.id: c.title for c in project.context}
                 line += " | actors: " + ", ".join(names.get(a.actor_id, a.actor_id) for a in sc.actors_in_shot)
-            if n.scene3d and n.scene3d.plan:
-                labels = sorted({t.label for t in n.scene3d.plan.things if t.label})
-                if labels:
-                    line += " | in its 3D scene: " + ", ".join(labels)
+            s3 = n.scene3d
+            if s3 and s3.plan:
+                set_name = s3.plan.set.name or s3.plan.set_id
+                if set_name:
+                    line += f" | its 3D set: {set_name}"
+                props = sorted({t.label for t in s3.plan.things if t.label and t.kind == "prop"})
+                figures = sorted({t.label for t in s3.plan.things if t.label and t.kind == "figure"})
+                if figures:
+                    line += " | figures in its 3D scene: " + ", ".join(figures)
+                if props:
+                    line += " | scenery and objects in its 3D scene: " + ", ".join(props)
+                mid = (s3.checks or {}).get("middle") or (s3.checks or {}).get("start")
+                if base is not None and mid and (base / mid).exists() and len(pictures) < 6:
+                    pictures.append(base / mid)
+                    line += f" | its rendered 3D preview is picture {len(pictures)}"
             clips.append(line)
-        have = [f"- {c.type.value}: {c.title}" + (f" — {c.text or (c.actor.description if c.actor else '')}" if (c.text or c.actor) else "")
-                for c in project.context if c.type in (ContextType.actor, ContextType.object, ContextType.location, ContextType.entity)]
-        prompt = render("missing_context", goal=project.root.goal or project.name, clips="\n".join(clips) or "(no clips yet)",
-                        have="\n".join(have) or "(nothing defined yet)")
+        have = []
+        for c in project.context:
+            if c.type not in (ContextType.actor, ContextType.object, ContextType.location, ContextType.entity):
+                continue
+            desc = (c.actor.description if c.actor else c.text) or ""
+            empty = not desc.strip() or desc.strip().lower() == c.title.strip().lower()
+            have.append(f"- {c.type.value}: {c.title}" + (f" — {desc}" if not empty else
+                                                          " — (NO DESCRIPTION YET: return it as missing, with the same title and a full description)"))
+        prompt = render("missing_context", goal=project.root.goal or project.name, outline=outline(project),
+                        clips="\n".join(clips) or "(no clips yet)", have="\n".join(have) or "(nothing defined yet)",
+                        history=session_history(project),
+                        pictures=(f"{len(pictures)} picture(s) are attached: each is the middle of one clip's rendered 3D "
+                                  "preview (plain shapes and low-poly figures; the real looks come later). Look at them: "
+                                  "the place, its big features and the objects in them must all be defined.") if pictures else "(none)")
         return await self.ask("missing_context", prompt, MissingItems,
-                              {"goal": project.root.goal, "have": [{"type": c.type.value, "title": c.title} for c in project.context],
+                              {"goal": project.root.goal,
+                               "have": [{"type": c.type.value, "title": c.title,
+                                         "empty": not ((c.actor.description if c.actor else c.text) or "").strip()} for c in project.context],
+                               "sets": sorted({(n.scene3d.plan.set.name or n.scene3d.plan.set_id) for n in _leaves(project)
+                                               if n.scene3d and n.scene3d.plan and (n.scene3d.plan.set.name or n.scene3d.plan.set_id)}),
                                "props": sorted({(t.label, nums.get(n.id, "")) for n in _leaves(project) if n.scene3d and n.scene3d.plan
-                                                for t in n.scene3d.plan.things if t.kind == "prop" and t.label})})
+                                                for t in n.scene3d.plan.things if t.kind == "prop" and t.label})},
+                              images=pictures or None)
 
     async def ask_route(self, project: Project, node: Node, request: str) -> AskRoute:
         """Split one request from the "Ask AI" box into a change for the story (words) and one for the 3D scenes."""

@@ -276,6 +276,32 @@ voice:
     licence: commercial on paid plans
     pricing_url: https://cartesia.ai/pricing
     last_checked: "2026-11-04"
+  # Google and OpenAI voices follow an instruction: the accent, age, pitch, pace and mood are asked for with every line
+  # (prices are estimates per 1,000 characters, about a minute of speech).
+  - id: gemini_tts
+    plugin: gemini_tts
+    model: gemini-2.5-flash-preview-tts
+    vendor: google
+    note: Google Gemini voice; the accent is asked for in words (for example "Indian English"). Speaks Hindi and many languages.
+    capabilities: {clone: false, accent_instruction: true}
+    quality: 4
+    price: {unit: 1k_chars, usd: 0.02}
+    time: {queue_s: 0, per_output_s: 0.4}
+    licence: commercial (Google terms)
+    pricing_url: https://ai.google.dev/gemini-api/docs/pricing
+    last_checked: "2026-11-28"
+  - id: openai_tts
+    plugin: openai_tts
+    model: gpt-4o-mini-tts
+    vendor: openai
+    note: OpenAI voice; the accent and manner are asked for in words.
+    capabilities: {clone: false, accent_instruction: true}
+    quality: 4
+    price: {unit: 1k_chars, usd: 0.015}
+    time: {queue_s: 0, per_output_s: 0.3}
+    licence: commercial (OpenAI terms)
+    pricing_url: https://openai.com/api/pricing
+    last_checked: "2026-11-28"
   - id: kokoro
     plugin: kokoro
     model: kokoro-82m

@@ -12,7 +12,7 @@ export interface ActorInShot { actor_id: string; clothing: string; behaviour: st
 export interface Line { speaker: string; text: string; emotion: string; fixed?: boolean; language?: string; translation?: string }
 export interface Script {
   shot_type: string; visual: string; action_beats: string[]; camera: string; actors_in_shot: ActorInShot[];
-  dialogue: Line[]; narration: string; narration_fixed?: boolean; narration_language?: string; narration_translation?: string; on_camera_speech: boolean; sound_notes: string; start_state: string; end_state: string; negative: string; target_seconds: number | null;
+  dialogue: Line[]; narration: string; narration_fixed?: boolean; narration_language?: string; narration_translation?: string; narration_by?: string; narration_audio?: string; narration_seconds?: number | null; on_camera_speech: boolean; sound_notes: string; start_state: string; end_state: string; negative: string; target_seconds: number | null;
 }
 export interface Take { id: string; version: number; index: number; video: string | null; keyframe: string | null; model: string; cost_usd: number; seconds: number; quality: Record<string, number>; review_id: string | null }
 export type Join = "" | "continues" | "same_scene" | "cut";
@@ -34,7 +34,7 @@ export interface Scene3DClip {
 export interface ReviewRound { round: number; ok: boolean; results: { criterion: string; met: boolean; why: string }[]; feedback: string[]; checked_by: string; fixed_by: string; fix_summary: string; at: string }
 export interface Scene3DReview { criteria: string[]; rounds: ReviewRound[]; passed: boolean; note: string; plan_hash: string }
 export interface AskEntry { at: string; where: string; request: string; result: string }
-export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; agent_efforts?: Record<string, string>; enabled: boolean; agent: "brain" | "claude_code" | "codex" | "pair"; ai_check: boolean; check_rounds: number; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
+export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; agent_efforts?: Record<string, string>; enabled: boolean; agent: "brain" | "claude_code" | "codex" | "pair"; ai_check: boolean; check_rounds: number; film_voice?: "free" | "service" | "off"; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
 export interface FilmPart { nid: string; number: string; title: string; seconds: number; source: "3d" | "footage" | "card"; why: string }
 export interface Scene3DFilm { video: string | null; blend: string | null; parts: FilmPart[]; seconds: number; signature: string; notes: string[]; updated_at: string }
 export interface Scene3DInfo {
@@ -235,6 +235,12 @@ export const api = {
     fd.append("consent_self", consentSelf ? "true" : "");
     return req<View>("POST", `${P(pid)}/context/${cid}/voice-recording`, fd);
   },
+  narrationRecording: (pid: string, nid: string, blob: Blob, filename: string) => {
+    const fd = new FormData();
+    fd.append("file", blob, filename);
+    return req<View>("POST", `${P(pid)}/nodes/${nid}/narration-recording`, fd);
+  },
+  clearNarrationRecording: (pid: string, nid: string) => req<View>("DELETE", `${P(pid)}/nodes/${nid}/narration-recording`),
   stockSearch: (q: string, source: string) => req<{ sources: string[]; results: StockPhoto[] }>("GET", `/api/stock/search?q=${encodeURIComponent(q)}&source=${source}`),
   autoPhoto: (pid: string, cid: string) => req<any>("POST", `${P(pid)}/context/${cid}/auto-photo`),
   stockAdd: (pid: string, cid: string, photo: StockPhoto) => req<View>("POST", `${P(pid)}/context/${cid}/stock`, photo),

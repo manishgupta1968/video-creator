@@ -111,6 +111,7 @@ function WholeFilm() {
       {has && (
         <>
           <video key={f!.video! + f!.updated_at} src={fileUrl(P.pid, f!.video)} controls className="w-full max-w-xl rounded bg-black" />
+          {f!.notes.some((n) => n.includes("spoken words take")) && <p className="text-[11px] text-warn">Some spoken words are longer than their clip — see the notes below.</p>}
           <div className="flex flex-wrap gap-1.5 text-[11px]">
             {f!.parts.map((pt) => (
               <span key={pt.nid} title={pt.why || "3D preview"} className={cn("rounded-md px-1.5 py-0.5", pt.source === "card" ? "bg-warn/15 text-warn" : "bg-sunken")}>
@@ -210,6 +211,13 @@ export function Scene3DPartPanel({ node, isRoot }: { node: Node; isRoot: boolean
               </div>
               <div><Switch checked={st.models !== false} onChange={(models) => saveSettings({ models })}
                 label="Build a low-poly 3D model of each character and object (else plain shapes)" /></div>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-muted">Spoken words in the 3D film:</span>
+                <Select value={st.film_voice || "free"} onChange={(film_voice) => saveSettings({ film_voice: film_voice as any })} title="Narration and dialogue in the whole 3D film"
+                  options={[{ value: "free", label: "Your computer's own voice (free, shows the timing)" },
+                    { value: "service", label: "Your voice service (the real voice, small cost; the video reuses it)" },
+                    { value: "off", label: "No sound" }]} />
+              </div>
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="text-muted">Render with:</span>
                 <Select value={st.renderer} onChange={(renderer) => saveSettings({ renderer: renderer as any })} options={RENDERERS} title="Renderer" />

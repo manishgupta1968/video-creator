@@ -316,11 +316,17 @@ class FakeLLM(LLM):
 
     def _missing_context(self, m: dict) -> dict:
         """Offline: a place when none is defined, and each prop of the 3D scenes that is not defined yet."""
-        have = {(h.get("title") or "").strip().lower() for h in m.get("have", [])}
-        types = {h.get("type") for h in m.get("have", [])}
+        have = {(h.get("title") or "").strip().lower() for h in m.get("have", []) if not h.get("empty")}
+        places = [h for h in m.get("have", []) if h.get("type") == "location"]
         items = []
-        if "location" not in types:
-            items.append({"type": "location", "title": "The place", "description": f"Where this happens: {m.get('goal', '')}".strip(),
+        sets = m.get("sets") or []
+        for h in m.get("have", []):          # a card without a description counts as missing: give it one
+            if h.get("empty") and h.get("type") in ("actor", "object", "location"):
+                items.append({"type": h["type"], "title": h["title"], "description": f"{h['title']} in: {m.get('goal', '')}",
+                              "clips": [], "why": "It has no description yet."})
+        if not places:
+            title = (sets[0].replace("_", " ").title() if sets else "The place")
+            items.append({"type": "location", "title": title, "description": f"Where this happens: {m.get('goal', '')}".strip(),
                           "clips": [], "why": "No place is defined yet."})
         seen = set()
         for label, num in m.get("props", []):

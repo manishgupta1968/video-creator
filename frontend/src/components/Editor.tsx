@@ -13,6 +13,7 @@ import { OptimizeButton } from "./OptimizeDialog";
 import { useQuery } from "@tanstack/react-query";
 import { FinalVideoDialog, PreviewBadge } from "./Banners";
 import { commandBus, finalPlayer } from "../lib";
+import NarrationVoice from "./NarrationVoice";
 
 export default function Editor({ node }: { node: Node }) {
   const P = useP();
@@ -403,6 +404,7 @@ function ClipEditor({ node }: { node: Node }) {
             <div className="field-label mb-1 flex items-center gap-2">Narration (voice-over)
               {s.narration.trim() && <ExactToggle on={!!s.narration_fixed} onChange={(narration_fixed) => saveScript({ narration_fixed })} />}</div>
             <Editable value={s.narration} onSave={(narration) => saveScript({ narration })} multiline placeholder="Optional voice-over" />
+            <NarrationVoice node={node} script={s} actors={actors} onSave={saveScript} />
             <NarrationLanguage script={s} main={p.settings.language} also={p.settings.also_languages || []} actors={actors.map((a) => a.actor?.language || "")}
               onSave={(patch) => saveScript(patch)} />
           </div>
@@ -541,7 +543,7 @@ function NarrationLanguage({ script, main, also, actors, onSave }: {
   const codes = spokenCodes(main, also, actors);
   const base = main === "auto" ? "" : main;
   const spoken = script.narration_language || base;
-  if (!script.narration.trim()) return null;
+  if (!script.narration.trim() && !script.narration_audio) return null;
   return (
     <div className="mt-1 space-y-1 text-[11px] text-muted">
       {(codes.length > 1 || !!script.narration_language) && (

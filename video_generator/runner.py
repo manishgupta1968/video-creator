@@ -676,10 +676,14 @@ class Engine:
         lines = [(d.speaker, d.text, d.emotion) for d in s.dialogue if d.text.strip()]
         langs = [casting.line_language(p, d.speaker, d.language) for d in s.dialogue if d.text.strip()]     # the language of each line, in the same order
         meanings = [d.translation for d in s.dialogue if d.text.strip()]                                    # its meaning in English (for subtitles)
-        if s.narration.strip():
-            lines.append(("narrator", s.narration, ""))
-            langs.append(casting.line_language(p, "narrator", s.narration_language))
+        own = self.abs(pid, s.narration_audio) if s.narration_audio else None
+        own = own if own is not None and own.exists() else None
+        narrator = s.narration_by or "narrator"
+        if s.narration.strip() or own is not None:
+            lines.append((narrator, s.narration.strip() or "(your own recording)", ""))
+            langs.append(casting.line_language(p, narrator, s.narration_language))
             meanings.append(s.narration_translation)
+        recorded_at = len(lines) - 1 if own is not None else -1      # this line is your recording, placed exactly as it is
         d = self.cdir(pid, nid)
         if not lines:
             def f(pr: Project):
@@ -690,9 +694,9 @@ class Engine:
         plan = est.plan_clip(p, n, self.svc.reg)
         entry = plan.voice
         plugin = self.svc.reg.plugin(entry.plugin)
-        if any(sp == "narrator" for sp, _, _ in lines):
+        if any(sp == "narrator" for i, (sp, _, _) in enumerate(lines) if i != recorded_at):
             await self._ensure_narrator(pid)
-        for sp in {sp for sp, _, _ in lines}:                        # every speaker has a voice chosen from their profile
+        for sp in {sp for i, (sp, _, _) in enumerate(lines) if i != recorded_at}:   # every speaker has a voice chosen from their profile
             item = self._speaker_item(self.svc.load(pid), sp)
             if item and item.actor and not entry.is_free and not (
                     item.actor.voice_id and item.actor.voice_provider == entry.plugin and item.actor.voice_name):
@@ -701,6 +705,8 @@ class Engine:
         n = find(p, nid)
         voices_now = {sp: (self._speaker_item(p, sp).actor.voice_id if self._speaker_item(p, sp) and self._speaker_item(p, sp).actor else None)
                       for sp in {sp for sp, _, _ in lines}}
+        if own is not None:
+            voices_now["(your recording)"] = f"{s.narration_audio}:{int(own.stat().st_mtime)}"
         lines_file = d / "voice_lines.json"
         if n.voice_audio and self.abs(pid, n.voice_audio).exists() and n.voice_seconds and lines_file.exists():
             try:
@@ -713,8 +719,14 @@ class Engine:
         parts, timings, chars = [], [], 0
         t0 = time.monotonic()
         for i, (speaker, text, emotion) in enumerate(lines):
-            spec = self._voice_spec(p, speaker, entry.plugin, emotion, langs[i])
             out = d / f"line_{i:02d}.wav"
+            if i == recorded_at:                                     # your own recording: exactly as it is, no voice service
+                await asyncio.to_thread(media.ff, "-i", str(own), "-ar", "44100", "-ac", "1", str(out))
+                parts.append(out)
+                timings.append({"speaker": speaker, "text": s.narration.strip(), "language": langs[i], "translation": meanings[i],
+                                "seconds": round(media.probe_duration(out), 2), "recorded": True})
+                continue
+            spec = self._voice_spec(p, speaker, entry.plugin, emotion, langs[i])
             try:
                 await plugin.synthesize(text, spec, out, entry.model)
             except PluginError as exc:
@@ -755,7 +767,9 @@ class Engine:
         media.concat_audio(parts, voice, gap=policy_mod.current().line_pause, lead=policy_mod.current().edge_pad)
         secs = media.probe_duration(voice)
         (d / "voice_lines.json").write_text(json.dumps({"lead": policy_mod.current().edge_pad, "gap": policy_mod.current().line_pause, "lines": timings,
-                                                         "voices": self._voices_of(self.svc.load(pid), lines), "languages": langs}))
+                                                         "voices": {**self._voices_of(self.svc.load(pid), lines),
+                                                                    **({"(your recording)": voices_now["(your recording)"]} if own is not None else {})},
+                                                         "languages": langs}))
         cost = chars / 1000 * entry.unit_price
         await self.charge(pid, {"kind": "voice", "what": f"voice {numbering(p).get(nid, '')}", "plugin": entry.plugin,
                                 "catalog_id": entry.id, "model": entry.model, "units": f"{chars} chars",

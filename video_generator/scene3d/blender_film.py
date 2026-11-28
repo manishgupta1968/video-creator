@@ -3,7 +3,8 @@ every clip's preview one after another, with its number and title written on top
 
     blender --background --factory-startup --python blender_film.py -- film.json OUT.blend
 
-film.json: {"fps": 24, "width": 854, "height": 480, "clips": [{"path": "/abs/clip.mp4", "label": "1.1 · The arrival"}, …]}
+film.json: {"fps": 24, "width": 854, "height": 480,
+            "clips": [{"path": "/abs/clip.mp4", "label": "1.1 · The arrival", "audio": "/abs/voice.wav" or ""}, …]}
 """
 import json
 import sys
@@ -59,6 +60,11 @@ def main():
             text.use_shadow = True
         except Exception:
             pass                                 # a Blender without text strips still gets the clips
+        if clip.get("audio"):                    # the clip's spoken words, so the film plays with sound in Blender too
+            try:
+                strips.new_sound(name=f"voice_{i + 1:02d}", filepath=clip["audio"], channel=3, frame_start=frame)
+            except Exception as exc:
+                print("SOUND_SKIPPED", i + 1, exc)
         frame += length
     scene.frame_start, scene.frame_end = 1, max(frame - 1, 1)
     scene.frame_current = 1

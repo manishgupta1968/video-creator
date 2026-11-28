@@ -52,13 +52,31 @@ class SystemVoice(VoiceSynth):
     def is_configured(self):
         return (True, "ok") if self._engine() else (False, "no system voice found (install espeak-ng)")
 
+    @staticmethod
+    def say_voice(language: str) -> str:
+        """A macOS voice for this language, from `say -v ?` (for example Lekha for Hindi); "" = the default voice."""
+        lang = (language or "").split("-")[0].lower()
+        if not lang or lang == "en":
+            return ""
+        try:
+            listing = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=20).stdout
+        except Exception:
+            return ""
+        for line in listing.splitlines():
+            parts = line.split("#")[0].split()
+            if len(parts) >= 2 and parts[-1].lower().startswith(lang + "_"):
+                return " ".join(parts[:-1])
+        return ""
+
     async def synthesize(self, text: str, voice: VoiceSpec, out: Path, model: str = ""):
         engine = self._engine()
         raw = out.with_suffix(".raw.aiff" if engine == "say" else ".raw.wav")
+        lang = (voice.language or "").split("-")[0].lower()
         if engine == "say":
-            cmd = ["say", "-o", str(raw), text]
+            who = await asyncio.to_thread(self.say_voice, lang)
+            cmd = ["say"] + (["-v", who] if who else []) + ["-o", str(raw), text]
         elif engine == "espeak":
-            cmd = [shutil.which("espeak-ng") or "espeak", "-w", str(raw), text]
+            cmd = [shutil.which("espeak-ng") or "espeak"] + (["-v", lang] if lang and lang != "en" else []) + ["-w", str(raw), text]
         elif engine == "sapi":
             ps = ("Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
                   f"$s.SetOutputToWaveFile('{raw}'); $s.Speak([Console]::In.ReadToEnd()); $s.Dispose()")

@@ -34,6 +34,14 @@ export default function SettingsDialog({ open, onOpenChange, tab: initialTab }: 
                   <Select value={d.config.quality_mode} onChange={(v) => patch({ quality_mode: v })}
                     options={[{ value: "best", label: "Best" }, { value: "balanced", label: "Balanced" }, { value: "budget", label: "Budget" }, { value: "free", label: "Free preview" }]} />
                 </Row>
+                <Row label="Voice made by" hint="Who makes the spoken words. Google and OpenAI follow the accent you choose on each card; ElevenLabs and Cartesia can also copy a voice from a sample.">
+                  <Select value={(d.config.preferred_models || {}).voice || ""} onChange={(v) => {
+                    const pm = { ...(d.config.preferred_models || {}) };
+                    if (v) pm.voice = v; else delete pm.voice;
+                    patch({ preferred_models: pm });
+                  }} options={[{ value: "", label: "Automatic (the best connected voice)" },
+                    ...(d.catalog || []).filter((e: any) => e.job === "voice").map((e: any) => ({ value: e.id, label: `${e.note ? e.note.split(";")[0].split(".")[0] : e.id} — ${e.price_text}${e.usable ? "" : " (not connected)"}` }))]} />
+                </Row>
                 <Row label="Clips made at the same time">
                   <Select value={String(d.config.max_parallel_jobs)} onChange={(v) => patch({ max_parallel_jobs: Number(v) })} options={[1, 2, 3, 4, 6, 8].map((n) => ({ value: String(n), label: String(n) }))} />
                 </Row>

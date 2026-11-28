@@ -192,18 +192,19 @@ def test_find_what_is_missing_and_add_the_ticked_ones(svc, monkeypatch):
     with TestClient(appmod.app) as client:
         r = client.post(f"/api/projects/{p.id}/context/missing").json()
         kinds = {(i["type"], i["title"]) for i in r["items"]}
-        assert ("location", "The place") in kinds and ("object", "Prayer mat") in kinds
+        place = next(i["title"] for i in r["items"] if i["type"] == "location")
+        assert ("object", "Prayer mat") in kinds
         mat = next(i for i in r["items"] if i["title"] == "Prayer mat")
         assert mat["clips"] == ["1.1"]
         v = client.post(f"/api/projects/{p.id}/context/missing/add", json={"items": r["items"]}).json()
-        assert sorted(v["added"]) == ["Prayer mat", "The place"]
+        assert sorted(v["added"]) == sorted(["Prayer mat", place])
         again = client.post(f"/api/projects/{p.id}/context/missing/add", json={"items": r["items"]}).json()
         assert again["added"] == []                                     # already defined: not added twice
     ctx = {c.title: c for c in svc.load(p.id).context}
     assert ctx["Prayer mat"].scope == f"node:{ids[0]}" and ctx["Prayer mat"].role.value == "must_appear"
-    assert ctx["The place"].scope == "project" and ctx["The place"].type == ContextType.location
+    assert ctx[place].scope == "project" and ctx[place].type == ContextType.location
     r2 = asyncio.run(svc.brain.find_missing(svc.load(p.id)))
-    assert all(i.title not in ("Prayer mat", "The place") for i in r2.items)
+    assert all(i.title not in ("Prayer mat", place) for i in r2.items)
 
 
 def test_the_chosen_ai_brain_describes_and_codex_draws(codex, svc, monkeypatch):
@@ -213,7 +214,7 @@ def test_the_chosen_ai_brain_describes_and_codex_draws(codex, svc, monkeypatch):
     dan = next(c for c in p.context if c.title == "Dan")
     seen = {}
 
-    async def brief(project, item, draft):
+    async def brief(project, item, draft, facts="", images=None):
         seen["draft"] = draft
         return PictureBrief(prompt="Dan, a lean man in his twenties, white kurta, standing, plain grey background.")
     monkeypatch.setattr(svc.brain, "picture_brief", brief)
@@ -225,8 +226,97 @@ def test_the_chosen_ai_brain_describes_and_codex_draws(codex, svc, monkeypatch):
     info = pictures.maker_info(svc)
     assert info["brain_name"] == "Claude Code" and "Claude Code cannot draw pictures" in info["note"]
 
-    async def fails(project, item, draft):
+    async def fails(project, item, draft, facts="", images=None):
         raise PluginError("not signed in")
     monkeypatch.setattr(svc.brain, "picture_brief", fails)
     pic = asyncio.run(pictures.make_item_picture(svc, p.id, next(c for c in p.context if c.title == "Bruiser").id))
     assert pic.described_by == "" and "full-body character reference picture of Bruiser" in json.loads(codex.read_text())["args"][-1]
+
+
+def test_find_missing_reads_the_whole_plan_the_3d_sets_and_the_rendered_pictures(svc, monkeypatch):
+    from video_generator.project import ProjectStore
+    from video_generator.scene3d import service as s3
+    p, ids = two_shot_project(svc)
+    p.settings.scene3d.enabled = True
+    p.settings.scene3d.renderer = "sketch"
+    svc.save(p)
+    asyncio.run(s3.plan_clip(svc, p.id, ids[0]))
+    q = svc.load(p.id)
+    find(q, ids[0]).scene3d.plan.set.name = "village courtyard"
+    svc.save(q)
+    asyncio.run(s3.build_clip(svc, p.id, ids[0], renderer="sketch"))
+    seen = {}
+    real = svc.brain.ask
+
+    async def spy(task, prompt, schema, meta, images=None, video=None):
+        if task == "missing_context":
+            seen.update(prompt=prompt, images=images, meta=meta)
+        return await real(task, prompt, schema, meta, images=images, video=video)
+    monkeypatch.setattr(svc.brain, "ask", spy)
+    r = asyncio.run(svc.brain.find_missing(svc.load(p.id), ProjectStore.path_for(p.id)))
+    assert "its 3D set: village courtyard" in seen["prompt"] and "THE PLAN (the whole video and every part" in seen["prompt"]
+    assert seen["images"] and seen["images"][0].exists() and "its rendered 3D preview is picture 1" in seen["prompt"]
+    assert any(i.type == "location" and i.title == "Village Courtyard" for i in r.items)      # named after the 3D set
+
+
+def test_an_empty_card_counts_as_missing_and_gets_its_description(svc):
+    p, _ = two_shot_project(svc)
+    p.context.append(ContextItem(type=ContextType.location, title="Location", scope="project"))
+    svc.save(p)
+    r = asyncio.run(svc.brain.find_missing(svc.load(p.id)))
+    item = next(i for i in r.items if i.title == "Location")
+    added = pictures.add_missing(svc, p.id, [item.model_dump()])
+    loc = [c for c in svc.load(p.id).context if c.type == ContextType.location]
+    assert added == ["Location"] and len(loc) == 1 and loc[0].text           # filled in, not added twice
+    pictures.add_missing(svc, p.id, [{**item.model_dump(), "description": "something else"}])
+    assert [c for c in svc.load(p.id).context if c.type == ContextType.location][0].text == loc[0].text   # yours is kept
+
+
+@pytest.mark.skipif(not __import__("shutil").which("ffmpeg"), reason="needs ffmpeg")
+def test_pictures_match_how_the_asset_occurs_in_the_blender_video(codex, svc, monkeypatch):
+    """No variance: a character's picture is described and drawn from its clothes in the clips, its figure in the 3D
+    scenes and its 3D model (whose picture guides the drawer); a place's from its 3D set and a rendered frame of it."""
+    from video_generator.models import ActorInShot, Model3D
+    from video_generator.project import ProjectStore
+    from video_generator.scene3d import service as s3
+    svc.reload()
+    svc.config.llm.default = "fake_llm"             # the stand-in Codex only draws; the offline brain plans and describes
+    p, ids = two_shot_project(svc)
+    p.settings.scene3d.enabled = True
+    p.settings.scene3d.renderer = "sketch"
+    dan = next(c for c in p.context if c.title == "Dan")
+    base = ProjectStore.path_for(p.id)
+    (base / "cast").mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (40, 80), (230, 150, 40)).save(base / "cast" / "dan_model.png")
+    dan.model3d = Model3D(status="built", height=1.72, width=0.5, depth=0.3, previews={"three_quarter": "cast/dan_model.png"},
+                          brief={"description": "a lean young man", "colours": {"kurta": "#f2f2f2"}, "parts": ["head", "arms", "legs"]})
+    find(p, ids[0]).script.actors_in_shot = [ActorInShot(actor_id=dan.id, clothing="a white kurta and brown sandals")]
+    p.context.append(ContextItem(type=ContextType.location, title="Village courtyard", text="", scope="project"))
+    svc.save(p)
+    asyncio.run(s3.plan_clip(svc, p.id, ids[0]))
+    q = svc.load(p.id)
+    find(q, ids[0]).scene3d.plan.set.name = "village courtyard"
+    svc.save(q)
+    asyncio.run(s3.build_clip(svc, p.id, ids[0], renderer="sketch"))
+    facts, look_at, guide = pictures.asset_context(svc.load(p.id), next(c for c in svc.load(p.id).context if c.id == dan.id), base)
+    assert "ITS 3D MODEL IN THE BLENDER VIDEO: a lean young man; real height 1.72 m" in facts and "kurta #f2f2f2" in facts
+    assert "wears: a white kurta and brown sandals" in facts and "figure," in facts and "THE VIDEO AND ITS PARTS" in facts
+    assert guide == [base / "cast" / "dan_model.png"]
+    seen = {}
+    real = svc.brain.ask
+
+    async def spy(task, prompt, schema, meta, images=None, video=None):
+        if task == "picture_brief":
+            seen.update(prompt=prompt, images=images)
+        return await real(task, prompt, schema, meta, images=images, video=video)
+    monkeypatch.setattr(svc.brain, "ask", spy)
+    asyncio.run(pictures.make_item_picture(svc, p.id, dan.id))
+    assert "wears: a white kurta and brown sandals" in seen["prompt"] and seen["images"] == [base / "cast" / "dan_model.png"]
+    drawn = json.loads(codex.read_text())
+    assert "It must match the video:" in drawn["args"][-1] and "low-poly 3D model used in the Blender video" in drawn["args"][-1]
+    assert "picture_01.png" in drawn["files"]                                  # the 3D model guides the drawer
+    loc = next(c for c in svc.load(p.id).context if c.type == ContextType.location)
+    facts, look_at, guide = pictures.asset_context(svc.load(p.id), loc, base)
+    assert "its 3D set: village courtyard" in facts and guide and guide[0].exists()
+    asyncio.run(pictures.make_item_picture(svc, p.id, loc.id))
+    assert "rendered 3D set from the Blender video" in json.loads(codex.read_text())["args"][-1]
