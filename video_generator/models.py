@@ -151,7 +151,8 @@ class MadePicture(BaseModel):
     """A picture of a character or object made for you (by Codex with your ChatGPT subscription, or a picture
     service). For a character it is also its approved look (the reference sheet used in every clip)."""
     file: str = ""                      # project-relative
-    by: str = ""                        # the catalogue row that made it, e.g. codex_image_subscription
+    by: str = ""                        # the catalogue row that drew it, e.g. codex_image_subscription
+    described_by: str = ""              # the AI brain that wrote its description, e.g. claude_code_brain
     prompt: str = ""
     changes: list[str] = Field(default_factory=list)   # what you asked to change, in order
     at: str = Field(default_factory=now_iso)

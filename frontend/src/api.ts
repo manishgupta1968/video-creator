@@ -64,9 +64,10 @@ export interface Model3D {
 }
 export interface Ctx {
   id: string; type: CtxType; title: string; text: string; files: string[]; role: CtxRole; scope: string; actor: Actor | null; model3d?: Model3D | null;
-  picture?: { file: string; by: string; prompt: string; changes: string[]; at: string } | null;
+  picture?: { file: string; by: string; described_by?: string; prompt: string; changes: string[]; at: string } | null;
   consent: { confirmed: boolean; statement: string; confirmed_by: string; confirmed_at: string; files: string[] }; analysis: Record<string, any>;
 }
+export interface MissingItem { type: "actor" | "object" | "location"; title: string; description: string; kind: string; clips: string[]; why: string }
 export interface Dep { id: string; from_id: string; to_id: string; type: string; source: string; note: string; payload: Record<string, any> }
 export interface ReviewJoin { judged: boolean; why_not: string; previous: string; kind: string; reason: string; transition: string; previous_frame: string | null; this_frame: string | null; difference: number | null; limit: number }
 export interface Review {
@@ -272,7 +273,9 @@ export const api = {
   scene3dSetPlan: (pid: string, nid: string, plan: ScenePlan) => req<View>("PUT", `${P(pid)}/nodes/${nid}/scene3d/plan`, plan),
   scene3dChange: (pid: string, nid: string, request: string) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/change`, { request }),
   scene3dOpen: (pid: string, nid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/nodes/${nid}/scene3d/open`),
-  pictureMaker: () => req<{ id: string; name: string; subscription: boolean; price: number; why: string }>("GET", "/api/pictures/maker"),
+  findMissing: (pid: string) => req<{ items: MissingItem[]; note: string }>("POST", `${P(pid)}/context/missing`, {}),
+  addMissing: (pid: string, items: MissingItem[]) => req<View & { added: string[] }>("POST", `${P(pid)}/context/missing/add`, { items }),
+  pictureMaker: () => req<{ id: string; name: string; subscription: boolean; price: number; why: string; brain: string; brain_name: string; note: string }>("GET", "/api/pictures/maker"),
   makePicture: (pid: string, cid: string, change = "") => req<{ ok: boolean; by: string }>("POST", `${P(pid)}/context/${cid}/picture`, { change }),
   model3dBuild: (pid: string, cid: string, change = "") => req<{ ok: boolean }>("POST", `${P(pid)}/context/${cid}/model3d/build`, { change }),
   model3dBrief: (pid: string, cid: string) => req<View>("POST", `${P(pid)}/context/${cid}/model3d/brief`),

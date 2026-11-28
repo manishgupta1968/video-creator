@@ -348,6 +348,27 @@ class AskRoute(BaseModel):
     note: str = ""
 
 
+class MissingItem(BaseModel):
+    type: Literal["actor", "object", "location"] = "object"
+    title: str
+    description: str = ""
+    kind: Literal["ai_person", "animal", "product"] = "ai_person"   # actors only
+    clips: list[str] = Field(default_factory=list)                 # the clip numbers it appears in
+    why: str = ""
+
+
+class MissingItems(BaseModel):
+    """Characters, places and objects the clips need that are not defined yet (prompts/missing_context.md)."""
+    items: list[MissingItem] = Field(default_factory=list)
+    note: str = ""
+
+
+class PictureBrief(BaseModel):
+    """The detailed description a picture is drawn from (prompts/picture_brief.md)."""
+    prompt: str
+    note: str = ""
+
+
 class BrainTest(BaseModel):
     answer: str = ""
 
@@ -461,6 +482,17 @@ class Brain:
     @staticmethod
     def _context_block(project: Project, node_id: str) -> str:
         return summarize_for_llm(effective_context(project, node_id))
+
+    @staticmethod
+    def _places(project: Project, node_id: str) -> str:
+        """The locations and objects (from the right panel) that reach this clip, for the 3D planner."""
+        lines = []
+        for e in effective_context(project, node_id):
+            c = e.item
+            if c.type in (ContextType.location, ContextType.object, ContextType.entity) and (c.title or c.text):
+                kind = "PLACE" if c.type == ContextType.location else "OBJECT (must be seen)" if c.role.value == "must_appear" else "OBJECT"
+                lines.append(f"- {kind}: {c.title}" + (f" — {c.text}" if c.text else "") + ("; has a picture" if c.files else ""))
+        return "\n".join(lines) or "(none defined: decide the place from the script)"
 
     @staticmethod
     def _actor_list(project: Project, node_id: Optional[str] = None) -> str:
@@ -646,7 +678,8 @@ class Brain:
                         script=sc.model_dump_json(indent=1) if sc else "(none)",
                         shared_set=shared_set or "(none yet: this clip decides the set)", previous=previous or "(not a continuation)",
                         wishes=wishes.strip() or "(nothing extra: follow the script)",
-                        models=poses or "(none yet: every character is a plain shape, without poses)")
+                        models=poses or "(none yet: every character is a plain shape, without poses)",
+                        places=self._places(project, node.id))
         return await self.ask("scene_plan", prompt, ScenePlan,
                               {"title": node.title, "goal": node.goal, "seconds": secs, "aspect": project.settings.aspect,
                                "script": sc.model_dump() if sc else {}, "wishes": wishes, "pose_map": pose_map or {},
@@ -668,6 +701,50 @@ class Brain:
                               {"title": item.title, "kind": a.kind if a else item.type.value,
                                "description": (a.description if a else item.text) or "", "clothing": a.clothing if a else "",
                                "actions": actions})
+
+    async def picture_brief(self, project: Project, item: ContextItem, draft: str) -> PictureBrief:
+        """The AI brain you chose (Claude Code or Codex) writes the picture's description, so it fits the story and the
+        other characters, places and objects; the picture maker (Codex's image tool, or a service) then draws it."""
+        others = [f"- {c.type.value}: {c.title} — {(c.actor.description if c.actor else c.text) or ''}".rstrip(" —")
+                  for c in project.context if c.id != item.id and c.type in (ContextType.actor, ContextType.object, ContextType.location)]
+        details = item.text or ""
+        if item.actor:
+            details = "; ".join(x for x in (item.actor.description, f"clothing: {item.actor.clothing}" if item.actor.clothing else "",
+                                            f"kind: {item.actor.kind}") if x)
+        prompt = render("picture_brief", goal=project.root.goal or project.name, look=(project.style.look or "photoreal"),
+                        kind=item.type.value, title=item.title, details=details or "(only its name)",
+                        others="\n".join(others) or "(none)", draft=draft)
+        return await self.ask("picture_brief", prompt, PictureBrief, {"draft": draft})
+
+    async def find_missing(self, project: Project) -> MissingItems:
+        """Read every clip (script, actors, 3D scene) and list the characters, places and objects that are needed but
+        not defined in the right panel yet."""
+        from .tree import leaves as _leaves
+        nums = numbering(project)
+        clips = []
+        for n in _leaves(project):
+            if n.kind != NodeKind.clip:
+                continue
+            sc = n.script
+            line = f"{nums.get(n.id, '')} · {n.title}: {(sc.visual if sc else '') or n.goal}"
+            if sc and sc.action_beats:
+                line += " | action: " + "; ".join(sc.action_beats)
+            if sc and sc.actors_in_shot:
+                names = {c.id: c.title for c in project.context}
+                line += " | actors: " + ", ".join(names.get(a.actor_id, a.actor_id) for a in sc.actors_in_shot)
+            if n.scene3d and n.scene3d.plan:
+                labels = sorted({t.label for t in n.scene3d.plan.things if t.label})
+                if labels:
+                    line += " | in its 3D scene: " + ", ".join(labels)
+            clips.append(line)
+        have = [f"- {c.type.value}: {c.title}" + (f" — {c.text or (c.actor.description if c.actor else '')}" if (c.text or c.actor) else "")
+                for c in project.context if c.type in (ContextType.actor, ContextType.object, ContextType.location, ContextType.entity)]
+        prompt = render("missing_context", goal=project.root.goal or project.name, clips="\n".join(clips) or "(no clips yet)",
+                        have="\n".join(have) or "(nothing defined yet)")
+        return await self.ask("missing_context", prompt, MissingItems,
+                              {"goal": project.root.goal, "have": [{"type": c.type.value, "title": c.title} for c in project.context],
+                               "props": sorted({(t.label, nums.get(n.id, "")) for n in _leaves(project) if n.scene3d and n.scene3d.plan
+                                                for t in n.scene3d.plan.things if t.kind == "prop" and t.label})})
 
     async def ask_route(self, project: Project, node: Node, request: str) -> AskRoute:
         """Split one request from the "Ask AI" box into a change for the story (words) and one for the 3D scenes."""

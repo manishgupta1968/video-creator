@@ -135,3 +135,98 @@ def test_the_screen_shows_the_picture_maker_and_makes_a_picture(codex, svc, monk
                 break
             asyncio.run(asyncio.sleep(0.1))
     assert svc.load(p.id).context[0].picture is not None
+
+
+def test_a_place_gets_a_wide_picture_without_people(codex, svc):
+    svc.reload()
+    p, _ = two_shot_project(svc)
+    p.context.append(ContextItem(type=ContextType.location, title="Village courtyard", text="mud houses, a big banyan tree"))
+    svc.save(p)
+    cid = p.context[-1].id
+    pic = asyncio.run(pictures.make_item_picture(svc, p.id, cid))
+    item = next(c for c in svc.load(p.id).context if c.id == cid)
+    assert item.files[0] == pic.file
+    prompt = json.loads(codex.read_text())["args"][-1]
+    assert "wide establishing picture of the place Village courtyard: mud houses, a big banyan tree" in prompt and "no people" in prompt
+
+
+def test_the_3d_planner_is_given_the_places_and_objects(svc):
+    from video_generator.brain import render
+    p, ids = two_shot_project(svc)
+    p.context.append(ContextItem(type=ContextType.location, title="Village courtyard", text="mud houses, a banyan tree", scope="project"))
+    p.context.append(ContextItem(type=ContextType.object, title="Takht", text="a low wooden seat", role="must_appear", scope="project"))
+    svc.save(p)
+    text = svc.brain._places(svc.load(p.id), ids[0])
+    assert "PLACE: Village courtyard — mud houses, a banyan tree" in text and "OBJECT (must be seen): Takht — a low wooden seat" in text
+    assert "THE PLACE AND THE OBJECTS THE USER DEFINED" in render("scene_plan", places=text) and text in render("scene_plan", places=text)
+
+
+def test_place_pictures_are_labelled_as_the_place_not_as_a_style(svc, tmp_path):
+    from video_generator.project import ProjectStore
+    from video_generator.web import app as appmod
+    p, ids = two_shot_project(svc)
+    base = ProjectStore.path_for(p.id)
+    (base / "inputs").mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (32, 32)).save(base / "inputs" / "village.png")
+    p.context.append(ContextItem(type=ContextType.location, title="Village", role="look_reference", files=["inputs/village.png"], scope="project"))
+    svc.save(p)
+    appmod.engine.svc = svc
+    labels = [lbl for _, lbl in appmod.engine._labelled_references(svc.load(p.id), find(svc.load(p.id), ids[0]))]
+    assert any(l.startswith("Village: the place where the clip happens") for l in labels)
+
+
+def test_find_what_is_missing_and_add_the_ticked_ones(svc, monkeypatch):
+    from fastapi.testclient import TestClient
+    from video_generator.scene3d import service as s3
+    from video_generator.web import app as appmod
+    monkeypatch.setattr(appmod, "svc", svc)
+    p, ids = two_shot_project(svc)
+    p.settings.scene3d.enabled = True
+    svc.save(p)
+    asyncio.run(s3.plan_clip(svc, p.id, ids[0]))
+    q = svc.load(p.id)
+    plan = find(q, ids[0]).scene3d.plan
+    from video_generator.scene3d.spec import Thing
+    plan.things.append(Thing(id="mat1", label="Prayer mat", kind="prop", shape="box", size=[1, 0.6, 0.02]))
+    svc.save(q)
+    with TestClient(appmod.app) as client:
+        r = client.post(f"/api/projects/{p.id}/context/missing").json()
+        kinds = {(i["type"], i["title"]) for i in r["items"]}
+        assert ("location", "The place") in kinds and ("object", "Prayer mat") in kinds
+        mat = next(i for i in r["items"] if i["title"] == "Prayer mat")
+        assert mat["clips"] == ["1.1"]
+        v = client.post(f"/api/projects/{p.id}/context/missing/add", json={"items": r["items"]}).json()
+        assert sorted(v["added"]) == ["Prayer mat", "The place"]
+        again = client.post(f"/api/projects/{p.id}/context/missing/add", json={"items": r["items"]}).json()
+        assert again["added"] == []                                     # already defined: not added twice
+    ctx = {c.title: c for c in svc.load(p.id).context}
+    assert ctx["Prayer mat"].scope == f"node:{ids[0]}" and ctx["Prayer mat"].role.value == "must_appear"
+    assert ctx["The place"].scope == "project" and ctx["The place"].type == ContextType.location
+    r2 = asyncio.run(svc.brain.find_missing(svc.load(p.id)))
+    assert all(i.title not in ("Prayer mat", "The place") for i in r2.items)
+
+
+def test_the_chosen_ai_brain_describes_and_codex_draws(codex, svc, monkeypatch):
+    from video_generator.brain import PictureBrief
+    svc.reload()
+    p, _ = two_shot_project(svc)
+    dan = next(c for c in p.context if c.title == "Dan")
+    seen = {}
+
+    async def brief(project, item, draft):
+        seen["draft"] = draft
+        return PictureBrief(prompt="Dan, a lean man in his twenties, white kurta, standing, plain grey background.")
+    monkeypatch.setattr(svc.brain, "picture_brief", brief)
+    monkeypatch.setattr(svc.reg, "llm_plugin_name", lambda task="default": "claude_code_brain")
+    pic = asyncio.run(pictures.make_item_picture(svc, p.id, dan.id))
+    assert "full-body character reference picture of Dan" in seen["draft"]              # the rules are its first draft
+    assert "Dan, a lean man in his twenties, white kurta" in json.loads(codex.read_text())["args"][-1]
+    assert pic.described_by == "claude_code_brain" and pic.by == "codex_image_subscription"
+    info = pictures.maker_info(svc)
+    assert info["brain_name"] == "Claude Code" and "Claude Code cannot draw pictures" in info["note"]
+
+    async def fails(project, item, draft):
+        raise PluginError("not signed in")
+    monkeypatch.setattr(svc.brain, "picture_brief", fails)
+    pic = asyncio.run(pictures.make_item_picture(svc, p.id, next(c for c in p.context if c.title == "Bruiser").id))
+    assert pic.described_by == "" and "full-body character reference picture of Bruiser" in json.loads(codex.read_text())["args"][-1]

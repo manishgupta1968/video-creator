@@ -46,6 +46,11 @@ def _prompt(project, item) -> tuple[str, str]:
                 f"{a.clothing or 'the clothes the story gives them'}. Standing, facing the camera, arms relaxed, the whole body "
                 "from head to feet in the picture, plain light-grey background, soft even light, natural skin texture, "
                 "sharp focus, true-to-life colours. No text.", "3:4")
+    if item.type == ContextType.location:
+        aspect = project.settings.aspect or "16:9"
+        return (f"{look} wide establishing picture of the place {item.title}: {item.text or item.title}. Eye-level camera, "
+                "the whole place in view with its buildings, plants and ground, natural daylight, no people, no animals, "
+                "no text, true-to-life colours and materials.", aspect)
     return (f"{look} reference picture of {item.title}: {item.text or item.title}. The whole object, three-quarter view, "
             "on a plain light-grey background, soft even light, sharp focus, true-to-life colours, real size and "
             "materials. No text.", "1:1")
@@ -56,13 +61,28 @@ async def make_item_picture(svc, pid: str, cid: str, change: str = "") -> MadePi
     item = next((c for c in p.context if c.id == cid), None)
     if item is None:
         raise ValueError(f"There is no character or object with id {cid}.")
-    if item.type not in (ContextType.actor, ContextType.object):
-        raise ValueError("Pictures are made for characters and objects only.")
+    if item.type not in (ContextType.actor, ContextType.object, ContextType.location):
+        raise ValueError("Pictures are made for characters, places and objects only.")
     entry, why = picture_maker(svc)
     if entry is None:
         raise ValueError(why)
     base = ProjectStore.path_for(pid)
     prompt, aspect = _prompt(p, item)
+    described_by = ""
+    if not (change or "").strip() or not item.picture:
+        # the AI brain you chose (Claude Code or Codex) writes the full description; the rules above are its first draft
+        try:
+            brief = await svc.brain.picture_brief(p, item, prompt)
+            if brief.prompt.strip():
+                prompt = brief.prompt.strip()
+                described_by = svc.reg.llm_plugin_name("picture_brief")
+            q = svc.load(pid)
+            svc._ledger_llm(q, f"describe the picture of {item.title}")
+            svc.save(q, snapshot=False)
+        except PluginError:
+            pass                                        # the AI brain could not answer: the first draft is drawn as it is
+    elif item.picture:
+        described_by = item.picture.described_by
     old = item.picture if item.picture and (base / item.picture.file).exists() else None
     photos = [base / f for f in item.files if f.lower().endswith(IMG_EXT) and (not old or f != old.file)]
     refs = list(photos[:4])
@@ -89,19 +109,60 @@ async def make_item_picture(svc, pid: str, cid: str, change: str = "") -> MadePi
                                       "model": entry.id, "estimated_usd": round(entry.unit_price, 4), "actual_usd": round(cost, 4)})
     p = svc.load(pid)
     item = next(c for c in p.context if c.id == cid)
-    pic = MadePicture(file=rel, by=entry.id, prompt=prompt, changes=(old.changes if old else []) + ([change] if change else []),
+    pic = MadePicture(file=rel, by=entry.id, described_by=described_by, prompt=prompt, changes=(old.changes if old else []) + ([change] if change else []),
                       at=now_iso())
     if item.actor is not None:
         item.actor.reference_sheet = [rel]            # the approved look, used in every clip and given to Seedance
     else:
         keep = [f for f in item.files if not (old and f == old.file)]
-        item.files = [rel] + keep                     # an object's pictures: the made one first
+        item.files = [rel] + keep                     # an object's or a place's pictures: the made one first
     item.picture = pic
     svc.save(p)
     return pic
 
 
+BRAIN_WORDS = {"claude_code_brain": "Claude Code", "codex_brain": "Codex", "anthropic": "Claude (API)", "openai": "OpenAI (API)",
+               "gemini": "Gemini (API)", "fake_llm": "the offline brain"}
+
+
 def maker_info(svc) -> dict:
     e, why = picture_maker(svc)
+    brain = svc.reg.llm_plugin_name("picture_brief")
     return {"id": e.id if e else "", "name": maker_name(e) if e else "", "subscription": bool(e and e.price.unit == "subscription"),
-            "price": 0 if not e else (0 if e.price.unit == "subscription" else e.unit_price), "why": why}
+            "price": 0 if not e else (0 if e.price.unit == "subscription" else e.unit_price), "why": why,
+            "brain": brain, "brain_name": BRAIN_WORDS.get(brain, brain),
+            "note": ("Claude Code cannot draw pictures: it writes the description, and "
+                     f"{maker_name(e) if e else 'a picture maker'} draws it.") if brain == "claude_code_brain" else ""}
+
+
+def add_missing(svc, pid: str, items: list[dict]) -> list[str]:
+    """Add the chosen missing characters, places and objects to the right panel. An item seen in one clip only is added
+    to that clip; others are shared by all clips. Something already defined with the same name is skipped."""
+    from .models import ContextItem, ContextRole
+    from .tree import numbering
+    p = svc.load(pid)
+    ids = {v: k for k, v in numbering(p).items()}
+    have = {(c.type.value, c.title.strip().lower()) for c in p.context}
+    added = []
+    for raw in items:
+        t = str(raw.get("type") or "object")
+        if t not in ("actor", "object", "location"):
+            continue
+        title = str(raw.get("title") or "").strip()
+        if not title or (t, title.lower()) in have:
+            continue
+        clips = [ids[c] for c in raw.get("clips") or [] if c in ids]
+        data = {"type": t, "title": title, "scope": f"node:{clips[0]}" if len(clips) == 1 else "project",
+                "role": (ContextRole.look_reference if t == "location" else ContextRole.must_appear).value}
+        desc = str(raw.get("description") or "")
+        if t == "actor":
+            kind = raw.get("kind") if raw.get("kind") in ("ai_person", "animal", "product") else "ai_person"
+            data["actor"] = {"kind": kind, "description": desc}
+        else:
+            data["text"] = desc
+        p.context.append(ContextItem.model_validate(data))
+        have.add((t, title.lower()))
+        added.append(title)
+    if added:
+        svc.save(p)
+    return added

@@ -311,6 +311,27 @@ class FakeLLM(LLM):
                 "lights": [{"kind": "sun", "at": [-6, -6, 10], "look_at": [0, 0, 0], "strength": 3}],
                 "seconds": secs, "fps": 24, "aspect": m.get("aspect") or "16:9"}
 
+    def _picture_brief(self, m: dict) -> dict:
+        return {"prompt": m.get("draft", ""), "note": "The offline brain keeps the first draft."}
+
+    def _missing_context(self, m: dict) -> dict:
+        """Offline: a place when none is defined, and each prop of the 3D scenes that is not defined yet."""
+        have = {(h.get("title") or "").strip().lower() for h in m.get("have", [])}
+        types = {h.get("type") for h in m.get("have", [])}
+        items = []
+        if "location" not in types:
+            items.append({"type": "location", "title": "The place", "description": f"Where this happens: {m.get('goal', '')}".strip(),
+                          "clips": [], "why": "No place is defined yet."})
+        seen = set()
+        for label, num in m.get("props", []):
+            key = label.strip().lower()
+            if key in have or key in seen:
+                continue
+            seen.add(key)
+            items.append({"type": "object", "title": label, "description": label, "clips": [num] if num else [],
+                          "why": "It is in the 3D scene but not defined."})
+        return {"items": items, "note": f"{len(items)} missing." if items else "Nothing is missing."}
+
     def _ask_route(self, m: dict) -> dict:
         """Offline: camera, size, place and pose words go to the 3D scenes; anything else to the story."""
         req = m.get("request", "")
