@@ -115,9 +115,9 @@ def test_the_voice_service_option_makes_the_videos_voice_once(svc, monkeypatch):
             find(pr, nid).voice_audio = str(v.relative_to(base))
             svc.save(pr)
     monkeypatch.setattr(svc, "engine", Eng(), raising=False)
-    f = asyncio.run(film.make_film(svc, p.id, prepare=True))
+    f = asyncio.run(film.make_film(svc, p.id, prepare=True, allow_paid=True))
     assert made == [ids[0]] and any("your voice service (the video will reuse it)" in n for n in f.notes)
-    asyncio.run(film.make_film(svc, p.id, prepare=True))
+    asyncio.run(film.make_film(svc, p.id, prepare=True, allow_paid=True))
     assert made == [ids[0]]                                                        # made once, then reused
 
 
@@ -156,11 +156,11 @@ def test_the_real_voice_is_made_first_so_no_clip_becomes_a_blank_card(svc, monke
     find(q, ids[0]).script.narration = "shri guru charan saroj raj nij manu mukuru sudhar baranau raghubar bimal jasu jo dayaku phal chari"
     q.settings.scene3d.film_voice = "service"
     svc.save(q)
-    f = asyncio.run(film.make_film(svc, p.id, prepare=True))
+    f = asyncio.run(film.make_film(svc, p.id, prepare=True, allow_paid=True))      # you agreed to the voice service
     assert [pt.source for pt in f.parts] == ["3d", "3d"] and f.parts[0].seconds > 4
     assert not film.stale_reason(svc.load(p.id)) and len(v.calls["voice"]) == 1
     assert f.previous_video == first.video and (ProjectStore.path_for(p.id) / first.video).exists()   # the film before is kept
-    again = asyncio.run(film.make_film(svc, p.id, prepare=True))
+    again = asyncio.run(film.make_film(svc, p.id, prepare=True, allow_paid=True))
     assert any("Nothing had changed" in n for n in again.notes) and len(v.calls["voice"]) == 1
 
 
