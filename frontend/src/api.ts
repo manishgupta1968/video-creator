@@ -306,6 +306,7 @@ export const api = {
   settings: () => req<any>("GET", "/api/settings"),
   patchSettings: (patch: any) => req<any>("PATCH", "/api/settings", patch),
   setKey: (name: string, value: string) => req<any>("POST", "/api/settings/keys", { name, value }),
+  balances: () => req<{ services: { service: string; connected: boolean; left: string; problem: string; spent_usd: number; link: string }[] }>("GET", "/api/settings/balances"),
   subscriptionModels: () => req<Record<"claude_code" | "codex", { models: { id: string; name: string; note: string; efforts?: { id: string; note: string }[]; default_effort?: string }[]; problem: string }>>("GET", "/api/settings/subscription-models"),
   brainTest: (kind = "default") => req<{ plugin: string; model: string; ok: boolean; seconds: number; answer: string; error: string }>("POST", "/api/settings/brain-test", { kind }),
   testPlugin: (plugin: string) => req<{ ok: boolean; message: string }>("POST", "/api/settings/test", { plugin }),

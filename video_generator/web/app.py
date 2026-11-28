@@ -1111,6 +1111,13 @@ async def set_key(body: dict = Body(...)):
     return settings_view()
 
 
+@app.get("/api/settings/balances")
+async def settings_balances():
+    """How much is left with each paid service (for those whose API tells it) and how much this tool has spent with it."""
+    from .. import balances
+    return {"services": await balances.balances(svc.catalog)}
+
+
 @app.get("/api/settings/subscription-models")
 async def subscription_models(fresh: bool = False):
     """The models Claude Code and Codex on this computer can use, read from the programs themselves."""
