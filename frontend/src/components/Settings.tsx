@@ -1,6 +1,6 @@
 import { CheckCircle2, ExternalLink, KeyRound, RefreshCw, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, FoundModel, ModelRow } from "../api";
 import { brainName, fmtUsd, useSettings, useSettingsMutation, useToast } from "../lib";
 import { Badge, Button, Dialog, HelpTip, Input, Select, Switch, TabList, TabPanel, Tabs } from "../ui";
@@ -23,7 +23,7 @@ export default function SettingsDialog({ open, onOpenChange, tab: initialTab }: 
           <TabList tabs={[{ value: "keys", label: "Vendors & keys" }, { value: "brain", label: "AI brain" }, { value: "budget", label: "Budget & quality" },
             { value: "catalog", label: "Model catalogue" }, { value: "plugins", label: "Plugins" }]} />
           <div className="pt-4">
-            <TabPanel value="keys"><Keys d={d} /></TabPanel>
+            <TabPanel value="keys"><MoneyLeft /><Keys d={d} /></TabPanel>
             <TabPanel value="brain"><BrainTab d={d} patch={patch} goKeys={() => setTab("keys")} /></TabPanel>
             <TabPanel value="budget">
               <div className="grid max-w-xl gap-4 text-xs">
@@ -33,6 +33,9 @@ export default function SettingsDialog({ open, onOpenChange, tab: initialTab }: 
                 <Row label="Default quality" hint="Best · Balanced (quality per dollar) · Budget · Free preview">
                   <Select value={d.config.quality_mode} onChange={(v) => patch({ quality_mode: v })}
                     options={[{ value: "best", label: "Best" }, { value: "balanced", label: "Balanced" }, { value: "budget", label: "Budget" }, { value: "free", label: "Free preview" }]} />
+                </Row>
+                <Row label="Ask before a paid step" hint="Outside Generate (which always shows the cost first): the 3D film's real voices, a picture from a paid service, a voice sample. You are told the service and about how much.">
+                  <Switch checked={d.config.confirm_paid !== false} onChange={(v) => patch({ confirm_paid: v })} />
                 </Row>
                 <Row label="Voice made by" hint="Who makes the spoken words. Google and OpenAI follow the accent you choose on each card; ElevenLabs and Cartesia can also copy a voice from a sample.">
                   <Select value={(d.config.preferred_models || {}).voice || ""} onChange={(v) => {
@@ -278,6 +281,41 @@ function BrainTest() {
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return <div className="flex items-center justify-between gap-4"><div><div className="font-medium">{label}</div>{hint && <div className="text-[11px] text-muted">{hint}</div>}</div>{children}</div>;
+}
+
+/** How much is left with each paid service (read from the service, where its API tells it) and how much this tool has
+ *  spent with it (from every project's spending log). Reading a balance is free. */
+function MoneyLeft() {
+  const q = useQuery({ queryKey: ["balances"], queryFn: api.balances, staleTime: 60_000 });
+  const rows = (q.data?.services || []).filter((r) => r.connected || r.spent_usd > 0);
+  return (
+    <div className="mb-5 max-w-3xl rounded-xl border border-line p-3 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="font-semibold">Money left and spent</span>
+        <span className="text-muted">— only services you connected</span>
+        <div className="flex-1" />
+        <Button size="sm" variant="ghost" loading={q.isFetching} onClick={() => q.refetch()}><RefreshCw className="h-3.5 w-3.5" />Check again</Button>
+      </div>
+      {q.isLoading && <p className="mt-1 text-muted">Asking each service…</p>}
+      {rows.length > 0 && (
+        <table className="mt-2 w-full text-left">
+          <thead className="text-[11px] text-muted"><tr><th className="py-1 font-medium">Service</th><th className="font-medium">Left with the service</th><th className="font-medium">Spent by this tool</th><th /></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.service} className="border-t border-line align-top">
+                <td className="py-1.5 pr-2 font-medium">{r.service}</td>
+                <td className="py-1.5 pr-2">{r.left || <span className="text-muted">{r.problem === "no key" ? "not connected" : r.problem}</span>}</td>
+                <td className="py-1.5 pr-2">{r.spent_usd ? fmtUsd(r.spent_usd) : <span className="text-muted">—</span>}</td>
+                <td className="py-1.5">{r.link && <a href={r.link} target="_blank" rel="noreferrer" className="text-brand hover:underline">billing page</a>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {q.data && rows.length === 0 && <p className="mt-1 text-muted">No paid service is connected yet.</p>}
+      <p className="mt-2 text-[11px] text-muted">ElevenLabs, fal.ai, Runway, HeyGen and Luma tell the balance; OpenAI, Anthropic and Google do not tell it to an API key (use their billing page). Claude Code and Codex use your plan's usage limits, shown in their own apps.</p>
+    </div>
+  );
 }
 
 function Keys({ d }: { d: any }) {

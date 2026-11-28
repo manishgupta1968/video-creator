@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Box, CheckCircle2, ExternalLink, Film, RefreshCw, Send, Sparkles, Wand2 } from "lucide-react";
 import { useState } from "react";
 import { api, fileUrl, Node } from "../api";
-import { fmtUsd, useP, useToast } from "../lib";
+import { fmtUsd, useP, useToast, withPaidOK } from "../lib";
 import { Badge, Button, cn, Select, Switch } from "../ui";
 import { EffortSelect, SubscriptionModelSelect } from "./SubscriptionModel";
 
@@ -84,14 +84,19 @@ function WholeFilm() {
         <div className="flex-1" />
         <Button size="sm" variant={has && !stale ? "outline" : "primary"} disabled={working}
           title={has && !stale ? "Every clip's preview is up to date, so this only joins them again (a second). Use the box below to change the film." : "Makes the missing or out-of-date previews, then joins them all"}
-          onClick={() => P.act("Whole 3D film", () => api.scene3dMakeFilm(P.pid), has && !stale ? "Joining the 3D film again" : "Making the missing 3D previews and joining them, in the background")}>
+          onClick={async () => {
+            const r = await P.act("Whole 3D film", () => withPaidOK((ok) => api.scene3dMakeFilm(P.pid, false, ok)));
+            if (r && !r.needs_confirm) toast({ text: (has && !stale ? "Joining the 3D film again" : "Making the missing 3D previews and joining them, in the background")
+              + (r.using ? ` — voices by ${r.using}` : ""), tone: "ok" });
+          }}>
           {working ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Film className="h-3.5 w-3.5" />}{!has ? "Make the whole 3D film" : stale ? "Update the film" : "Join again"}
         </Button>
         {has && (
           <Button size="sm" variant="outline" disabled={working} title="Plans every clip's 3D scene afresh from its script, then renders and joins them (takes minutes)"
             onClick={() => {
               if (!window.confirm("Plan every 3D scene again from the scripts?\n\nEach clip gets a new layout and camera, then is rendered again. It takes a few minutes and uses your AI brain. Changes you asked for in single clips are replaced. One Undo (Ctrl/⌘ Z) brings the old scenes back.")) return;
-              P.act("Whole 3D film", () => api.scene3dMakeFilm(P.pid, true), "Planning every 3D scene again, then rendering and joining them, in the background");
+              P.act("Whole 3D film", () => withPaidOK((ok) => api.scene3dMakeFilm(P.pid, true, ok))).then((r) => r && !r.needs_confirm && toast({
+                text: "Planning every 3D scene again, then rendering and joining them, in the background" + (r.using ? ` — voices by ${r.using}` : ""), tone: "ok" }));
             }}>
             <Sparkles className="h-3.5 w-3.5" />Plan every scene again
           </Button>

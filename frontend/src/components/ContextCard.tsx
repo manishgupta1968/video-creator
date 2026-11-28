@@ -2,7 +2,7 @@ import { AudioLines, Box, Building2, FileText, Film, Image as ImageIcon, MapPin,
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, Ctx, fileUrl } from "../api";
-import { CTX_ROLES, CTX_TYPES, useP, useSettings } from "../lib";
+import { CTX_ROLES, CTX_TYPES, useP, useSettings, withPaidOK } from "../lib";
 import Model3DSection from "./Model3DSection";
 import PictureSection from "./PictureSection";
 import StockSearch from "./StockSearch";
@@ -206,7 +206,7 @@ export function ContextDialog({ item, open, onOpenChange }: { item: Ctx; open: b
                 {a?.voice_note && <div className="mt-1 rounded-md bg-warn/10 px-2 py-1 text-[11px] text-warn">{a.voice_note}</div>}
                 <div className="mt-1 flex flex-wrap items-center gap-2">
                   <Button help="preview-voice" size="sm" variant="ghost" loading={P.busy.includes("Voice preview")}
-                    onClick={async () => { const r: any = await P.act("Voice preview", () => api.voicePreview(P.pid, item.id)); if (r?.url) { setPlaying(r.url); } }}>
+                    onClick={async () => { const r: any = await P.act("Voice preview", () => withPaidOK((ok) => api.voicePreview(P.pid, item.id, ok))); if (r?.url) { setPlaying(r.url); } }}>
                     <Play className="h-3 w-3" />Preview voice</Button>
                   {!a?.voice_sample && (
                     <Button help="voice-next" size="sm" variant="ghost" loading={P.busy.includes("Another voice")}

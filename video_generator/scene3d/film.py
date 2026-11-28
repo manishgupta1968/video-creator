@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -94,7 +95,41 @@ def _free_voice(svc, language: str):
     return None
 
 
-async def clip_voice(svc, pid: str, node, mode: str) -> tuple[Optional[Path], str]:
+def _paid_voice_entry(svc, project, node):
+    """The voice service the real video would use for this clip, when it costs money per call (else None)."""
+    from ..estimate import plan_clip
+    try:
+        e = plan_clip(project, node, svc.reg).voice
+    except Exception:
+        return None
+    return e if e is not None and not e.is_free and e.price.unit != "subscription" and e.unit_price > 0 else None
+
+
+def voice_quote(svc, pid: str) -> Optional[dict]:
+    """What making the real voices for the 3D film would cost (only clips whose voice is not made yet), or None."""
+    p = svc.load(pid)
+    if p.settings.scene3d.film_voice != "service":
+        return None
+    base = ProjectStore.path_for(pid)
+    usd, clips, services = 0.0, [], set()
+    nums = numbering(p)
+    for n in leaves(p):
+        if n.kind != NodeKind.clip or (n.voice_audio and (base / n.voice_audio).exists()):
+            continue
+        words = [w for sp, w, _ in _lines(p, n) if sp != "(your recording)"]
+        e = _paid_voice_entry(svc, p, n) if words else None
+        if e is None:
+            continue
+        usd += sum(len(w) for w in words) / 1000 * e.unit_price
+        clips.append(nums.get(n.id, ""))
+        services.add(e.vendor or e.id)
+    if not clips:
+        return None
+    return {"service": ", ".join(sorted(services)), "what": f"the real voice for clip {', '.join(clips)} (the video reuses it later)",
+            "usd": round(max(usd, 0.01), 2)}
+
+
+async def clip_voice(svc, pid: str, node, mode: str, allow_paid: bool = True) -> tuple[Optional[Path], str]:
     """The spoken words of one clip as one sound file, and where they came from. The voice made for the real video is
     used when it exists (its words have not changed since); else your voice service ("service": made once, and the
     video reuses it), else your computer's own voice (free, rough, but it shows the timing)."""
@@ -106,6 +141,11 @@ async def clip_voice(svc, pid: str, node, mode: str) -> tuple[Optional[Path], st
     base = ProjectStore.path_for(pid)
     if node.voice_audio and (base / node.voice_audio).exists():
         return base / node.voice_audio, "the voice made for the video"
+    paid_note = ""
+    if mode == "service" and not allow_paid and _paid_voice_entry(svc, p, node) is not None:
+        mode = "free"          # never spend money without your OK: the free voice stands in, and the note says so
+        paid_note = ("your computer's own voice — the real voice costs money, so it is made only when you click "
+                     "\"Update the film\" and agree")
     if mode == "service":
         try:
             engine = getattr(svc, "engine", None)
@@ -121,7 +161,7 @@ async def clip_voice(svc, pid: str, node, mode: str) -> tuple[Optional[Path], st
         else:
             note = "your voice service gave no sound, so your computer's voice is used"
     else:
-        note = "your computer's own voice (free preview)"
+        note = paid_note or "your computer's own voice (free preview)"
     stamp = [int((base / w).stat().st_mtime) if sp == "(your recording)" and (base / w).exists() else 0 for sp, w, _ in lines]
     key = hashlib.sha1(json.dumps([lines, stamp]).encode()).hexdigest()[:12]
     out = base / "film3d" / "voice" / f"{node.id}_{key}.wav"
@@ -175,11 +215,32 @@ def _what_was_done(reports, nums: dict, replan: bool) -> list[str]:
     return lines
 
 
+_MAKING: set[str] = set()
+
+
 async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str] = None, replan: bool = False,
-                    done: Optional[list[str]] = None) -> Scene3DFilm:
+                    done: Optional[list[str]] = None, allow_paid: bool = False) -> Scene3DFilm:
     """Make (and, with prepare, first plan, fix and render) every clip's 3D preview, then join them into the film.
-    replan: plan every scene afresh first. The film's notes say what was really done."""
+    replan: plan every scene afresh first. The film's notes say what was really done. One at a time per project."""
+    if pid in _MAKING:
+        raise FilmError("The 3D film is already being made. Wait for it to finish.")
+    _MAKING.add(pid)
+    try:
+        return await _make_film(svc, pid, prepare, renderer, replan, done, allow_paid)
+    finally:
+        _MAKING.discard(pid)
+
+
+async def _make_film(svc, pid: str, prepare: bool, renderer: Optional[str], replan: bool,
+                     done: Optional[list[str]], allow_paid: bool = False) -> Scene3DFilm:
     done = list(done or [])
+    # 1. the spoken words FIRST: the real voice can change a clip's length, and each 3D preview must be planned and
+    #    rendered at its final length (made after, a fresh preview went out of date at once and was shown as a card)
+    mode = svc.load(pid).settings.scene3d.film_voice
+    voices: dict[str, tuple[Optional[Path], str]] = {}
+    for leaf in leaves(svc.load(pid)):
+        if leaf.kind == NodeKind.clip:
+            voices[leaf.id] = await clip_voice(svc, pid, leaf, mode, allow_paid)
     if prepare:
         from .agent import prepare_all
         mark = ProjectStore.history_mark(svc.load(pid)) if replan else None    # new plans for every scene: ONE undo step
@@ -191,14 +252,12 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
         done += _what_was_done(reports, numbering(svc.load(pid)), replan)
     p = svc.load(pid)
     base = ProjectStore.path_for(pid)
-    out = base / "film3d"
+    root = base / "film3d"
+    # 2. every film is made in its own folder; the film you have is replaced only when the new one is complete, and
+    #    the one before is kept (stopping the tool half-way never loses a film)
+    out = root / f"run_{int(time.time() * 1000)}"
     out.mkdir(parents=True, exist_ok=True)
-    mode = p.settings.scene3d.film_voice
-    voices: dict[str, tuple[Optional[Path], str]] = {}
-    for leaf in leaves(p):                       # the spoken words of each clip, made before the film is joined
-        if leaf.kind == NodeKind.clip:
-            voices[leaf.id] = await clip_voice(svc, pid, leaf, mode)
-    p = svc.load(pid)
+    previous = p.scene3d_film
     size = media.frame_size(p.settings.aspect, REFERENCE_RESOLUTION)
     fps = p.settings.fps
     nums = numbering(p)
@@ -207,6 +266,7 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
     audio_for: dict[int, str] = {}               # piece number -> the sound file of its spoken words (for Blender)
     heard: list[str] = []
     timing: list[str] = []
+    outdated: list[str] = []
 
     def build() -> None:
         for i, leaf in enumerate(leaves(p), 1):
@@ -215,9 +275,13 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
             s = leaf.scene3d
             why = _why_none(p, leaf)
             label = f"{nums.get(leaf.id, '')} · {leaf.title}"
-            if leaf.kind == NodeKind.clip and s and s.video and not s3.stale_reason(leaf):
+            if leaf.kind == NodeKind.clip and s and s.video and (base / s.video).exists():
                 media.normalize_clip(base / s.video, piece, size, fps, seconds=secs, keep_audio=False, fill="black")
                 source = "3d"
+                late = s3.stale_reason(leaf)
+                if late:                         # a 3D preview that is a little out of date is still shown, never a blank card
+                    outdated.append(f"Clip {nums.get(leaf.id, '')}: its 3D preview is out of date ({late}); the last one is shown. "
+                                    "Update the film to render it again.")
             elif leaf.kind == NodeKind.user_clip and leaf.media and (base / leaf.media).exists() and \
                     (base / leaf.media).suffix.lower() in (".mp4", ".mov", ".m4v", ".webm", ".mkv"):
                 media.normalize_clip(base / leaf.media, piece, size, fps, seconds=secs, keep_audio=False, fill="black")
@@ -255,7 +319,7 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
     notes: list[str] = done
     if heard:
         notes.append("Spoken words: " + "; ".join(heard) + ".")
-    notes += timing
+    notes += timing + outdated
     blend: Optional[Path] = None
     exe = find_blender(svc.config.blender_path)
     if exe:
@@ -278,7 +342,19 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
     p = svc.load(pid)
     film = Scene3DFilm(video=str((out / "film.mp4").relative_to(base)), blend=str(blend.relative_to(base)) if blend else None,
                        parts=parts, seconds=round(sum(pt.seconds for pt in parts), 2), signature=signature(p),
-                       notes=notes, updated_at=now_iso())
+                       notes=notes, updated_at=now_iso(),
+                       previous_video=(previous.video if previous and previous.video else None),
+                       previous_blend=(previous.blend if previous and previous.blend else None))
     p.scene3d_film = film
     svc.save(p, snapshot=False)
+    _tidy(root, keep={film.video, film.previous_video, film.blend, film.previous_blend}, base=base)
     return film
+
+
+def _tidy(root: Path, keep: set, base: Path) -> None:
+    """Keep the film folders of the current and the previous film; remove older ones (and unfinished ones)."""
+    import shutil as _sh
+    wanted = {str((base / k).parent) for k in keep if k}
+    for d in root.glob("run_*"):
+        if d.is_dir() and str(d) not in wanted:
+            _sh.rmtree(d, ignore_errors=True)

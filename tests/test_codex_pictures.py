@@ -129,8 +129,8 @@ def test_the_screen_shows_the_picture_maker_and_makes_a_picture(codex, svc, monk
     with TestClient(appmod.app) as client:
         assert client.get("/api/pictures/maker").json()["name"] == "Codex"
         r = client.post(f"/api/projects/{p.id}/context/{p.context[0].id}/picture", json={}).json()
-        assert r == {"ok": True, "by": "Codex"}
-        for _ in range(100):
+        assert r == {"ok": True, "by": "Codex", "using": "Codex (your subscription)"}     # it says which service is used
+        for _ in range(600):              # the computer may be busy: up to a minute
             if svc.load(p.id).context[0].picture:
                 break
             asyncio.run(asyncio.sleep(0.1))

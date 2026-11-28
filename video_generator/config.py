@@ -53,6 +53,8 @@ class Config(BaseModel):
     quality_mode: str = "balanced"        # best | balanced | budget | free
     disabled_models: list[str] = Field(default_factory=list)
     preferred_models: dict[str, str] = Field(default_factory=dict)  # shot_type/job -> catalog id
+    # ask before any step outside "Generate" uses a paid service (the 3D film's real voices, a paid picture service)
+    confirm_paid: bool = True
     projects_dir: str = ""
     max_parallel_jobs: int = 4
     user_name: str = ""

@@ -67,6 +67,8 @@ export interface Ctx {
   picture?: { file: string; by: string; described_by?: string; prompt: string; changes: string[]; at: string } | null;
   consent: { confirmed: boolean; statement: string; confirmed_by: string; confirmed_at: string; files: string[] }; analysis: Record<string, any>;
 }
+/** A step outside Generate that would use a paid service: the screen asks you first. */
+export interface Paid { needs_confirm?: boolean; quote?: { service: string; what: string; usd: number } }
 export interface MissingItem { type: "actor" | "object" | "location"; title: string; description: string; kind: string; clips: string[]; why: string }
 export interface Dep { id: string; from_id: string; to_id: string; type: string; source: string; note: string; payload: Record<string, any> }
 export interface ReviewJoin { judged: boolean; why_not: string; previous: string; kind: string; reason: string; transition: string; previous_frame: string | null; this_frame: string | null; difference: number | null; limit: number }
@@ -206,7 +208,7 @@ export const api = {
   moveNode: (pid: string, nid: string, parent_id: string, index: number) => req<View>("POST", `${P(pid)}/nodes/${nid}/move`, { parent_id, index }),
   decompose: (pid: string, nid: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/decompose`),
   writeScript: (pid: string, nid: string, feedback = "") => req<View>("POST", `${P(pid)}/nodes/${nid}/script`, { feedback }),
-  ask: (pid: string, nid: string, request: string) => req<{ view: View; story: string; scene: string; note: string }>("POST", `${P(pid)}/nodes/${nid}/ask`, { request }),
+  ask: (pid: string, nid: string, request: string) => req<{ view: View; story: string; scene: string; note: string; brain?: string; brain_paid?: boolean }>("POST", `${P(pid)}/nodes/${nid}/ask`, { request }),
   scene3dCheck: (pid: string, nid: string, fresh = false) => req<{ ok: boolean }>("POST", `${P(pid)}/nodes/${nid}/scene3d/check`, { fresh }),
   revise: (pid: string, nid: string, instruction: string) => req<View>("POST", `${P(pid)}/nodes/${nid}/revise`, { instruction }),
   writeScripts: (pid: string, under?: string, overwrite = false) => req<View>("POST", `${P(pid)}/scripts`, { under, overwrite }),
@@ -214,7 +216,7 @@ export const api = {
   toggleContext: (pid: string, nid: string, cid: string, off: boolean) => req<View>("POST", `${P(pid)}/nodes/${nid}/context/${cid}/toggle`, { off }),
 
   planCommand: (pid: string, text: string, focus?: string) => req<CommandPlan>("POST", `${P(pid)}/command/plan`, { text, focus }),
-  applyCommand: (pid: string, plan: CommandPlan) => req<View & { actions: any; run: any }>("POST", `${P(pid)}/command/apply`, { plan }),
+  applyCommand: (pid: string, plan: CommandPlan) => req<View & { actions: any; run: any; confirm_run?: { mode: string; targets: string[] | null } | null }>("POST", `${P(pid)}/command/apply`, { plan }),
 
   addContext: (pid: string, body: any) => req<View & { new_id: string }>("POST", `${P(pid)}/context`, body),
   upload: (pid: string, files: File[], opts: { scope?: string; ctx_id?: string; hint?: string; as_node?: boolean } = {}) => {
@@ -244,7 +246,7 @@ export const api = {
   stockSearch: (q: string, source: string) => req<{ sources: string[]; results: StockPhoto[] }>("GET", `/api/stock/search?q=${encodeURIComponent(q)}&source=${source}`),
   autoPhoto: (pid: string, cid: string) => req<any>("POST", `${P(pid)}/context/${cid}/auto-photo`),
   stockAdd: (pid: string, cid: string, photo: StockPhoto) => req<View>("POST", `${P(pid)}/context/${cid}/stock`, photo),
-  voicePreview: (pid: string, cid: string) => req<{ url: string; name?: string }>("POST", `${P(pid)}/context/${cid}/voice-preview`),
+  voicePreview: (pid: string, cid: string, confirm = false) => req<{ url?: string; name?: string } & Paid>("POST", `${P(pid)}/context/${cid}/voice-preview`, { confirm }),
   voiceNext: (pid: string, cid: string) => req<View>("POST", `${P(pid)}/context/${cid}/voice-next`),
 
   addDep: (pid: string, from_id: string, to_id: string, type: string) => req<View>("POST", `${P(pid)}/deps`, { from_id, to_id, type }),
@@ -282,13 +284,13 @@ export const api = {
   findMissing: (pid: string) => req<{ items: MissingItem[]; note: string }>("POST", `${P(pid)}/context/missing`, {}),
   addMissing: (pid: string, items: MissingItem[]) => req<View & { added: string[] }>("POST", `${P(pid)}/context/missing/add`, { items }),
   pictureMaker: () => req<{ id: string; name: string; subscription: boolean; price: number; why: string; brain: string; brain_name: string; note: string }>("GET", "/api/pictures/maker"),
-  makePicture: (pid: string, cid: string, change = "") => req<{ ok: boolean; by: string }>("POST", `${P(pid)}/context/${cid}/picture`, { change }),
+  makePicture: (pid: string, cid: string, change = "", confirm = false) => req<{ ok?: boolean; by?: string; using?: string } & Paid>("POST", `${P(pid)}/context/${cid}/picture`, { change, confirm }),
   model3dBuild: (pid: string, cid: string, change = "") => req<{ ok: boolean }>("POST", `${P(pid)}/context/${cid}/model3d/build`, { change }),
   model3dBrief: (pid: string, cid: string) => req<View>("POST", `${P(pid)}/context/${cid}/model3d/brief`),
   model3dOpen: (pid: string, cid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/context/${cid}/model3d/open`),
   scene3dFilm: (pid: string) => req<{ film: Scene3DFilm | null; stale: string }>("GET", `${P(pid)}/scene3d/film`),
   scene3dChangeFilm: (pid: string, request: string) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/film/change`, { request }),
-  scene3dMakeFilm: (pid: string, replan = false) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/film`, { prepare: true, replan }),
+  scene3dMakeFilm: (pid: string, replan = false, confirm = false) => req<{ ok?: boolean; using?: string } & Paid>("POST", `${P(pid)}/scene3d/film`, { prepare: true, replan, confirm }),
   scene3dOpenFilm: (pid: string) => req<{ path: string; note: string }>("POST", `${P(pid)}/scene3d/film/open`),
   scene3dAll: (pid: string, body: { fix?: boolean; renderer?: string } = {}) => req<{ ok: boolean }>("POST", `${P(pid)}/scene3d/all`, body),
   fixContinuity: (pid: string, body: { action: string; node?: string; join?: string }) => req<View>("POST", `${P(pid)}/continuity/fix`, body),
@@ -304,6 +306,7 @@ export const api = {
   settings: () => req<any>("GET", "/api/settings"),
   patchSettings: (patch: any) => req<any>("PATCH", "/api/settings", patch),
   setKey: (name: string, value: string) => req<any>("POST", "/api/settings/keys", { name, value }),
+  balances: () => req<{ services: { service: string; connected: boolean; left: string; problem: string; spent_usd: number; link: string }[] }>("GET", "/api/settings/balances"),
   subscriptionModels: () => req<Record<"claude_code" | "codex", { models: { id: string; name: string; note: string; efforts?: { id: string; note: string }[]; default_effort?: string }[]; problem: string }>>("GET", "/api/settings/subscription-models"),
   brainTest: (kind = "default") => req<{ plugin: string; model: string; ok: boolean; seconds: number; answer: string; error: string }>("POST", "/api/settings/brain-test", { kind }),
   testPlugin: (plugin: string) => req<{ ok: boolean; message: string }>("POST", "/api/settings/test", { plugin }),

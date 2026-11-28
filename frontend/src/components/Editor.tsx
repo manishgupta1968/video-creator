@@ -223,6 +223,7 @@ function AskAI({ node, placeholder }: { node: Node; placeholder: string }) {
       setText("");
       const parts = [r.note || (r.story ? "The story was changed." : "")];
       if (r.scene) parts.push("The 3D scene is being changed in the background — the new preview" + (P.view!.project.settings.scene3d.ai_check ? " and the AI check" : "") + " appear in the 3D box.");
+      if (r.brain) parts.push(`(AI brain: ${r.brain}${r.brain_paid ? " — a paid API, about a cent per request" : ""})`);
       toast({ text: parts.filter(Boolean).join(" ") || "Done", tone: "ok", action: { label: "Undo", run: async () => P.set(await api.undo(P.pid)) } });
     }
   };

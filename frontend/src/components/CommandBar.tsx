@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 import { api, CommandPlan } from "../api";
 import { findNode, useP } from "../lib";
 import { Button } from "../ui";
+import { useRun } from "./ConfirmRun";
 
 const EXAMPLES = ["make the hook shorter", "give Priya a blue kurta in all clips", "generate the next clip", "Why does this cost $0.23?"];
 const QUESTION = /\?\s*$|^\s*(what|why|how|when|where|which|who|is|are|can|could|does|do|will|should|explain|tell me|show me how)\b/i;
 
 export default function CommandBar({ open, onOpenChange, initialText }: { open: boolean; onOpenChange: (v: boolean) => void; initialText?: string }) {
   const P = useP();
+  const runConfirm = useRun();
   const [text, setText] = useState("");
   const [plan, setPlan] = useState<CommandPlan | null>(null);
   const [loading, setLoading] = useState(false);
@@ -37,7 +39,11 @@ export default function CommandBar({ open, onOpenChange, initialText }: { open: 
     setLoading(true);
     const r = await P.act("Applying", () => api.applyCommand(P.pid, plan!), "Done — Ctrl+Z to undo");
     setLoading(false);
-    if (r) onOpenChange(false);
+    if (r) {
+      onOpenChange(false);
+      // making clips costs money: the same confirmation as every Generate button (cost and time first)
+      if (r.confirm_run) runConfirm({ mode: r.confirm_run.mode, targets: r.confirm_run.targets || undefined, title: "Generate" });
+    }
   };
   return (
     <DialogP.Root open={open} onOpenChange={onOpenChange}>

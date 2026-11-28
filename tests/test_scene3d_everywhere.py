@@ -186,7 +186,7 @@ def test_the_screen_makes_and_shows_the_film(svc, monkeypatch):
     with TestClient(appmod.app) as client:
         base = f"/api/projects/{p.id}/scene3d/film"
         assert client.get(base).json() == {"film": None, "stale": "the whole 3D film has not been made yet"}
-        assert client.post(base, json={}).json() == {"ok": True}
+        assert client.post(base, json={}).json()["ok"] is True
         for _ in range(300):
             d = client.get(base).json()
             if d["film"]:
