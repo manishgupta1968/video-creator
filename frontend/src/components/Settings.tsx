@@ -34,6 +34,9 @@ export default function SettingsDialog({ open, onOpenChange, tab: initialTab }: 
                   <Select value={d.config.quality_mode} onChange={(v) => patch({ quality_mode: v })}
                     options={[{ value: "best", label: "Best" }, { value: "balanced", label: "Balanced" }, { value: "budget", label: "Budget" }, { value: "free", label: "Free preview" }]} />
                 </Row>
+                <Row label="Ask before a paid step" hint="Outside Generate (which always shows the cost first): the 3D film's real voices, a picture from a paid service, a voice sample. You are told the service and about how much.">
+                  <Switch checked={d.config.confirm_paid !== false} onChange={(v) => patch({ confirm_paid: v })} />
+                </Row>
                 <Row label="Voice made by" hint="Who makes the spoken words. Google and OpenAI follow the accent you choose on each card; ElevenLabs and Cartesia can also copy a voice from a sample.">
                   <Select value={(d.config.preferred_models || {}).voice || ""} onChange={(v) => {
                     const pm = { ...(d.config.preferred_models || {}) };

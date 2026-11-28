@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image as ImageIcon, RefreshCw, Send } from "lucide-react";
 import { api, Ctx, fileUrl } from "../api";
-import { fmtUsd, useDraft, useP } from "../lib";
+import { fmtUsd, useDraft, useP, useToast, withPaidOK } from "../lib";
 import { Button } from "../ui";
 
 /** A picture of a character or object, made for you: by Codex with your ChatGPT subscription when it is installed
@@ -18,8 +18,12 @@ export default function PictureSection({ item }: { item: Ctx }) {
   const m = maker.data;
   const pic = item.picture;
   const cost = !m?.name ? "" : m.subscription ? "your subscription, no per-picture cost" : `about ${fmtUsd(m.price)} a picture`;
-  const make = (change = "") => P.act(label, () => api.makePicture(P.pid, item.id, change),
-    change ? `${m?.name || "The picture maker"} is changing the picture, in the background (about a minute)` : `${m?.name || "The picture maker"} is making the picture, in the background (about a minute)`);
+  const toast = useToast();
+  const make = async (change = "") => {
+    const r = await P.act(label, () => withPaidOK((ok) => api.makePicture(P.pid, item.id, change, ok)));
+    if (r && !r.needs_confirm) toast({ text: `${change ? "Changing" : "Making"} the picture in the background (about a minute) — ${r.using || m?.name || ""}`, tone: "ok" });
+    return r;
+  };
   return (
     <div className="space-y-2 rounded-lg border border-line p-2.5 text-xs">
       <div className="flex flex-wrap items-center gap-2">

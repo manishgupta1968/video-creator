@@ -296,7 +296,7 @@ async def ask_ai(pid: str, nid: str, body: dict = Body(...)):
         idx = ag.remember_ask(svc, pid, where, request)
         await guard(svc.revise)(pid, nid, request)
         ag._result(svc, pid, idx, "Story changed.")
-        return {"view": view(pid), "story": request, "scene": "", "note": "The story was changed."}
+        return {"view": view(pid), "story": request, "scene": "", "note": "The story was changed.", **_brain_used()}
     try:
         route = await svc.brain.ask_route(p, n, request)
     except PluginError as exc:
@@ -311,7 +311,16 @@ async def ask_ai(pid: str, nid: str, body: dict = Body(...)):
     if route.scene.strip():
         label = f"3D change {numbering(svc.load(pid)).get(nid, '')}" if n.kind == NodeKind.clip else "Whole 3D film"
         bg(_scene3d_call(ag.apply_scene_change, svc, pid, nid, route.scene.strip(), idx)(), pid, label)
-    return {"view": view(pid), "story": route.story.strip(), "scene": route.scene.strip(), "note": route.note}
+    return {"view": view(pid), "story": route.story.strip(), "scene": route.scene.strip(), "note": route.note, **_brain_used()}
+
+
+def _brain_used() -> dict:
+    """Which AI brain answered, and whether it is a paid API (told on the screen; each call costs about a cent)."""
+    from ..pictures import BRAIN_WORDS
+    name = svc.reg.llm_plugin_name("default")
+    e = svc.reg.llm_entry("default")
+    paid = bool(e and not e.is_free and e.price.unit != "subscription")
+    return {"brain": BRAIN_WORDS.get(name, name), "brain_paid": paid}
 
 
 @app.post("/api/projects/{pid}/nodes/{nid}/scene3d/check")
@@ -361,14 +370,15 @@ async def command_apply(pid: str, body: dict = Body(...)):
     plan = CommandPlan.model_validate(body["plan"])
     actions = await guard(svc.apply_command)(pid, plan)
     gen = actions.get("generate")
-    run = None
+    confirm_run = None
     if gen:
+        # making clips costs money: never started from here; the screen shows the cost and asks, as every Generate does
         nums = {v: k for k, v in numbering(svc.load(pid)).items()}
         if gen in ("all", "next"):
-            run = await engine.start(pid, gen)
+            confirm_run = {"mode": gen, "targets": None}
         elif gen in nums:
-            run = await engine.start(pid, "clip", [nums[gen]])
-    return {**view(pid), "actions": actions, "run": run}
+            confirm_run = {"mode": "clip", "targets": [nums[gen]]}
+    return {**view(pid), "actions": actions, "run": None, "confirm_run": confirm_run}
 
 
 # ===================================================================== context
@@ -469,7 +479,7 @@ async def consent(pid: str, cid: str, body: dict = Body(...)):
 
 
 @app.post("/api/projects/{pid}/context/{cid}/voice-preview")
-async def voice_preview(pid: str, cid: str):
+async def voice_preview(pid: str, cid: str, body: dict = Body(default={})):
     """Speak a short sample in this actor's voice (cloned if consented, else the voice chosen for their profile)."""
     from .. import casting
     from ..context import item_by_id
@@ -477,6 +487,11 @@ async def voice_preview(pid: str, cid: str):
     item = item_by_id(p, cid)
     entry = svc.reg.choose("voice", mode=p.settings.quality_mode)
     plugin = svc.reg.plugin(entry.plugin)
+    text = f"Hello, I am {item.title}. This is how I will sound in your video."
+    price = 0.0 if entry.is_free or entry.price.unit == "subscription" else len(text) / 1000 * entry.unit_price
+    if price > 0 and svc.config.confirm_paid and not body.get("confirm"):
+        return {"needs_confirm": True, "quote": {"service": entry.vendor or entry.id, "what": f"a short voice sample of {item.title}",
+                                                  "usd": round(max(price, 0.01), 2)}}
     try:
         a = item.actor
         if a and not (a.voice_id and a.voice_provider == entry.plugin) and not entry.is_free:
@@ -488,8 +503,10 @@ async def voice_preview(pid: str, cid: str):
         vid = a.voice_id if a and a.voice_provider == entry.plugin else None
         out = ProjectStore.path_for(pid) / "cast" / cid / "preview.wav"
         out.parent.mkdir(parents=True, exist_ok=True)
-        text = f"Hello, I am {item.title}. This is how I will sound in your video."
         await plugin.synthesize(text, casting.spec_from(prof, vid), out, entry.model)
+        if price > 0:
+            ProjectStore.ledger_add(pid, {"kind": "voice", "what": f"voice sample of {item.title}", "plugin": entry.plugin,
+                                          "catalog_id": entry.id, "estimated_usd": round(price, 4), "actual_usd": round(price, 4)})
         fitted, _, _ = await asyncio.to_thread(casting.fit_voice, out, prof, None)
         if fitted != out:
             shutil.move(str(fitted), str(out))
@@ -849,10 +866,13 @@ async def scene3d_film(pid: str):
 async def scene3d_make_film(pid: str, body: dict = Body(default={})):
     """Make every clip's missing 3D preview (plan, check, fix, render) and join them all, in the background."""
     from ..scene3d import film
+    quote = film.voice_quote(svc, pid)
+    if quote and svc.config.confirm_paid and not body.get("confirm"):
+        return {"needs_confirm": True, "quote": quote}             # the screen asks you first; nothing has started
     _film_start(pid)
-    bg(_film_done(pid, film.make_film(svc, pid, prepare=bool(body.get("prepare", True)), replan=bool(body.get("replan", False)))),
-       pid, "Whole 3D film")
-    return {"ok": True}
+    bg(_film_done(pid, film.make_film(svc, pid, prepare=bool(body.get("prepare", True)), replan=bool(body.get("replan", False)),
+                                      allow_paid=True)), pid, "Whole 3D film")
+    return {"ok": True, "using": (f"{quote['service']} (paid, about ${quote['usd']:.2f})" if quote else "")}
 
 
 FILM_RUNS: set[str] = set()
@@ -930,8 +950,13 @@ async def make_picture(pid: str, cid: str, body: dict = Body(default={})):
     e, why = pictures.picture_maker(svc)
     if e is None:
         raise HTTPException(400, why)
+    paid = e.price.unit != "subscription" and e.unit_price > 0
+    if paid and svc.config.confirm_paid and not body.get("confirm"):
+        return {"needs_confirm": True, "quote": {"service": pictures.maker_name(e), "what": f"one picture of {item.title}",
+                                                  "usd": round(e.unit_price, 2)}}
     bg(pictures.make_item_picture(svc, pid, cid, str(body.get("change") or "")), pid, f"Picture {item.title}")
-    return {"ok": True, "by": pictures.maker_name(e)}
+    return {"ok": True, "by": pictures.maker_name(e),
+            "using": f"{pictures.maker_name(e)} ({'paid, about $' + format(e.unit_price, '.2f') if paid else 'your subscription'})"}
 
 
 @app.post("/api/projects/{pid}/context/{cid}/model3d/build")

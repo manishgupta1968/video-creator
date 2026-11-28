@@ -95,7 +95,41 @@ def _free_voice(svc, language: str):
     return None
 
 
-async def clip_voice(svc, pid: str, node, mode: str) -> tuple[Optional[Path], str]:
+def _paid_voice_entry(svc, project, node):
+    """The voice service the real video would use for this clip, when it costs money per call (else None)."""
+    from ..estimate import plan_clip
+    try:
+        e = plan_clip(project, node, svc.reg).voice
+    except Exception:
+        return None
+    return e if e is not None and not e.is_free and e.price.unit != "subscription" and e.unit_price > 0 else None
+
+
+def voice_quote(svc, pid: str) -> Optional[dict]:
+    """What making the real voices for the 3D film would cost (only clips whose voice is not made yet), or None."""
+    p = svc.load(pid)
+    if p.settings.scene3d.film_voice != "service":
+        return None
+    base = ProjectStore.path_for(pid)
+    usd, clips, services = 0.0, [], set()
+    nums = numbering(p)
+    for n in leaves(p):
+        if n.kind != NodeKind.clip or (n.voice_audio and (base / n.voice_audio).exists()):
+            continue
+        words = [w for sp, w, _ in _lines(p, n) if sp != "(your recording)"]
+        e = _paid_voice_entry(svc, p, n) if words else None
+        if e is None:
+            continue
+        usd += sum(len(w) for w in words) / 1000 * e.unit_price
+        clips.append(nums.get(n.id, ""))
+        services.add(e.vendor or e.id)
+    if not clips:
+        return None
+    return {"service": ", ".join(sorted(services)), "what": f"the real voice for clip {', '.join(clips)} (the video reuses it later)",
+            "usd": round(max(usd, 0.01), 2)}
+
+
+async def clip_voice(svc, pid: str, node, mode: str, allow_paid: bool = True) -> tuple[Optional[Path], str]:
     """The spoken words of one clip as one sound file, and where they came from. The voice made for the real video is
     used when it exists (its words have not changed since); else your voice service ("service": made once, and the
     video reuses it), else your computer's own voice (free, rough, but it shows the timing)."""
@@ -107,6 +141,11 @@ async def clip_voice(svc, pid: str, node, mode: str) -> tuple[Optional[Path], st
     base = ProjectStore.path_for(pid)
     if node.voice_audio and (base / node.voice_audio).exists():
         return base / node.voice_audio, "the voice made for the video"
+    paid_note = ""
+    if mode == "service" and not allow_paid and _paid_voice_entry(svc, p, node) is not None:
+        mode = "free"          # never spend money without your OK: the free voice stands in, and the note says so
+        paid_note = ("your computer's own voice — the real voice costs money, so it is made only when you click "
+                     "\"Update the film\" and agree")
     if mode == "service":
         try:
             engine = getattr(svc, "engine", None)
@@ -122,7 +161,7 @@ async def clip_voice(svc, pid: str, node, mode: str) -> tuple[Optional[Path], st
         else:
             note = "your voice service gave no sound, so your computer's voice is used"
     else:
-        note = "your computer's own voice (free preview)"
+        note = paid_note or "your computer's own voice (free preview)"
     stamp = [int((base / w).stat().st_mtime) if sp == "(your recording)" and (base / w).exists() else 0 for sp, w, _ in lines]
     key = hashlib.sha1(json.dumps([lines, stamp]).encode()).hexdigest()[:12]
     out = base / "film3d" / "voice" / f"{node.id}_{key}.wav"
@@ -180,20 +219,20 @@ _MAKING: set[str] = set()
 
 
 async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str] = None, replan: bool = False,
-                    done: Optional[list[str]] = None) -> Scene3DFilm:
+                    done: Optional[list[str]] = None, allow_paid: bool = False) -> Scene3DFilm:
     """Make (and, with prepare, first plan, fix and render) every clip's 3D preview, then join them into the film.
     replan: plan every scene afresh first. The film's notes say what was really done. One at a time per project."""
     if pid in _MAKING:
         raise FilmError("The 3D film is already being made. Wait for it to finish.")
     _MAKING.add(pid)
     try:
-        return await _make_film(svc, pid, prepare, renderer, replan, done)
+        return await _make_film(svc, pid, prepare, renderer, replan, done, allow_paid)
     finally:
         _MAKING.discard(pid)
 
 
 async def _make_film(svc, pid: str, prepare: bool, renderer: Optional[str], replan: bool,
-                     done: Optional[list[str]]) -> Scene3DFilm:
+                     done: Optional[list[str]], allow_paid: bool = False) -> Scene3DFilm:
     done = list(done or [])
     # 1. the spoken words FIRST: the real voice can change a clip's length, and each 3D preview must be planned and
     #    rendered at its final length (made after, a fresh preview went out of date at once and was shown as a card)
@@ -201,7 +240,7 @@ async def _make_film(svc, pid: str, prepare: bool, renderer: Optional[str], repl
     voices: dict[str, tuple[Optional[Path], str]] = {}
     for leaf in leaves(svc.load(pid)):
         if leaf.kind == NodeKind.clip:
-            voices[leaf.id] = await clip_voice(svc, pid, leaf, mode)
+            voices[leaf.id] = await clip_voice(svc, pid, leaf, mode, allow_paid)
     if prepare:
         from .agent import prepare_all
         mark = ProjectStore.history_mark(svc.load(pid)) if replan else None    # new plans for every scene: ONE undo step

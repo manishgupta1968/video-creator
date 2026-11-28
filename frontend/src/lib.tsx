@@ -218,3 +218,18 @@ export function useDraft(key: string): [string, (v: string) => void] {
   const [text, setText] = useState(() => DRAFTS.get(key) || "");
   return [text, (v: string) => { if (v) DRAFTS.set(key, v); else DRAFTS.delete(key); setText(v); }];
 }
+
+
+/** Ask before a paid step (outside Generate): the service, what it makes, and about how much. true = go ahead. */
+export function okToPay(q: { service: string; what: string; usd: number }): boolean {
+  return window.confirm(`This uses ${q.service}, a paid service:\n${q.what}\nAbout $${q.usd.toFixed(2)}.\n\nContinue?`);
+}
+
+/** Call a step that may need your OK to pay: first without it; if the tool asks, ask you, then call again with it. */
+export async function withPaidOK<T extends { needs_confirm?: boolean; quote?: { service: string; what: string; usd: number } }>(
+  call: (confirm: boolean) => Promise<T>): Promise<T | null> {
+  const first = await call(false);
+  if (!first?.needs_confirm || !first.quote) return first;
+  if (!okToPay(first.quote)) return null;
+  return call(true);
+}
