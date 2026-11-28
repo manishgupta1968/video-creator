@@ -81,12 +81,14 @@ def speech_need(project: Project, node: Node) -> float:
     if not s:
         return 0.0
     lines = [(d.speaker, d.text) for d in s.dialogue if d.text.strip()]
-    if s.narration.strip():
-        lines.append(("narrator", s.narration))
-    if not lines:
+    recorded = s.narration_seconds if s.narration_audio and s.narration_seconds else 0.0
+    if s.narration.strip() and not recorded:
+        lines.append((s.narration_by or "narrator", s.narration))
+    if not lines and not recorded:
         return 0.0
-    speech = sum(_words(text) / speaking_wpm(project, node, speaker) * 60 for speaker, text in lines)
-    return speech + pol.line_pause * (len(lines) - 1) + 2 * pol.edge_pad
+    speech = sum(_words(text) / speaking_wpm(project, node, speaker) * 60 for speaker, text in lines) + recorded   # your recording's real length
+    count = len(lines) + (1 if recorded else 0)
+    return speech + pol.line_pause * (count - 1) + 2 * pol.edge_pad
 
 
 def clip_floor(project: Project, node: Node) -> tuple[float, str]:

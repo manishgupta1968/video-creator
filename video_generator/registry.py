@@ -43,6 +43,8 @@ BUILTINS = {
     "kling": "video_generator.plugins.video.kling:KlingVideo",
     "gpt_image": "video_generator.plugins.image.openai_image:OpenAIImage",
     "codex_image": "video_generator.plugins.image.codex_image:CodexImage",
+    "gemini_tts": "video_generator.plugins.voice.instructed_voices:GeminiVoice",
+    "openai_tts": "video_generator.plugins.voice.instructed_voices:OpenAIVoice",
     "nano_banana": "video_generator.plugins.image.gemini_image:GeminiImage",
     "heygen": "video_generator.plugins.avatar.heygen:HeyGenAvatar",
     "elevenlabs": "video_generator.plugins.voice.elevenlabs:ElevenLabsVoice",

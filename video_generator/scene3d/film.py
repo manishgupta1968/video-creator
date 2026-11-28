@@ -74,8 +74,11 @@ def _lines(project, node) -> list[tuple[str, str, str]]:
     if not sc:
         return []
     out = [(d.speaker, d.text.strip(), casting.line_language(project, d.speaker, d.language)) for d in sc.dialogue if d.text.strip()]
-    if sc.narration.strip():
-        out.append(("narrator", sc.narration.strip(), casting.line_language(project, "narrator", sc.narration_language)))
+    who = sc.narration_by or "narrator"
+    if sc.narration_audio:                       # your own recording (the path is part of the line, so a new one is noticed)
+        out.append(("(your recording)", sc.narration_audio, ""))
+    elif sc.narration.strip():
+        out.append((who, sc.narration.strip(), casting.line_language(project, who, sc.narration_language)))
     return out
 
 
@@ -119,13 +122,24 @@ async def clip_voice(svc, pid: str, node, mode: str) -> tuple[Optional[Path], st
             note = "your voice service gave no sound, so your computer's voice is used"
     else:
         note = "your computer's own voice (free preview)"
-    key = hashlib.sha1(json.dumps(lines).encode()).hexdigest()[:12]
+    stamp = [int((base / w).stat().st_mtime) if sp == "(your recording)" and (base / w).exists() else 0 for sp, w, _ in lines]
+    key = hashlib.sha1(json.dumps([lines, stamp]).encode()).hexdigest()[:12]
     out = base / "film3d" / "voice" / f"{node.id}_{key}.wav"
+    if len(lines) == 1 and lines[0][0] == "(your recording)":
+        note = "your own recording"
     if out.exists():
         return out, note
     out.parent.mkdir(parents=True, exist_ok=True)
     parts = []
     for i, (speaker, words, lang) in enumerate(lines):
+        if speaker == "(your recording)":
+            rec = base / words
+            if rec.exists():
+                part = out.parent / f"{node.id}_{key}_{i:02d}.wav"
+                await asyncio.to_thread(media.ff, "-i", str(rec), "-ar", "44100", "-ac", "1", str(part))
+                parts.append(part)
+                note = "your own recording" if len(lines) == 1 else note + " and your own recording"
+            continue
         plugin = _free_voice(svc, lang)
         if plugin is None:
             return None, "no voice on this computer (install espeak-ng, or choose your voice service)"

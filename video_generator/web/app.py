@@ -419,6 +419,20 @@ async def voice_recording(pid: str, cid: str, file: UploadFile = File(...), cons
     return view(pid)
 
 
+@app.post("/api/projects/{pid}/nodes/{nid}/narration-recording")
+async def narration_recording(pid: str, nid: str, file: UploadFile = File(...)):
+    """Your own recording of a clip's narration (recorded in the browser or uploaded), placed exactly as it is."""
+    data = await file.read()
+    await guard(svc.set_narration_recording)(pid, nid, data, file.filename or "")
+    return view(pid)
+
+
+@app.delete("/api/projects/{pid}/nodes/{nid}/narration-recording")
+async def clear_narration_recording(pid: str, nid: str):
+    await guard(svc.clear_narration_recording)(pid, nid)
+    return view(pid)
+
+
 @app.get("/api/stock/search")
 async def stock_search(q: str, source: str = "wikimedia"):
     try:

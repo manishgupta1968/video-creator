@@ -208,6 +208,9 @@ class ClipScript(BaseModel):
     narration_fixed: bool = False       # the narration must be spoken exactly as written
     narration_language: str = ""        # the language of the narration (a short code); "" = the video's language
     narration_translation: str = ""     # the narration's meaning in English, for subtitles
+    narration_by: str = ""              # who speaks the narration: an actor card's id ("" = the Narrator card)
+    narration_audio: str = ""           # your own recording of the narration, placed exactly as it is ("" = a made voice)
+    narration_seconds: Optional[float] = None   # how long your recording is
     on_camera_speech: bool = False
     sound_notes: str = ""               # sound design: ambience, effects tied to the action, or "silence"
     motion: str = ""                    # what must move: face (only face and head) | body | scene; "" = not decided
