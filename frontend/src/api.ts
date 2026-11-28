@@ -34,7 +34,7 @@ export interface Scene3DClip {
 export interface ReviewRound { round: number; ok: boolean; results: { criterion: string; met: boolean; why: string }[]; feedback: string[]; checked_by: string; fixed_by: string; fix_summary: string; at: string }
 export interface Scene3DReview { criteria: string[]; rounds: ReviewRound[]; passed: boolean; note: string; plan_hash: string }
 export interface AskEntry { at: string; where: string; request: string; result: string }
-export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; agent_efforts?: Record<string, string>; enabled: boolean; agent: "brain" | "claude_code" | "codex" | "pair"; ai_check: boolean; check_rounds: number; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
+export interface Scene3DSettings { models: boolean; agent_models: Record<string, string>; agent_efforts?: Record<string, string>; enabled: boolean; agent: "brain" | "claude_code" | "codex" | "pair"; ai_check: boolean; check_rounds: number; film_voice?: "free" | "service" | "off"; auto_approve: boolean; max_fix_rounds: number; agent_max_usd: number; renderer: "auto" | "blender" | "sketch" }
 export interface FilmPart { nid: string; number: string; title: string; seconds: number; source: "3d" | "footage" | "card"; why: string }
 export interface Scene3DFilm { video: string | null; blend: string | null; parts: FilmPart[]; seconds: number; signature: string; notes: string[]; updated_at: string }
 export interface Scene3DInfo {

@@ -34,9 +34,10 @@ def signature(p: Project) -> str:
     for leaf in leaves(p):
         s = leaf.scene3d
         h.update(f"{s3.models_changed(p, leaf)}|".encode())
+        h.update(json.dumps(_lines(p, leaf)).encode() + f"|{leaf.voice_audio or ''}|".encode())   # the spoken words are in the film
         h.update(f"{leaf.id}|{leaf.kind.value}|{leaf.duration.likely_s:.2f}|{s3.enabled_for(p, leaf)}|"
                  f"{s.plan_hash if s and s.video else ''}|{s3.stale_reason(leaf) if s and s.video else ''}|{leaf.media}\n".encode())
-    h.update(p.settings.aspect.encode())
+    h.update(p.settings.aspect.encode() + p.settings.scene3d.film_voice.encode())
     return h.hexdigest()[:16]
 
 
@@ -64,6 +65,81 @@ def _why_none(p: Project, leaf) -> str:
     if not s.video:
         return "the 3D preview is not rendered" + (f" ({s.notes[0]})" if s.notes else "")
     return s3.stale_reason(leaf)
+
+
+def _lines(project, node) -> list[tuple[str, str, str]]:
+    """(speaker, words, language) of every spoken line of a clip: its dialogue, then its narration."""
+    from .. import casting
+    sc = node.script
+    if not sc:
+        return []
+    out = [(d.speaker, d.text.strip(), casting.line_language(project, d.speaker, d.language)) for d in sc.dialogue if d.text.strip()]
+    if sc.narration.strip():
+        out.append(("narrator", sc.narration.strip(), casting.line_language(project, "narrator", sc.narration_language)))
+    return out
+
+
+def _free_voice(svc, language: str):
+    """The best free voice on this computer for a language (your computer's own voice speaks most languages)."""
+    order = ["system_voice", "kokoro", "flite"] if language and language != "en" else ["kokoro", "system_voice", "flite"]
+    for name in order:
+        try:
+            if svc.reg.configured(name):
+                return svc.reg.plugin(name)
+        except Exception:
+            continue
+    return None
+
+
+async def clip_voice(svc, pid: str, node, mode: str) -> tuple[Optional[Path], str]:
+    """The spoken words of one clip as one sound file, and where they came from. The voice made for the real video is
+    used when it exists (its words have not changed since); else your voice service ("service": made once, and the
+    video reuses it), else your computer's own voice (free, rough, but it shows the timing)."""
+    from ..plugins.base import PluginError, VoiceSpec
+    p = svc.load(pid)
+    lines = _lines(p, node)
+    if not lines or mode == "off":
+        return None, ""
+    base = ProjectStore.path_for(pid)
+    if node.voice_audio and (base / node.voice_audio).exists():
+        return base / node.voice_audio, "the voice made for the video"
+    if mode == "service":
+        try:
+            engine = getattr(svc, "engine", None)
+            if engine is None:
+                from ..runner import Engine
+                engine = Engine(svc)
+            await engine._make_voice(pid, node.id)
+            n = next(l for l in leaves(svc.load(pid)) if l.id == node.id)
+            if n.voice_audio and (base / n.voice_audio).exists():
+                return base / n.voice_audio, "your voice service (the video will reuse it)"
+        except Exception as exc:                  # fall back to the free voice, and say why
+            note = f"your voice service could not speak it ({str(exc)[:120]}), so your computer's voice is used"
+        else:
+            note = "your voice service gave no sound, so your computer's voice is used"
+    else:
+        note = "your computer's own voice (free preview)"
+    key = hashlib.sha1(json.dumps(lines).encode()).hexdigest()[:12]
+    out = base / "film3d" / "voice" / f"{node.id}_{key}.wav"
+    if out.exists():
+        return out, note
+    out.parent.mkdir(parents=True, exist_ok=True)
+    parts = []
+    for i, (speaker, words, lang) in enumerate(lines):
+        plugin = _free_voice(svc, lang)
+        if plugin is None:
+            return None, "no voice on this computer (install espeak-ng, or choose your voice service)"
+        part = out.parent / f"{node.id}_{key}_{i:02d}.wav"
+        try:
+            await plugin.synthesize(words, VoiceSpec(language=lang), part)
+        except PluginError as exc:
+            return None, f"your computer's voice could not speak it: {exc}"
+        parts.append(part)
+    from ..policy import current as _policy
+    await asyncio.to_thread(media.concat_audio, parts, out, _policy().line_pause, _policy().edge_pad)
+    for part in parts:
+        part.unlink(missing_ok=True)
+    return out, note
 
 
 def _what_was_done(reports, nums: dict, replan: bool) -> list[str]:
@@ -103,11 +179,20 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
     base = ProjectStore.path_for(pid)
     out = base / "film3d"
     out.mkdir(parents=True, exist_ok=True)
+    mode = p.settings.scene3d.film_voice
+    voices: dict[str, tuple[Optional[Path], str]] = {}
+    for leaf in leaves(p):                       # the spoken words of each clip, made before the film is joined
+        if leaf.kind == NodeKind.clip:
+            voices[leaf.id] = await clip_voice(svc, pid, leaf, mode)
+    p = svc.load(pid)
     size = media.frame_size(p.settings.aspect, REFERENCE_RESOLUTION)
     fps = p.settings.fps
     nums = numbering(p)
     pieces: list[Path] = []
     parts: list[FilmPart] = []
+    audio_for: dict[int, str] = {}               # piece number -> the sound file of its spoken words (for Blender)
+    heard: list[str] = []
+    timing: list[str] = []
 
     def build() -> None:
         for i, leaf in enumerate(leaves(p), 1):
@@ -128,6 +213,20 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
                 media.placeholder_image(leaf.title or "Clip", card, size, subtitle=why[:1].upper() + why[1:], label=label)
                 media.still_to_clip(card, piece, secs, size, fps, zoom=False)
                 source = "card"
+            voice, spoken_by = voices.get(leaf.id, (None, ""))
+            if voice is not None and voice.exists():
+                said = media.probe_duration(voice)
+                spoken = out / f"part_{i:02d}_voice.mp4"
+                media.replace_audio(piece, voice, spoken, keep_original=0)
+                piece.unlink(missing_ok=True)
+                spoken.rename(piece)
+                audio_for[i] = str(voice.resolve())
+                heard.append(f"{label}: {spoken_by}")
+                if said > secs + 0.2:
+                    timing.append(f"Clip {nums.get(leaf.id, '')}: the spoken words take {said:.1f} s but the clip is {secs:.1f} s, "
+                                  "so the end is cut in this film. Shorten the words, or make the clip longer.")
+            elif spoken_by and _lines(p, leaf):
+                heard.append(f"{label}: no sound ({spoken_by})")
             pieces.append(piece)
             parts.append(FilmPart(nid=leaf.id, number=nums.get(leaf.id, ""), title=leaf.title, seconds=round(secs, 2),
                                   source=source, why="" if source == "3d" else why))
@@ -140,14 +239,17 @@ async def make_film(svc, pid: str, prepare: bool = True, renderer: Optional[str]
     except media.MediaError as exc:
         raise FilmError(f"The film could not be joined: {exc}") from exc
     notes: list[str] = done
+    if heard:
+        notes.append("Spoken words: " + "; ".join(heard) + ".")
+    notes += timing
     blend: Optional[Path] = None
     exe = find_blender(svc.config.blender_path)
     if exe:
         spec = out / "film.json"
         spec.write_text(json.dumps({"fps": fps, "width": size[0], "height": size[1],
                                     "clips": [{"path": str(pc.resolve()), "label": f"{pt.number} · {pt.title}",
-                                               "frames": int(round(pt.seconds * fps))}
-                                              for pc, pt in zip(pieces, parts)]}))
+                                               "frames": int(round(pt.seconds * fps)), "audio": audio_for.get(k + 1, "")}
+                                              for k, (pc, pt) in enumerate(zip(pieces, parts))]}))
         script = Path(__file__).with_name("blender_film.py")
         proc = await asyncio.create_subprocess_exec(exe, "--background", "--factory-startup", "-noaudio", "--python", str(script),
                                                     "--", str(spec), str(out / "film.blend"),
