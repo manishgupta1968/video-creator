@@ -702,7 +702,8 @@ class Brain:
                                "description": (a.description if a else item.text) or "", "clothing": a.clothing if a else "",
                                "actions": actions})
 
-    async def picture_brief(self, project: Project, item: ContextItem, draft: str) -> PictureBrief:
+    async def picture_brief(self, project: Project, item: ContextItem, draft: str, facts: str = "",
+                            images: Optional[list[Path]] = None) -> PictureBrief:
         """The AI brain you chose (Claude Code or Codex) writes the picture's description, so it fits the story and the
         other characters, places and objects; the picture maker (Codex's image tool, or a service) then draws it."""
         others = [f"- {c.type.value}: {c.title} — {(c.actor.description if c.actor else c.text) or ''}".rstrip(" —")
@@ -713,8 +714,10 @@ class Brain:
                                             f"kind: {item.actor.kind}") if x)
         prompt = render("picture_brief", goal=project.root.goal or project.name, look=(project.style.look or "photoreal"),
                         kind=item.type.value, title=item.title, details=details or "(only its name)",
-                        others="\n".join(others) or "(none)", draft=draft)
-        return await self.ask("picture_brief", prompt, PictureBrief, {"draft": draft})
+                        others="\n".join(others) or "(none)", draft=draft, facts=facts or "(nothing more is known)",
+                        pictures=(f"{len(images)} picture(s) from the Blender video are attached (its 3D model, or its "
+                                  "rendered 3D set): look at them for shape, proportions, colours and arrangement.") if images else "(none)")
+        return await self.ask("picture_brief", prompt, PictureBrief, {"draft": draft}, images=images or None)
 
     async def find_missing(self, project: Project, base: Optional[Path] = None) -> MissingItems:
         """Read the whole plan — the video's and every part's prompt, each clip's script, its 3D scene (the set's name and

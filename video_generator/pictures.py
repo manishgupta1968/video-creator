@@ -56,6 +56,96 @@ def _prompt(project, item) -> tuple[str, str]:
             "materials. No text.", "1:1")
 
 
+def _words(text: str) -> set[str]:
+    import re
+    return {w for w in re.findall(r"[a-z]{4,}", (text or "").lower())}
+
+
+def asset_context(project, item, base: Optional[Path] = None) -> tuple[str, list[Path], list[Path]]:
+    """How this character, object or place occurs in the video, so its picture matches it (no variance):
+    its 3D model (size, colours, parts) and the 3D scenes (colour, size, poses, the set and its scenery), the clips'
+    scripts where it appears (clothes and behaviour per clip), the prompts of the video and its parts, and your requests.
+    Returns (the facts as text, pictures for the AI brain to look at, guide pictures for the drawer)."""
+    from .models import NodeKind
+    from .scene3d.spec import colour_name
+    from .tree import leaves, numbering, outline
+    nums = numbering(project)
+    lines: list[str] = []
+    look_at: list[Path] = []
+    guide: list[Path] = []
+
+    def add_pic(rel, to_guide: bool):
+        if base is not None and rel and (base / rel).exists():
+            f = base / rel
+            if f not in look_at:
+                look_at.append(f)
+            if to_guide and f not in guide:
+                guide.append(f)
+
+    m = item.model3d
+    if m and (m.brief or m.height):
+        b = m.brief or {}
+        facts = []
+        if b.get("description"):
+            facts.append(str(b["description"]))
+        if m.height:
+            facts.append(f"real height {m.height:.2f} m" + (f", width {m.width:.2f} m, depth {m.depth:.2f} m" if m.width else ""))
+        if b.get("colours"):
+            facts.append("colours: " + ", ".join(f"{k} {v}" for k, v in dict(b["colours"]).items()))
+        if b.get("parts"):
+            facts.append("parts: " + ", ".join(map(str, b["parts"])))
+        lines.append("ITS 3D MODEL IN THE BLENDER VIDEO: " + "; ".join(facts))
+        add_pic((m.previews or {}).get("three_quarter") or (m.previews or {}).get("front"), True)
+
+    title_words = _words(item.title)
+    locations = [c for c in project.context if c.type == ContextType.location]
+    for leaf in leaves(project):
+        if leaf.kind != NodeKind.clip:
+            continue
+        sc, s3 = leaf.script, leaf.scene3d
+        plan = s3.plan if s3 and s3.plan else None
+        text = " ".join([(sc.visual if sc else "") or leaf.goal] + (sc.action_beats if sc else []))
+        num = nums.get(leaf.id, "")
+        hits: list[str] = []
+        if item.type == ContextType.actor:
+            ais = next((a for a in (sc.actors_in_shot if sc else []) if a.actor_id == item.id), None)
+            if ais is None:
+                continue
+            hits.append(f"clip {num}: {text}" + (f" | wears: {ais.clothing}" if ais.clothing else "")
+                        + (f" | behaviour: {ais.behaviour}" if ais.behaviour else ""))
+            th = next((t for t in plan.things if t.actor_id == item.id or t.model == item.id), None) if plan else None
+            if th is not None:
+                poses = sorted({k.pose for k in th.keys if k.pose})
+                hits.append(f"  in its 3D scene: the {colour_name(th.colour)} figure, {th.size[2]:.2f} m tall"
+                            + (f", poses: {', '.join(poses)}" if poses else ""))
+        elif item.type == ContextType.object:
+            th = next((t for t in plan.things if t.model == item.id or (title_words and title_words & _words(t.label))), None) if plan else None
+            if th is None and not (title_words and title_words & _words(text)):
+                continue
+            hits.append(f"clip {num}: {text}")
+            if th is not None:
+                hits.append(f"  in its 3D scene: '{th.label}', {th.size[0]:.2f} x {th.size[1]:.2f} x {th.size[2]:.2f} m, {colour_name(th.colour)}")
+        else:
+            set_name = (plan.set.name or plan.set_id) if plan else ""
+            matches = (title_words and (title_words & _words(set_name) or title_words & _words(text)))
+            if not matches and not (len(locations) == 1 and plan):
+                continue
+            hits.append(f"clip {num}: {text}")
+            if plan:
+                scenery = sorted({t.label for t in plan.things if t.kind == "prop" and t.label})
+                hits.append(f"  its 3D set: {set_name or 'unnamed'}, {plan.set.size[0]:.0f} x {plan.set.size[1]:.0f} m"
+                            + (", with walls" if plan.set.walls else ", open") + (f"; scenery: {', '.join(scenery)}" if scenery else ""))
+                if s3 and s3.checks:
+                    add_pic(s3.checks.get("start") or s3.checks.get("middle"), True)
+        lines += hits
+    out = ["HOW IT OCCURS IN THE VIDEO (the picture must match this):"] + (lines or ["(it is not in any clip or 3D scene yet)"])
+    out += ["", "THE VIDEO AND ITS PARTS (their prompts):", outline(project)]
+    asks = [f"- {a.where}: {a.request}" for a in project.ask_history[-10:]]
+    if asks:
+        out += ["", "WHAT THE USER ASKED FOR:"] + asks
+    return "\n".join(out), look_at[:4], guide[:2]
+
+
 async def make_item_picture(svc, pid: str, cid: str, change: str = "") -> MadePicture:
     p = svc.load(pid)
     item = next((c for c in p.context if c.id == cid), None)
@@ -68,11 +158,16 @@ async def make_item_picture(svc, pid: str, cid: str, change: str = "") -> MadePi
         raise ValueError(why)
     base = ProjectStore.path_for(pid)
     prompt, aspect = _prompt(p, item)
+    facts, look_at, guide = asset_context(p, item, base)
+    # the facts from the video are part of the first draft, so they reach the drawer even when the AI brain cannot answer
+    occurs = [ln.strip() for ln in facts.split("\n\n")[0].splitlines()[1:] if ln.strip() and not ln.startswith("(")]
+    if occurs:
+        prompt += " It must match the video: " + " ".join(occurs)[:1200]
     described_by = ""
     if not (change or "").strip() or not item.picture:
         # the AI brain you chose (Claude Code or Codex) writes the full description; the rules above are its first draft
         try:
-            brief = await svc.brain.picture_brief(p, item, prompt)
+            brief = await svc.brain.picture_brief(p, item, prompt, facts, look_at)
             if brief.prompt.strip():
                 prompt = brief.prompt.strip()
                 described_by = svc.reg.llm_plugin_name("picture_brief")
@@ -93,6 +188,15 @@ async def make_item_picture(svc, pid: str, cid: str, change: str = "") -> MadePi
         refs = [base / old.file] + refs
     elif refs:
         prompt += " Keep the looks of the person or thing in the attached picture(s)."
+    if not (change and old) and guide:
+        # the 3D model or the rendered 3D set from the Blender video: shape, proportions, colours and arrangement to keep
+        start = len(refs) + 1
+        refs = refs + guide
+        what = ("the low-poly 3D model used in the Blender video: keep its proportions, clothes and colours, but draw it real"
+                if item.type != ContextType.location else
+                "a frame of the place's rendered 3D set from the Blender video: keep where the big features stand (the "
+                "trees, houses, ground), but draw it real, with no shapes or figures")
+        prompt += f" Picture {start}{'-' + str(len(refs)) if len(refs) > start else ''} is {what}."
     n = 1 + (len(old.changes) + 1 if old else 0)
     out = base / "cast" / item.id / f"picture_{n:02d}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
