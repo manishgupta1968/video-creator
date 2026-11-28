@@ -849,8 +849,27 @@ async def scene3d_film(pid: str):
 async def scene3d_make_film(pid: str, body: dict = Body(default={})):
     """Make every clip's missing 3D preview (plan, check, fix, render) and join them all, in the background."""
     from ..scene3d import film
-    bg(film.make_film(svc, pid, prepare=bool(body.get("prepare", True)), replan=bool(body.get("replan", False))), pid, "Whole 3D film")
+    _film_start(pid)
+    bg(_film_done(pid, film.make_film(svc, pid, prepare=bool(body.get("prepare", True)), replan=bool(body.get("replan", False)))),
+       pid, "Whole 3D film")
     return {"ok": True}
+
+
+FILM_RUNS: set[str] = set()
+
+
+def _film_start(pid: str) -> None:
+    """One whole-3D-film job per project at a time: a second click would update the same clips twice, at once."""
+    if pid in FILM_RUNS:
+        raise HTTPException(409, "The 3D film is already being made. Wait for it to finish (the badge shows \"Working on it\").")
+    FILM_RUNS.add(pid)
+
+
+async def _film_done(pid: str, coro):
+    try:
+        return await coro
+    finally:
+        FILM_RUNS.discard(pid)
 
 
 @app.post("/api/projects/{pid}/scene3d/film/change")
@@ -861,7 +880,8 @@ async def scene3d_change_film(pid: str, body: dict = Body(...)):
     request = str(body.get("request") or "").strip()
     if not request:
         raise HTTPException(400, "Say what you want to change in the whole 3D film.")
-    bg(_scene3d_call(ag.change_film, svc, pid, request)(), pid, "Whole 3D film")
+    _film_start(pid)
+    bg(_film_done(pid, _scene3d_call(ag.change_film, svc, pid, request)()), pid, "Whole 3D film")
     return {"ok": True}
 
 

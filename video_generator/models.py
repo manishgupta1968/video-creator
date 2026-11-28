@@ -497,6 +497,8 @@ class Scene3DFilm(BaseModel):
     signature: str = ""                 # what it was made from (a changed preview makes it out of date)
     notes: list[str] = Field(default_factory=list)
     updated_at: str = Field(default_factory=now_iso)
+    previous_video: Optional[str] = None    # the film before this one (kept, so a new film never loses the old one)
+    previous_blend: Optional[str] = None
 
 
 class Scene3DSettings(BaseModel):
